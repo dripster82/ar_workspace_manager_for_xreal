@@ -101,9 +101,20 @@ struct ControlPanelView: View {
                 ForEach(coordinator.screenList, id: \.self) { line in
                     Text(line).font(.system(.caption2, design: .monospaced))
                         .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
                 }
-                Text(coordinator.outputWindowInfo)
-                    .font(.system(.caption2, design: .monospaced))
+                HStack(alignment: .firstTextBaseline) {
+                    Text(coordinator.outputWindowInfo)
+                        .font(.system(.caption2, design: .monospaced))
+                        .textSelection(.enabled)
+                    Button("Copy info") {
+                        let all = (coordinator.screenList + [coordinator.outputWindowInfo])
+                            .joined(separator: "\n")
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(all, forType: .string)
+                    }
+                    .controlSize(.small)
+                }
                 if coordinator.arActive {
                     HStack {
                         TextField("x", text: $moveX).frame(width: 64)
