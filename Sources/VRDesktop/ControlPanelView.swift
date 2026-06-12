@@ -47,6 +47,16 @@ struct ControlPanelView: View {
                 Toggle("Include roll", isOn: $coordinator.recenterRoll)
                     .help("Off: horizon stays gravity-level when recentering")
             }
+            if coordinator.brightnessAvailable {
+                HStack {
+                    Image(systemName: "sun.min")
+                    Slider(value: $coordinator.glassesBrightness, in: 0...7, step: 1) { editing in
+                        if !editing { coordinator.applyBrightness() }
+                    }
+                    Image(systemName: "sun.max")
+                    Text("\(Int(coordinator.glassesBrightness))").frame(width: 16).monospacedDigit()
+                }.font(.caption)
+            }
         }
     }
 

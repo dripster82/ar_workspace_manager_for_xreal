@@ -47,7 +47,15 @@ final class AppCoordinator: ObservableObject {
     init() {
         renderer = GlassesRenderer(poseStore: IMUService.shared.poseStore)
         IMUService.shared.stateChanged = { [weak self] state in
-            Task { @MainActor in self?.glassesState = state }
+            Task { @MainActor in
+                self?.glassesState = state
+                if case .connected = state {
+                    self?.refreshBrightness()
+                } else {
+                    self?.brightnessAvailable = false
+                    MCUService.shared.disconnect()
+                }
+            }
         }
         IMUService.shared.start()
 
@@ -119,6 +127,32 @@ final class AppCoordinator: ObservableObject {
     }
 
     func recenter() { IMUService.shared.recenter(includeRoll: recenterRoll) }
+
+    // MARK: Glasses brightness (0–7)
+
+    @Published var glassesBrightness: Double = 4
+    @Published var brightnessAvailable = false
+
+    func refreshBrightness() {
+        MCUService.shared.brightness { value in
+            Task { @MainActor in
+                if let value {
+                    self.glassesBrightness = Double(value)
+                    self.brightnessAvailable = true
+                } else {
+                    self.brightnessAvailable = false
+                }
+            }
+        }
+    }
+
+    func applyBrightness() {
+        MCUService.shared.setBrightness(Int(glassesBrightness.rounded())) { ok in
+            if !ok {
+                Task { @MainActor in self.statusMessage = "Setting brightness failed — glasses connected?" }
+            }
+        }
+    }
 
     // MARK: Display mirroring
 

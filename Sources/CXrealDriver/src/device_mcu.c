@@ -841,3 +841,25 @@ device_mcu_error_type device_mcu_close(device_mcu_type *device)
 
 	return DEVICE_MCU_ERROR_NO_ERROR;
 }
+
+/* --- VRDesktop addition: expose brightness write (0-7) ------------------- */
+device_mcu_error_type device_mcu_set_brightness(device_mcu_type *device, uint8_t brightness)
+{
+	if (!device || !device->handle)
+	{
+		return DEVICE_MCU_ERROR_NO_HANDLE;
+	}
+
+	if (brightness > 7)
+	{
+		brightness = 7;
+	}
+
+	if (!send_payload_action(device, DEVICE_MCU_MSG_W_BRIGHTNESS, 1, &brightness))
+	{
+		return DEVICE_MCU_ERROR_PAYLOAD_FAILED;
+	}
+
+	device->brightness = brightness;
+	return DEVICE_MCU_ERROR_NO_ERROR;
+}

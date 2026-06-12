@@ -207,6 +207,9 @@ device_mcu_error_type device_mcu_update_firmware(device_mcu_type* device, const 
 
 device_mcu_error_type device_mcu_close(device_mcu_type* device);
 
+/* VRDesktop addition: write display brightness (0-7) */
+device_mcu_error_type device_mcu_set_brightness(device_mcu_type* device, uint8_t brightness);
+
 #ifdef __cplusplus
 } // extern "C"
 #endif
