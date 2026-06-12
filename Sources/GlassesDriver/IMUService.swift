@@ -80,26 +80,47 @@ public final class IMUService: @unchecked Sendable {
         // Driver axes are a cyclic permutation of the render world's (x=pitch, y=yaw, z=roll):
         // driver y carries pitch, z carries yaw, x carries roll. Remap (x,y,z) → (y,z,x),
         // with yaw and roll negated (driver's frame is mirrored on those axes vs. the render world).
-        let orientation = simd_normalize(simd_quatf(ix: q.y, iy: -q.z, iz: -q.x, r: q.w))
+        let raw = simd_normalize(simd_quatf(ix: q.y, iy: -q.z, iz: -q.x, r: q.w))
         let now = CACurrentMediaTime()
 
-        // Estimate angular velocity from successive orientations for prediction.
+        // Estimate instantaneous angular velocity from successive raw orientations.
         let prev = lastSample
-        var angVel = SIMD3<Float>.zero
+        var instAngVel = SIMD3<Float>.zero
         if let prev, now > prev.t {
-            let dq = orientation * prev.q.inverse
+            let dq = raw * prev.q.inverse
             let angle = 2 * acosf(min(1, abs(dq.real)))
             if angle > 1e-5 {
                 let s = sqrtf(max(1e-10, 1 - dq.real * dq.real))
                 let axis = SIMD3(dq.imag.x / s, dq.imag.y / s, dq.imag.z / s)
-                angVel = axis * (angle / Float(now - prev.t)) * (dq.real < 0 ? -1 : 1)
+                instAngVel = axis * (angle / Float(now - prev.t)) * (dq.real < 0 ? -1 : 1)
             }
         }
-        lastSample = (orientation, now)
-        poseStore.update(Pose(orientation: orientation, angularVelocity: angVel, timestamp: now))
+        lastSample = (raw, now)
+
+        // Low-pass both signals: at ~1kHz the per-sample orientation and especially the
+        // finite-difference angular velocity are noisy, which reads as jitter in the view.
+        let dt = Float(prev.map { now - $0.t } ?? 0.001)
+        let orientationAlpha = 1 - expf(-dt / orientationTimeConstant)
+        let velocityAlpha = 1 - expf(-dt / velocityTimeConstant)
+        if let current = smoothed {
+            var target = raw
+            if simd_dot(current.q.vector, raw.vector) < 0 { target = simd_quatf(vector: -raw.vector) }
+            let qSmooth = simd_normalize(simd_slerp(current.q, target, orientationAlpha))
+            let wSmooth = current.w + (instAngVel - current.w) * velocityAlpha
+            smoothed = (qSmooth, wSmooth)
+        } else {
+            smoothed = (raw, instAngVel)
+        }
+        let s = smoothed!
+        poseStore.update(Pose(orientation: s.q, angularVelocity: s.w, timestamp: now))
     }
 
+    /// Smoothing time constants (seconds). Bigger = smoother but laggier.
+    public var orientationTimeConstant: Float = 0.025
+    public var velocityTimeConstant: Float = 0.060
+
     private var lastSample: (q: simd_quatf, t: TimeInterval)?
+    private var smoothed: (q: simd_quatf, w: SIMD3<Float>)?
 }
 
 private func imuEventCallback(

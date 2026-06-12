@@ -148,6 +148,14 @@ struct ControlPanelView: View {
 
     private var testSection: some View {
         VStack(alignment: .leading, spacing: 8) {
+            Text("Tracking feel").font(.headline)
+            tuningSlider("Smoothing", $coordinator.orientationSmoothingMs, 0...80,
+                         help: "higher = smoother, laggier")
+            tuningSlider("Vel. smooth", $coordinator.velocitySmoothingMs, 0...200,
+                         help: "smooths the prediction input")
+            tuningSlider("Prediction", $coordinator.predictionLeadMs, 0...50,
+                         help: "higher = compensates lag, may overshoot")
+            Divider()
             Text("Testing").font(.headline)
             Toggle("Fake head pose (no glasses needed)", isOn: $coordinator.useFakePose)
             if coordinator.useFakePose {
@@ -163,6 +171,16 @@ struct ControlPanelView: View {
                 }
             }
         }
+    }
+
+    private func tuningSlider(_ label: String, _ value: Binding<Double>,
+                              _ range: ClosedRange<Double>, help: String) -> some View {
+        HStack {
+            Text(label).frame(width: 78, alignment: .leading).font(.caption)
+            Slider(value: value, in: range)
+            Text("\(Int(value.wrappedValue)) ms").frame(width: 48).font(.caption).monospacedDigit()
+        }
+        .help(help)
     }
 }
 
