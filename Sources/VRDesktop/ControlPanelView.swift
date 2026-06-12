@@ -64,6 +64,14 @@ struct ControlPanelView: View {
     private var outputSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("AR Output").font(.headline)
+            if coordinator.mirroringActive {
+                HStack {
+                    Label("A display is mirroring — the glasses need to be extended",
+                          systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.orange)
+                    Button("Stop mirroring") { coordinator.stopMirroring() }
+                }
+            }
             Picker("Output screen", selection: $selectedScreenID) {
                 Text("None").tag(CGDirectDisplayID?.none)
                 ForEach(NSScreen.screens, id: \.self) { screen in

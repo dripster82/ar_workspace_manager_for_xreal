@@ -60,6 +60,14 @@ final class AppCoordinator: ObservableObject {
             predictionLeadMs = defaults.double(forKey: "predictionLeadMs")
         }
 
+        refreshMirroringState()
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.refreshMirroringState() }
+        }
+
         statsTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.updateStats() }
         }
@@ -100,6 +108,42 @@ final class AppCoordinator: ObservableObject {
 
     func recenter() { IMUService.shared.recenter(includeRoll: recenterRoll) }
 
+    // MARK: Display mirroring
+
+    /// True when any online display is mirroring another (e.g. the glasses arrived
+    /// in macOS's default mirror mode instead of extending the desktop).
+    @Published var mirroringActive = false
+
+    func refreshMirroringState() {
+        var ids = [CGDirectDisplayID](repeating: 0, count: 16)
+        var count: UInt32 = 0
+        CGGetOnlineDisplayList(16, &ids, &count)
+        mirroringActive = ids.prefix(Int(count)).contains {
+            CGDisplayMirrorsDisplay($0) != kCGNullDirectDisplay
+        }
+    }
+
+    /// Break all mirroring so every display (glasses included) is an extended desktop.
+    func stopMirroring() {
+        var ids = [CGDirectDisplayID](repeating: 0, count: 16)
+        var count: UInt32 = 0
+        CGGetOnlineDisplayList(16, &ids, &count)
+        var config: CGDisplayConfigRef?
+        guard CGBeginDisplayConfiguration(&config) == .success, let config else { return }
+        var changed = false
+        for id in ids.prefix(Int(count)) where CGDisplayMirrorsDisplay(id) != kCGNullDirectDisplay {
+            CGConfigureDisplayMirrorOfDisplay(config, id, kCGNullDirectDisplay)
+            changed = true
+        }
+        if changed {
+            CGCompleteDisplayConfiguration(config, .permanently)
+            statusMessage = "Mirroring disabled — displays are now extended"
+        } else {
+            CGCancelDisplayConfiguration(config)
+        }
+        refreshMirroringState()
+    }
+
     // MARK: Output screen selection
 
     /// The glasses show up as an external display named like "Air"; otherwise any
@@ -116,6 +160,7 @@ final class AppCoordinator: ObservableObject {
 
     func startAR(on screen: NSScreen) {
         guard let renderer, !arActive else { return }
+        stopMirroring() // glasses must be an extended display, not a mirror
         guard let workspace = workspaceStore.activeWorkspace else { return }
 
         let outputDisplayID = Self.screenDisplayID(screen)
