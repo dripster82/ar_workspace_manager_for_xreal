@@ -39,27 +39,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // ⌃⌥Space → recenter, system-wide (works while any app is focused).
-    private var globalHotKeyRef: EventHotKeyRef?
+    // System-wide hotkeys (work while any app is focused):
+    // ⌃⌥Space → recenter, ⌃⌥Esc → stop AR.
+    private var recenterHotKeyRef: EventHotKeyRef?
+    private var stopARHotKeyRef: EventHotKeyRef?
+    private static let hotKeySignature = OSType(0x56524454) // 'VRDT'
+    private static let recenterHotKeyID: UInt32 = 1
+    private static let stopARHotKeyID: UInt32 = 2
 
     private func registerGlobalRecenterHotKey() {
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
                                       eventKind: UInt32(kEventHotKeyPressed))
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
-        InstallEventHandler(GetEventDispatcherTarget(), { _, _, userData in
-            guard let userData else { return noErr }
+        InstallEventHandler(GetEventDispatcherTarget(), { _, event, userData in
+            guard let userData, let event else { return noErr }
+            var hotKeyID = EventHotKeyID()
+            GetEventParameter(event, EventParamName(kEventParamDirectObject),
+                              EventParamType(typeEventHotKeyID), nil,
+                              MemoryLayout<EventHotKeyID>.size, nil, &hotKeyID)
             let delegate = Unmanaged<AppDelegate>.fromOpaque(userData).takeUnretainedValue()
-            DispatchQueue.main.async { delegate.coordinator.recenter() }
+            DispatchQueue.main.async {
+                switch hotKeyID.id {
+                case AppDelegate.recenterHotKeyID: delegate.coordinator.recenter()
+                case AppDelegate.stopARHotKeyID: delegate.coordinator.stopAR()
+                default: break
+                }
+            }
             return noErr
         }, 1, &eventType, selfPtr, nil)
 
-        let hotKeyID = EventHotKeyID(signature: OSType(0x56524454) /* 'VRDT' */, id: 1)
-        let status = RegisterEventHotKey(UInt32(kVK_Space),
-                                         UInt32(controlKey | optionKey),
-                                         hotKeyID, GetEventDispatcherTarget(), 0, &globalHotKeyRef)
-        if status != noErr {
-            NSLog("Global hotkey registration failed: \(status)")
+        let register = { (keyCode: Int, id: UInt32, ref: inout EventHotKeyRef?) in
+            let hotKeyID = EventHotKeyID(signature: AppDelegate.hotKeySignature, id: id)
+            let status = RegisterEventHotKey(UInt32(keyCode),
+                                             UInt32(controlKey | optionKey),
+                                             hotKeyID, GetEventDispatcherTarget(), 0, &ref)
+            if status != noErr {
+                NSLog("Global hotkey \(id) registration failed: \(status)")
+            }
         }
+        register(kVK_Space, AppDelegate.recenterHotKeyID, &recenterHotKeyRef)
+        register(kVK_Escape, AppDelegate.stopARHotKeyID, &stopARHotKeyRef)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
