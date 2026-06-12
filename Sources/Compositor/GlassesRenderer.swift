@@ -141,6 +141,14 @@ public final class GlassesRenderer: NSObject {
                   NSStringFromRect(win.frame), win.screen?.localizedName ?? "nil")
         }
 
+        // The display arrangement can keep settling for a few seconds after virtual
+        // displays are added; re-pin until the window is solidly on the target screen.
+        for delay in [0.5, 1.5, 3.0, 5.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.repinToTargetScreen()
+            }
+        }
+
         let link = CAMetalDisplayLink(metalLayer: metalLayer)
         link.delegate = self
         link.add(to: .main, forMode: .common)
