@@ -15,6 +15,8 @@ public final class GlassesRenderer: NSObject {
     private var metalLayer = CAMetalLayer()
     private var displayLink: CAMetalDisplayLink?
     private var window: NSWindow?
+    private var targetDisplayID: CGDirectDisplayID = 0
+    private var screenObserver: NSObjectProtocol?
 
     private var screenPipeline: MTLRenderPipelineState!
     private var placeholderPipeline: MTLRenderPipelineState!
@@ -74,9 +76,32 @@ public final class GlassesRenderer: NSObject {
 
     // MARK: Output window lifecycle
 
+    private static func displayID(of screen: NSScreen) -> CGDirectDisplayID {
+        (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) ?? 0
+    }
+
+    /// Keep the output window glued to its target display: creating/removing virtual
+    /// displays re-arranges the global screen layout and moves every origin around.
+    @MainActor
+    private func repinToTargetScreen() {
+        guard let window, targetDisplayID != 0,
+              let screen = NSScreen.screens.first(where: { Self.displayID(of: $0) == targetDisplayID })
+        else { return }
+        if window.frame != screen.frame {
+            window.setFrame(screen.frame, display: true)
+        }
+    }
+
     @MainActor
     public func startOutput(on screen: NSScreen) {
         stopOutput()
+        targetDisplayID = Self.displayID(of: screen)
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.repinToTargetScreen() }
+        }
 
         // contentRect is relative to `screen`'s own origin, so use a zero-origin rect;
         // then pin the window to the screen's global frame explicitly.
@@ -124,6 +149,9 @@ public final class GlassesRenderer: NSObject {
 
     @MainActor
     public func stopOutput() {
+        if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
+        screenObserver = nil
+        targetDisplayID = 0
         displayLink?.isPaused = true
         displayLink?.remove(from: .main, forMode: .common)
         displayLink?.invalidate()

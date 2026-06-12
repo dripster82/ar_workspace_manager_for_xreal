@@ -222,10 +222,20 @@ final class AppCoordinator: ObservableObject {
         }
 
         renderer.setScreens(sceneScreens)
-        renderer.startOutput(on: screen)
-        outputScreenName = screen.localizedName
         arActive = true
-        statusMessage = "AR active on \(screen.localizedName) \(Int(screen.frame.width))×\(Int(screen.frame.height)) at (\(Int(screen.frame.origin.x)),\(Int(screen.frame.origin.y))) with \(sceneScreens.count) screen(s)"
+        statusMessage = "Waiting for displays to settle…"
+
+        // Adding the virtual displays just re-arranged the global screen layout
+        // (they get inserted into the arrangement, shifting the glasses' origin).
+        // Re-resolve the output screen by ID once things settle, then open the window.
+        let screenCount = sceneScreens.count
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            guard let self, self.arActive else { return }
+            let target = NSScreen.screens.first { Self.screenDisplayID($0) == outputDisplayID } ?? screen
+            renderer.startOutput(on: target)
+            self.outputScreenName = target.localizedName
+            self.statusMessage = "AR active on \(target.localizedName) \(Int(target.frame.width))×\(Int(target.frame.height)) at (\(Int(target.frame.origin.x)),\(Int(target.frame.origin.y))) with \(screenCount) screen(s)"
+        }
     }
 
     private func makeSceneScreen(config: VirtualScreenConfig, captureDisplayID: CGDirectDisplayID) -> SceneScreen {
