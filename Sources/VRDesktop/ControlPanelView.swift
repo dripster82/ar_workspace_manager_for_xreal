@@ -66,6 +66,14 @@ struct ControlPanelView: View {
     private var outputSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("AR Output").font(.headline)
+            if !coordinator.hasScreenRecordingPermission {
+                HStack {
+                    Label("Screen Recording permission needed to capture displays",
+                          systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.orange)
+                    Button("Grant permission…") { coordinator.requestScreenRecordingPermission() }
+                }
+            }
             if coordinator.mirroringActive {
                 HStack {
                     Label("A display is mirroring — the glasses need to be extended",

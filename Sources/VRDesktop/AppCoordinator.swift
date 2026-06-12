@@ -81,6 +81,7 @@ final class AppCoordinator: ObservableObject {
         lastSampleCount = count
         renderFPS = renderer?.framesPerSecond ?? 0
 
+        refreshPermissions()
         if let info = renderer?.outputWindowInfo {
             outputWindowInfo = "window \(Int(info.frame.width))×\(Int(info.frame.height)) at (\(Int(info.frame.origin.x)),\(Int(info.frame.origin.y))) on \(info.screenName)"
         } else {
@@ -124,6 +125,21 @@ final class AppCoordinator: ObservableObject {
     /// True when any online display is mirroring another (e.g. the glasses arrived
     /// in macOS's default mirror mode instead of extending the desktop).
     @Published var mirroringActive = false
+    @Published var hasScreenRecordingPermission = CGPreflightScreenCaptureAccess()
+
+    func refreshPermissions() {
+        hasScreenRecordingPermission = CGPreflightScreenCaptureAccess()
+    }
+
+    /// Trigger the system prompt (first time) and open the Screen Recording pane.
+    func requestScreenRecordingPermission() {
+        if !CGRequestScreenCaptureAccess() {
+            let url = URL(string:
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!
+            NSWorkspace.shared.open(url)
+        }
+        refreshPermissions()
+    }
 
     func refreshMirroringState() {
         var ids = [CGDirectDisplayID](repeating: 0, count: 16)
