@@ -9,7 +9,10 @@ import simd
 public final class GlassesRenderer: NSObject {
     public let device: MTLDevice
     private let commandQueue: MTLCommandQueue
-    private let metalLayer = CAMetalLayer()
+    // Recreated per output session: reusing a layer/display-link across virtual-display
+    // add/remove cycles leaves stale entries in QuartzCore's display link list and
+    // crashes the WindowServer notification path (notifyDisplayAdded).
+    private var metalLayer = CAMetalLayer()
     private var displayLink: CAMetalDisplayLink?
     private var window: NSWindow?
 
@@ -82,6 +85,7 @@ public final class GlassesRenderer: NSObject {
         win.backgroundColor = .black
         win.collectionBehavior = [.fullScreenPrimary, .stationary]
 
+        metalLayer = CAMetalLayer()
         metalLayer.device = device
         metalLayer.pixelFormat = .bgra8Unorm
         metalLayer.framebufferOnly = true
@@ -107,8 +111,11 @@ public final class GlassesRenderer: NSObject {
 
     @MainActor
     public func stopOutput() {
+        displayLink?.isPaused = true
         displayLink?.remove(from: .main, forMode: .common)
+        displayLink?.invalidate()
         displayLink = nil
+        window?.contentView = nil
         window?.orderOut(nil)
         window = nil
     }
