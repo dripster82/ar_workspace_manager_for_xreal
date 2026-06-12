@@ -131,12 +131,20 @@ final class AppCoordinator: ObservableObject {
         hasScreenRecordingPermission = CGPreflightScreenCaptureAccess()
     }
 
-    /// Trigger the system prompt (first time) and open the Screen Recording pane.
+    /// First click: trigger the system permission request — this registers the app in
+    /// the Screen Recording list and shows the system prompt. If permission still isn't
+    /// granted on a later click (prompt dismissed/denied), open the Settings pane.
     func requestScreenRecordingPermission() {
-        if !CGRequestScreenCaptureAccess() {
+        let alreadyAsked = UserDefaults.standard.bool(forKey: "askedScreenRecording")
+        let granted = CGRequestScreenCaptureAccess()
+        UserDefaults.standard.set(true, forKey: "askedScreenRecording")
+        if !granted && alreadyAsked {
             let url = URL(string:
                 "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!
             NSWorkspace.shared.open(url)
+        }
+        if !granted {
+            statusMessage = "After granting Screen Recording, quit and relaunch the app"
         }
         refreshPermissions()
     }
