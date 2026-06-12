@@ -78,8 +78,12 @@ public final class GlassesRenderer: NSObject {
     public func startOutput(on screen: NSScreen) {
         stopOutput()
 
-        let win = NSWindow(contentRect: screen.frame, styleMask: .borderless,
+        // contentRect is relative to `screen`'s own origin, so use a zero-origin rect;
+        // then pin the window to the screen's global frame explicitly.
+        let win = NSWindow(contentRect: NSRect(origin: .zero, size: screen.frame.size),
+                           styleMask: .borderless,
                            backing: .buffered, defer: false, screen: screen)
+        win.setFrame(screen.frame, display: true)
         win.level = .screenSaver
         win.isOpaque = true
         win.backgroundColor = .black
@@ -96,12 +100,21 @@ public final class GlassesRenderer: NSObject {
         metalLayer.drawableSize = CGSize(width: screen.frame.width * scale,
                                          height: screen.frame.height * scale)
 
-        let view = NSView(frame: screen.frame)
+        let view = NSView(frame: NSRect(origin: .zero, size: screen.frame.size))
         view.wantsLayer = true
         view.layer = metalLayer
         win.contentView = view
         win.makeKeyAndOrderFront(nil)
         window = win
+        NSLog("GlassesRenderer: target screen '%@' frame=%@; window frame=%@; window.screen='%@'",
+              screen.localizedName, NSStringFromRect(screen.frame),
+              NSStringFromRect(win.frame), win.screen?.localizedName ?? "nil")
+        if win.screen != screen {
+            // Window Server placed us elsewhere — force the frame again.
+            win.setFrame(screen.frame, display: true)
+            NSLog("GlassesRenderer: corrected to '%@', now on '%@'",
+                  NSStringFromRect(win.frame), win.screen?.localizedName ?? "nil")
+        }
 
         let link = CAMetalDisplayLink(metalLayer: metalLayer)
         link.delegate = self
@@ -121,6 +134,19 @@ public final class GlassesRenderer: NSObject {
     }
 
     public var isRunning: Bool { displayLink != nil }
+
+    /// Diagnostics: the output window's current frame and the screen AppKit thinks it's on.
+    @MainActor
+    public var outputWindowInfo: (frame: CGRect, screenName: String)? {
+        guard let window else { return nil }
+        return (window.frame, window.screen?.localizedName ?? "none")
+    }
+
+    /// Move the output window to an absolute global position (debug positioning).
+    @MainActor
+    public func moveOutput(to origin: CGPoint) {
+        window?.setFrameOrigin(origin)
+    }
 
     // MARK: Rendering
 

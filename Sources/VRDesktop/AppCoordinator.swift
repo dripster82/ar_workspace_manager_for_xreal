@@ -13,6 +13,8 @@ final class AppCoordinator: ObservableObject {
     @Published var renderFPS: Double = 0
     @Published var euler: (yaw: Double, pitch: Double, roll: Double) = (0, 0, 0)
     @Published var arActive = false
+    @Published var outputWindowInfo: String = "—"
+    @Published var screenList: [String] = []
     @Published var outputScreenName: String?
     @Published var statusMessage = ""
 
@@ -78,6 +80,15 @@ final class AppCoordinator: ObservableObject {
         imuRate = Double(count &- lastSampleCount) * 2
         lastSampleCount = count
         renderFPS = renderer?.framesPerSecond ?? 0
+
+        if let info = renderer?.outputWindowInfo {
+            outputWindowInfo = "window \(Int(info.frame.width))×\(Int(info.frame.height)) at (\(Int(info.frame.origin.x)),\(Int(info.frame.origin.y))) on \(info.screenName)"
+        } else {
+            outputWindowInfo = "—"
+        }
+        screenList = NSScreen.screens.map {
+            "\($0.localizedName): \(Int($0.frame.width))×\(Int($0.frame.height)) at (\(Int($0.frame.origin.x)),\(Int($0.frame.origin.y))) scale \($0.backingScaleFactor)"
+        }
 
         let q = IMUService.shared.poseStore.latest().orientation
         let toDeg = 180.0 / Double.pi
@@ -214,7 +225,7 @@ final class AppCoordinator: ObservableObject {
         renderer.startOutput(on: screen)
         outputScreenName = screen.localizedName
         arActive = true
-        statusMessage = "AR active on \(screen.localizedName) with \(sceneScreens.count) screen(s)"
+        statusMessage = "AR active on \(screen.localizedName) \(Int(screen.frame.width))×\(Int(screen.frame.height)) at (\(Int(screen.frame.origin.x)),\(Int(screen.frame.origin.y))) with \(sceneScreens.count) screen(s)"
     }
 
     private func makeSceneScreen(config: VirtualScreenConfig, captureDisplayID: CGDirectDisplayID) -> SceneScreen {
@@ -263,4 +274,8 @@ final class AppCoordinator: ObservableObject {
     }
 
     func saveWorkspaces() { workspaceStore.save() }
+
+    func moveOutputWindow(x: Double, y: Double) {
+        renderer?.moveOutput(to: CGPoint(x: x, y: y))
+    }
 }

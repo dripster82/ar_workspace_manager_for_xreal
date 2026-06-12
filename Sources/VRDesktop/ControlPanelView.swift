@@ -6,6 +6,8 @@ import SwiftUI
 struct ControlPanelView: View {
     @ObservedObject var coordinator: AppCoordinator
     @State private var selectedScreenID: CGDirectDisplayID?
+    @State private var moveX = ""
+    @State private var moveY = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -91,6 +93,27 @@ struct ControlPanelView: View {
                 .disabled(!coordinator.arActive && selectedScreenID == nil)
                 if let name = coordinator.outputScreenName {
                     Text("→ \(name)").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+
+            // Diagnostics: screen layout + live window placement & manual move.
+            VStack(alignment: .leading, spacing: 3) {
+                ForEach(coordinator.screenList, id: \.self) { line in
+                    Text(line).font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+                Text(coordinator.outputWindowInfo)
+                    .font(.system(.caption2, design: .monospaced))
+                if coordinator.arActive {
+                    HStack {
+                        TextField("x", text: $moveX).frame(width: 64)
+                        TextField("y", text: $moveY).frame(width: 64)
+                        Button("Move window") {
+                            if let x = Double(moveX), let y = Double(moveY) {
+                                coordinator.moveOutputWindow(x: x, y: y)
+                            }
+                        }
+                    }.font(.caption)
                 }
             }
         }
