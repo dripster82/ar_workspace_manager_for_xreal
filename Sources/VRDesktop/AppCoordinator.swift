@@ -93,7 +93,12 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
-    func recenter() { IMUService.shared.recenter() }
+    @Published var recenterRoll: Bool = UserDefaults.standard.object(forKey: "recenterRoll") == nil
+        ? true : UserDefaults.standard.bool(forKey: "recenterRoll") {
+        didSet { UserDefaults.standard.set(recenterRoll, forKey: "recenterRoll") }
+    }
+
+    func recenter() { IMUService.shared.recenter(includeRoll: recenterRoll) }
 
     // MARK: Output screen selection
 

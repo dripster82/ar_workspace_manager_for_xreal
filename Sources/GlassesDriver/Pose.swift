@@ -57,9 +57,22 @@ public final class PoseStore: @unchecked Sendable {
         return _sampleCount
     }
 
-    /// Capture the current head orientation (all axes) as the new "straight ahead".
-    public func recenter() {
+    /// Capture the current head orientation as the new "straight ahead".
+    /// With `includeRoll` false, head tilt is excluded so the horizon stays gravity-level.
+    public func recenter(includeRoll: Bool = true) {
         lock.lock(); defer { lock.unlock() }
-        referenceInverse = pose.orientation.inverse
+        var q = pose.orientation
+        if !includeRoll {
+            // Swing-twist decomposition: strip the twist about the local forward (Z)
+            // axis — the roll — and recenter only the remaining swing (yaw + pitch).
+            let projected = q.imag.z
+            var twist = simd_quatf(ix: 0, iy: 0, iz: projected, r: q.real)
+            let len = simd_length(twist.vector)
+            if len > 1e-6 {
+                twist = simd_quatf(vector: twist.vector / len)
+                q = q * twist.inverse
+            }
+        }
+        referenceInverse = q.inverse
     }
 }

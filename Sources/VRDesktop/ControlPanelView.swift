@@ -40,7 +40,11 @@ struct ControlPanelView: View {
             Text(String(format: "yaw %+7.1f°  pitch %+6.1f°  roll %+6.1f°",
                         coordinator.euler.yaw, coordinator.euler.pitch, coordinator.euler.roll))
                 .font(.system(.caption, design: .monospaced))
-            Button("Recenter (⌃⌥Space)") { coordinator.recenter() }
+            HStack {
+                Button("Recenter (⌃⌥Space)") { coordinator.recenter() }
+                Toggle("Include roll", isOn: $coordinator.recenterRoll)
+                    .help("Off: horizon stays gravity-level when recentering")
+            }
         }
     }
 

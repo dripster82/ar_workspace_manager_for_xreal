@@ -46,7 +46,7 @@ public final class IMUService: @unchecked Sendable {
         }
     }
 
-    public func recenter() { poseStore.recenter() }
+    public func recenter(includeRoll: Bool = true) { poseStore.recenter(includeRoll: includeRoll) }
 
     private func readLoop() {
         while running {
