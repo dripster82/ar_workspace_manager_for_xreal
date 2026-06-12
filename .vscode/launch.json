@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:VR Desktop}",
+            "name": "Debug VRDesktop",
+            "target": "VRDesktop",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug VRDesktop"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:VR Desktop}",
+            "name": "Release VRDesktop",
+            "target": "VRDesktop",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release VRDesktop"
+        }
+    ]
+}
