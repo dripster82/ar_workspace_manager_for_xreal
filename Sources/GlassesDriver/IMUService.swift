@@ -77,8 +77,10 @@ public final class IMUService: @unchecked Sendable {
     fileprivate func handleUpdate(_ ahrs: OpaquePointer?) {
         guard let ahrs else { return }
         let q = device_imu_get_orientation(ahrs)
-        // Driver quaternion (x,y,z,w) → simd. Driver convention: x=right, y=up, z=back (verify on hardware in M1).
-        let orientation = simd_normalize(simd_quatf(ix: q.x, iy: q.y, iz: q.z, r: q.w))
+        // Driver axes are a cyclic permutation of the render world's (x=pitch, y=yaw, z=roll):
+        // driver y carries pitch, z carries yaw, x carries roll. Remap (x,y,z) → (y,z,x),
+        // with yaw and roll negated (driver's frame is mirrored on those axes vs. the render world).
+        let orientation = simd_normalize(simd_quatf(ix: q.y, iy: -q.z, iz: -q.x, r: q.w))
         let now = CACurrentMediaTime()
 
         // Estimate angular velocity from successive orientations for prediction.
