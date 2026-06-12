@@ -124,12 +124,14 @@ final class AppCoordinator: ObservableObject {
     }
 
     /// Break all mirroring so every display (glasses included) is an extended desktop.
-    func stopMirroring() {
+    /// Returns true if the configuration was changed (the screen list will rebuild async).
+    @discardableResult
+    func stopMirroring() -> Bool {
         var ids = [CGDirectDisplayID](repeating: 0, count: 16)
         var count: UInt32 = 0
         CGGetOnlineDisplayList(16, &ids, &count)
         var config: CGDisplayConfigRef?
-        guard CGBeginDisplayConfiguration(&config) == .success, let config else { return }
+        guard CGBeginDisplayConfiguration(&config) == .success, let config else { return false }
         var changed = false
         for id in ids.prefix(Int(count)) where CGDisplayMirrorsDisplay(id) != kCGNullDirectDisplay {
             CGConfigureDisplayMirrorOfDisplay(config, id, kCGNullDirectDisplay)
@@ -142,6 +144,7 @@ final class AppCoordinator: ObservableObject {
             CGCancelDisplayConfiguration(config)
         }
         refreshMirroringState()
+        return changed
     }
 
     // MARK: Output screen selection
@@ -159,8 +162,32 @@ final class AppCoordinator: ObservableObject {
     // MARK: AR session
 
     func startAR(on screen: NSScreen) {
+        guard !arActive else { return }
+        let targetID = Self.screenDisplayID(screen)
+        let targetName = screen.localizedName
+
+        // Glasses must be an extended display. If we just broke mirroring, the screen
+        // list rebuilds asynchronously and `screen` is stale — wait, then re-resolve.
+        if stopMirroring() {
+            statusMessage = "Reconfiguring displays…"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                guard let self else { return }
+                let resolved = NSScreen.screens.first { Self.screenDisplayID($0) == targetID }
+                    ?? NSScreen.screens.first { $0.localizedName == targetName }
+                    ?? NSScreen.screens.first { $0 != NSScreen.main }
+                if let resolved {
+                    self.beginAR(on: resolved)
+                } else {
+                    self.statusMessage = "Couldn't find output screen after un-mirroring — pick it again"
+                }
+            }
+            return
+        }
+        beginAR(on: screen)
+    }
+
+    private func beginAR(on screen: NSScreen) {
         guard let renderer, !arActive else { return }
-        stopMirroring() // glasses must be an extended display, not a mirror
         guard let workspace = workspaceStore.activeWorkspace else { return }
 
         let outputDisplayID = Self.screenDisplayID(screen)
