@@ -17,15 +17,15 @@ final class AppCoordinator: ObservableObject {
     @Published var statusMessage = ""
 
     // Tracking-feel tuning (live, persisted in UserDefaults).
-    @Published var orientationSmoothingMs: Double = 25 {
+    @Published var orientationSmoothingMs: Double = 42 {
         didSet { IMUService.shared.orientationTimeConstant = Float(orientationSmoothingMs / 1000)
                  UserDefaults.standard.set(orientationSmoothingMs, forKey: "orientationSmoothingMs") }
     }
-    @Published var velocitySmoothingMs: Double = 60 {
+    @Published var velocitySmoothingMs: Double = 84 {
         didSet { IMUService.shared.velocityTimeConstant = Float(velocitySmoothingMs / 1000)
                  UserDefaults.standard.set(velocitySmoothingMs, forKey: "velocitySmoothingMs") }
     }
-    @Published var predictionLeadMs: Double = 18 {
+    @Published var predictionLeadMs: Double = 21 {
         didSet { renderer?.predictionLead = Float(predictionLeadMs / 1000)
                  UserDefaults.standard.set(predictionLeadMs, forKey: "predictionLeadMs") }
     }

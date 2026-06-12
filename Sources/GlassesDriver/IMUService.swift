@@ -116,8 +116,8 @@ public final class IMUService: @unchecked Sendable {
     }
 
     /// Smoothing time constants (seconds). Bigger = smoother but laggier.
-    public var orientationTimeConstant: Float = 0.025
-    public var velocityTimeConstant: Float = 0.060
+    public var orientationTimeConstant: Float = 0.042
+    public var velocityTimeConstant: Float = 0.084
 
     private var lastSample: (q: simd_quatf, t: TimeInterval)?
     private var smoothed: (q: simd_quatf, w: SIMD3<Float>)?

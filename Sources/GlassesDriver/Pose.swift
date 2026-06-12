@@ -33,7 +33,7 @@ public struct Pose: Sendable {
 public final class PoseStore: @unchecked Sendable {
     private let lock = NSLock()
     private var pose: Pose = .identity
-    private var yawOffset: Float = 0
+    private var referenceInverse = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
     private var _sampleCount: UInt64 = 0
 
     public init() {}
@@ -48,7 +48,7 @@ public final class PoseStore: @unchecked Sendable {
     public func latest() -> Pose {
         lock.lock(); defer { lock.unlock() }
         var p = pose
-        p.orientation = simd_quatf(angle: -yawOffset, axis: SIMD3(0, 1, 0)) * p.orientation
+        p.orientation = referenceInverse * p.orientation
         return p
     }
 
@@ -57,15 +57,9 @@ public final class PoseStore: @unchecked Sendable {
         return _sampleCount
     }
 
-    /// Capture the current yaw as the new "straight ahead".
+    /// Capture the current head orientation (all axes) as the new "straight ahead".
     public func recenter() {
         lock.lock(); defer { lock.unlock() }
-        let q = pose.orientation
-        // Yaw extracted from quaternion (Y-up world).
-        let newYaw = atan2f(
-            2 * (q.real * q.imag.y + q.imag.x * q.imag.z),
-            1 - 2 * (q.imag.y * q.imag.y + q.imag.x * q.imag.x)
-        )
-        yawOffset = newYaw
+        referenceInverse = pose.orientation.inverse
     }
 }

@@ -32,7 +32,7 @@ public final class GlassesRenderer: NSObject {
     private var _fakePose: simd_quatf?
 
     /// Pose-prediction lead time in seconds.
-    public var predictionLead: Float = 0.018
+    public var predictionLead: Float = 0.021
 
     public private(set) var framesPerSecond: Double = 0
     private var frameCount = 0
