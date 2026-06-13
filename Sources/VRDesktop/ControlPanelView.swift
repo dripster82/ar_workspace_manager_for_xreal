@@ -390,6 +390,20 @@ struct ControlPanelView: View {
             tuningSlider("Prediction", $coordinator.predictionLeadMs, 0...50, unit: "ms", decimals: 0,
                          help: "higher = compensates lag, may overshoot")
             Divider()
+            HStack {
+                Text("Anti-alias").frame(width: 78, alignment: .leading).font(.caption)
+                Picker("", selection: $coordinator.antialiasLevel) {
+                    Text("Off").tag(1)
+                    Text("2×").tag(2)
+                    Text("4×").tag(4)
+                    Text("8×").tag(8)
+                }
+                .pickerStyle(.segmented).labelsHidden()
+            }
+            Toggle("Sharpen screen content (mipmaps + anisotropic)", isOn: $coordinator.sharpenScreens)
+                .font(.caption)
+                .help("Smooths jagged lines inside captured windows (e.g. small text in VS Code)")
+            Divider()
             Toggle("Fake head pose (no glasses needed)", isOn: $coordinator.useFakePose)
             if coordinator.useFakePose {
                 HStack {

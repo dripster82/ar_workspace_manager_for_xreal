@@ -32,6 +32,16 @@ final class AppCoordinator: ObservableObject {
                  UserDefaults.standard.set(predictionLeadMs, forKey: "predictionLeadMs") }
     }
 
+    // Image quality.
+    @Published var antialiasLevel: Int = 4 {   // 1 (off), 2, 4, 8
+        didSet { renderer?.setSampleCount(antialiasLevel)
+                 UserDefaults.standard.set(antialiasLevel, forKey: "antialiasLevel") }
+    }
+    @Published var sharpenScreens: Bool = false {
+        didSet { renderer?.sharpenScreens = sharpenScreens
+                 UserDefaults.standard.set(sharpenScreens, forKey: "sharpenScreens") }
+    }
+
     // Fake pose for glasses-free testing.
     @Published var useFakePose = false { didSet { applyFakePose() } }
     @Published var fakeYawDegrees: Double = 0 { didSet { applyFakePose() } }
@@ -101,6 +111,13 @@ final class AppCoordinator: ObservableObject {
         // Push initial values into the filter.
         IMUService.shared.minCutoff = Float(minCutoffHz)
         IMUService.shared.beta = Float(betaResponsiveness)
+
+        if defaults.object(forKey: "antialiasLevel") != nil {
+            antialiasLevel = defaults.integer(forKey: "antialiasLevel")
+        }
+        sharpenScreens = defaults.bool(forKey: "sharpenScreens")
+        renderer?.setSampleCount(antialiasLevel)
+        renderer?.sharpenScreens = sharpenScreens
 
         refreshMirroringState()
         NotificationCenter.default.addObserver(

@@ -29,8 +29,8 @@ vertex VertexOut screen_vertex(const device VertexIn *vertices [[buffer(0)]],
 }
 
 fragment float4 screen_fragment(VertexOut in [[stage_in]],
-                                texture2d<float> tex [[texture(0)]]) {
-    constexpr sampler s(mag_filter::linear, min_filter::linear);
+                                texture2d<float> tex [[texture(0)]],
+                                sampler s [[sampler(0)]]) {
     return float4(tex.sample(s, in.uv).rgb, 1.0);
 }
 

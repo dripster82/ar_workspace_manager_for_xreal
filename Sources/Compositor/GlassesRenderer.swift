@@ -23,8 +23,17 @@ public final class GlassesRenderer: NSObject {
     private var depthState: MTLDepthStencilState!
     private var msaaColorTexture: MTLTexture?
     private var depthTextureMS: MTLTexture?
+    private var depthTextureSingle: MTLTexture?
     private static let depthFormat: MTLPixelFormat = .depth32Float
-    private let sampleCount = 4
+    private var library: MTLLibrary!
+
+    /// MSAA sample count: 1 (off), 2, 4, or 8. Changing it rebuilds the pipelines.
+    public private(set) var sampleCount = 4
+    /// Sharpen screen content with mipmaps + anisotropic filtering (helps minified/angled text).
+    public var sharpenScreens = false { didSet { if !sharpenScreens { mipTargets.removeAll() } } }
+    private var linearSampler: MTLSamplerState!
+    private var sharpSampler: MTLSamplerState!
+    private var mipTargets: [UUID: MTLTexture] = [:]
 
     private let poseStore: PoseStore
     private let lock = NSLock()
@@ -59,7 +68,7 @@ public final class GlassesRenderer: NSObject {
         self.poseStore = poseStore
         super.init()
         do {
-            let library = try device.makeLibrary(source: shaderSource, options: nil)
+            library = try device.makeLibrary(source: shaderSource, options: nil)
             screenPipeline = try makePipeline(library: library, fragment: "screen_fragment")
             placeholderPipeline = try makePipeline(library: library, fragment: "placeholder_fragment")
         } catch {
@@ -70,6 +79,27 @@ public final class GlassesRenderer: NSObject {
         depthDesc.depthCompareFunction = .less
         depthDesc.isDepthWriteEnabled = true
         depthState = device.makeDepthStencilState(descriptor: depthDesc)
+
+        let lin = MTLSamplerDescriptor()
+        lin.minFilter = .linear; lin.magFilter = .linear
+        linearSampler = device.makeSamplerState(descriptor: lin)
+        let sharp = MTLSamplerDescriptor()
+        sharp.minFilter = .linear; sharp.magFilter = .linear; sharp.mipFilter = .linear
+        sharp.maxAnisotropy = 8
+        sharpSampler = device.makeSamplerState(descriptor: sharp)
+    }
+
+    /// Set MSAA level (1 = off, 2, 4, 8); rebuilds pipelines and discards stale MSAA targets.
+    public func setSampleCount(_ n: Int) {
+        let valid = [1, 2, 4, 8].contains(n) ? n : 4
+        guard valid != sampleCount else { return }
+        sampleCount = valid
+        do {
+            screenPipeline = try makePipeline(library: library, fragment: "screen_fragment")
+            placeholderPipeline = try makePipeline(library: library, fragment: "placeholder_fragment")
+        } catch { NSLog("GlassesRenderer: pipeline rebuild failed: \(error)") }
+        msaaColorTexture = nil
+        depthTextureMS = nil
     }
 
     private func makePipeline(library: MTLLibrary, fragment: String) throws -> MTLRenderPipelineState {
@@ -110,6 +140,50 @@ public final class GlassesRenderer: NSObject {
         return (color, depth)
     }
 
+    /// Single-sample depth (for MSAA off).
+    private func singleDepth(width: Int, height: Int) -> MTLTexture? {
+        let w = max(1, width), h = max(1, height)
+        if let d = depthTextureSingle, d.width == w, d.height == h { return d }
+        let desc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: Self.depthFormat, width: w, height: h, mipmapped: false)
+        desc.usage = .renderTarget
+        desc.storageMode = .private
+        depthTextureSingle = device.makeTexture(descriptor: desc)
+        return depthTextureSingle
+    }
+
+    /// When sharpening, blit each screen's capture into a mipmapped texture and generate
+    /// mips so anisotropic sampling can smooth minified/angled content (e.g. small text).
+    private func prepareSharpTextures(_ screens: [SceneScreen],
+                                      commandBuffer: MTLCommandBuffer) -> [UUID: MTLTexture] {
+        guard sharpenScreens, let blit = commandBuffer.makeBlitCommandEncoder() else { return [:] }
+        var result: [UUID: MTLTexture] = [:]
+        for s in screens {
+            guard let src = s.textureProvider(), src.width > 0, src.height > 0 else { continue }
+            guard let target = mipTarget(for: s.id, width: src.width, height: src.height) else { continue }
+            blit.copy(from: src, sourceSlice: 0, sourceLevel: 0,
+                      sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                      sourceSize: MTLSize(width: src.width, height: src.height, depth: 1),
+                      to: target, destinationSlice: 0, destinationLevel: 0,
+                      destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
+            blit.generateMipmaps(for: target)
+            result[s.id] = target
+        }
+        blit.endEncoding()
+        return result
+    }
+
+    private func mipTarget(for id: UUID, width: Int, height: Int) -> MTLTexture? {
+        if let t = mipTargets[id], t.width == width, t.height == height { return t }
+        let desc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: true)
+        desc.usage = .shaderRead
+        desc.storageMode = .private
+        let t = device.makeTexture(descriptor: desc)
+        mipTargets[id] = t
+        return t
+    }
+
     // MARK: Scene
 
     public func setScreens(_ newScreens: [SceneScreen]) {
@@ -117,6 +191,7 @@ public final class GlassesRenderer: NSObject {
         screens = newScreens
         cachedVertexBuffers.removeAll()
         lock.unlock()
+        mipTargets.removeAll()
     }
 
     // MARK: Output window lifecycle
@@ -277,27 +352,36 @@ public final class GlassesRenderer: NSObject {
         let fullWidth = Double(metalLayer.drawableSize.width)
         let height = Double(metalLayer.drawableSize.height)
 
-        guard let commandBuffer = commandQueue.makeCommandBuffer(),
-              let ms = msaaTextures(width: drawable.texture.width, height: drawable.texture.height)
-        else { return }
-        let pass = MTLRenderPassDescriptor()
-        // Render multisampled, then resolve into the drawable for smooth edges.
-        pass.colorAttachments[0].texture = ms.color
-        pass.colorAttachments[0].resolveTexture = drawable.texture
-        pass.colorAttachments[0].loadAction = .clear
-        pass.colorAttachments[0].storeAction = .multisampleResolve
-        pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
-        pass.depthAttachment.texture = ms.depth
-        pass.depthAttachment.loadAction = .clear
-        pass.depthAttachment.storeAction = .dontCare
-        pass.depthAttachment.clearDepth = 1.0
-
-        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
-        encoder.setDepthStencilState(depthState)
+        guard let commandBuffer = commandQueue.makeCommandBuffer() else { return }
 
         lock.lock()
         let currentScreens = screens
         lock.unlock()
+
+        // Mipmap blits (if sharpening) must run before the render pass on the same buffer.
+        let sharpTextures = prepareSharpTextures(currentScreens, commandBuffer: commandBuffer)
+
+        let w = drawable.texture.width, h = drawable.texture.height
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].loadAction = .clear
+        pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+        pass.depthAttachment.loadAction = .clear
+        pass.depthAttachment.storeAction = .dontCare
+        pass.depthAttachment.clearDepth = 1.0
+        if sampleCount > 1 {
+            guard let ms = msaaTextures(width: w, height: h) else { return }
+            pass.colorAttachments[0].texture = ms.color
+            pass.colorAttachments[0].resolveTexture = drawable.texture
+            pass.colorAttachments[0].storeAction = .multisampleResolve
+            pass.depthAttachment.texture = ms.depth
+        } else {
+            pass.colorAttachments[0].texture = drawable.texture
+            pass.colorAttachments[0].storeAction = .store
+            pass.depthAttachment.texture = singleDepth(width: w, height: h)
+        }
+
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
+        encoder.setDepthStencilState(depthState)
 
         let orientation = currentOrientation()
 
@@ -312,12 +396,12 @@ public final class GlassesRenderer: NSObject {
                                                 width: eyeWidth, height: height,
                                                 znear: 0, zfar: 1))
                 let vp = projection * viewMatrix(orientation: orientation, eyeOffsetX: eye.offset)
-                drawScreens(currentScreens, viewProjection: vp, encoder: encoder)
+                drawScreens(currentScreens, viewProjection: vp, encoder: encoder, sharp: sharpTextures)
             }
         } else {
             let aspect = Float(fullWidth / max(1, height))
             let vp = projectionMatrix(aspect: aspect) * viewMatrix(orientation: orientation, eyeOffsetX: 0)
-            drawScreens(currentScreens, viewProjection: vp, encoder: encoder)
+            drawScreens(currentScreens, viewProjection: vp, encoder: encoder, sharp: sharpTextures)
         }
 
         encoder.endEncoding()
@@ -334,15 +418,20 @@ public final class GlassesRenderer: NSObject {
     }
 
     private func drawScreens(_ screens: [SceneScreen], viewProjection: simd_float4x4,
-                             encoder: MTLRenderCommandEncoder) {
+                             encoder: MTLRenderCommandEncoder, sharp: [UUID: MTLTexture]) {
         var uniforms = Uniforms(viewProjection: viewProjection)
         for screen in screens {
             let geometry = vertexBuffer(for: screen)
             encoder.setVertexBuffer(geometry.buffer, offset: 0, index: 0)
             encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.size, index: 1)
-            if let texture = screen.textureProvider() {
+            if let mipped = sharp[screen.id] {
+                encoder.setRenderPipelineState(screenPipeline)
+                encoder.setFragmentTexture(mipped, index: 0)
+                encoder.setFragmentSamplerState(sharpSampler, index: 0)
+            } else if let texture = screen.textureProvider() {
                 encoder.setRenderPipelineState(screenPipeline)
                 encoder.setFragmentTexture(texture, index: 0)
+                encoder.setFragmentSamplerState(linearSampler, index: 0)
             } else {
                 encoder.setRenderPipelineState(placeholderPipeline)
             }
