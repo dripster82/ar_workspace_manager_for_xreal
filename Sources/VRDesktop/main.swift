@@ -50,9 +50,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var stopARHotKeyRef: EventHotKeyRef?
     private static let hotKeySignature = OSType(0x56524454) // 'VRDT'
     private var helpHotKeyRef: EventHotKeyRef?
+    private var toggleARHotKeyRef: EventHotKeyRef?
+    private var sbsHotKeyRef: EventHotKeyRef?
+    private var quitHotKeyRef: EventHotKeyRef?
     private static let recenterHotKeyID: UInt32 = 1
     private static let stopARHotKeyID: UInt32 = 2
     private static let helpHotKeyID: UInt32 = 3
+    private static let toggleARHotKeyID: UInt32 = 4
+    private static let sbsHotKeyID: UInt32 = 5
+    private static let quitHotKeyID: UInt32 = 6
 
     private func registerGlobalRecenterHotKey() {
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
@@ -70,6 +76,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 case AppDelegate.recenterHotKeyID: delegate.coordinator.recenter()
                 case AppDelegate.stopARHotKeyID: delegate.coordinator.stopAR()
                 case AppDelegate.helpHotKeyID: delegate.helpOverlay.toggle()
+                case AppDelegate.toggleARHotKeyID: delegate.toggleAR()
+                case AppDelegate.sbsHotKeyID:
+                    delegate.coordinator.setStereo(!delegate.coordinator.stereoEnabled)
+                case AppDelegate.quitHotKeyID: NSApp.terminate(nil)
                 default: break
                 }
             }
@@ -88,6 +98,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         register(kVK_Space, AppDelegate.recenterHotKeyID, &recenterHotKeyRef)
         register(kVK_Escape, AppDelegate.stopARHotKeyID, &stopARHotKeyRef)
         register(kVK_ANSI_H, AppDelegate.helpHotKeyID, &helpHotKeyRef)
+        register(kVK_ANSI_A, AppDelegate.toggleARHotKeyID, &toggleARHotKeyRef)
+        register(kVK_ANSI_S, AppDelegate.sbsHotKeyID, &sbsHotKeyRef)
+        register(kVK_ANSI_Q, AppDelegate.quitHotKeyID, &quitHotKeyRef)
     }
 
     // MARK: Menu bar
@@ -125,6 +138,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let recenter = NSMenuItem(title: "Recenter", action: #selector(menuRecenter), keyEquivalent: "")
         recenter.target = self
         menu.addItem(recenter)
+        let sbs = NSMenuItem(title: coordinator.stereoEnabled ? "Disable Stereo (SBS)" : "Enable Stereo (SBS)",
+                             action: #selector(toggleSBS), keyEquivalent: "")
+        sbs.target = self
+        sbs.isEnabled = coordinator.arActive
+        menu.addItem(sbs)
 
         let help = NSMenuItem(title: "Keyboard Shortcuts (⌃⌥H)", action: #selector(toggleHelp),
                               keyEquivalent: "")
@@ -157,7 +175,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         window.setFrameOrigin(origin)
     }
 
-    @MainActor @objc private func toggleAR() {
+    @MainActor @objc func toggleAR() {
         if coordinator.arActive {
             coordinator.stopAR()
         } else if let id = coordinator.glassesScreenID()
@@ -174,6 +192,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @MainActor @objc private func menuRecenter() { coordinator.recenter() }
 
     @MainActor @objc private func toggleHelp() { helpOverlay.toggle() }
+
+    @MainActor @objc private func toggleSBS() { coordinator.setStereo(!coordinator.stereoEnabled) }
 
     @objc private func toggleLaunchAtLogin() { LaunchAtLogin.set(!LaunchAtLogin.isEnabled) }
 

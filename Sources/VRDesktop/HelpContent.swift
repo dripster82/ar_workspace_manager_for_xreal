@@ -15,16 +15,13 @@ enum HelpContent {
 
     static let sections: [Section] = [
         Section(title: "Global hotkeys", shortcuts: [
-            Shortcut(keys: "⌃⌥Space", action: "Recenter the view"),
+            Shortcut(keys: "⌃⌥A", action: "Start / stop AR"),
             Shortcut(keys: "⌃⌥Esc", action: "Stop AR"),
-            Shortcut(keys: "⌃⌥H", action: "Show / hide this help"),
+            Shortcut(keys: "⌃⌥Space", action: "Recenter the view"),
+            Shortcut(keys: "⌃⌥S", action: "Stereo (SBS) on / off"),
             Shortcut(keys: "⌃⌥ + brightness", action: "Dim / brighten the glasses"),
-        ]),
-        Section(title: "From the control panel", shortcuts: [
-            Shortcut(keys: "Start AR", action: "Render the workspace to the glasses"),
-            Shortcut(keys: "Workspace ▾", action: "Switch, add, rename or delete layouts"),
-            Shortcut(keys: "Add 16:9 / ultrawide / monitor", action: "Add screens to the workspace"),
-            Shortcut(keys: "Stereo (SBS)", action: "Toggle 3D side-by-side depth"),
+            Shortcut(keys: "⌃⌥H", action: "Show / hide this help"),
+            Shortcut(keys: "⌃⌥Q", action: "Quit VR Desktop"),
         ]),
     ]
 
