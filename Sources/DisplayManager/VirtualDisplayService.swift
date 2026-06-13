@@ -34,6 +34,22 @@ public struct VirtualScreenConfig: Codable, Identifiable, Hashable, Sendable {
         self.curvatureRadius = curvatureRadius
         self.showInAR = showInAR
     }
+
+    /// Default placement values (position/size/curve), independent of identity & resolution.
+    public static let defaultYawDegrees: Double = 0
+    public static let defaultPitchDegrees: Double = 0
+    public static let defaultDistanceMeters: Double = 2.0
+    public static let defaultScale: Double = 1.0
+    public static let defaultCurvature: Double = 0
+
+    /// Restore placement to defaults, keeping id, name, resolution, and AR visibility.
+    public mutating func resetPlacement() {
+        yawDegrees = Self.defaultYawDegrees
+        pitchDegrees = Self.defaultPitchDegrees
+        distanceMeters = Self.defaultDistanceMeters
+        scale = Self.defaultScale
+        curvatureRadius = Self.defaultCurvature
+    }
 }
 
 /// A named workspace: a set of virtual screens plus per-physical-display AR settings.

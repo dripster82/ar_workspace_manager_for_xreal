@@ -282,6 +282,8 @@ struct ScreenRow: View {
                 slider("Distance", $config.distanceMeters, 0.5...6, "m")
                 slider("Scale", $config.scale, 0.3...3, "×")
                 slider("Curve", $config.curvatureRadius, 0...1, "")
+                Button("Reset placement") { config.resetPlacement() }
+                    .controlSize(.small)
             }
             .padding(.leading, 8)
         } label: {
