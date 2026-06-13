@@ -17,15 +17,13 @@ public struct VirtualScreenConfig: Codable, Identifiable, Hashable, Sendable {
     public var distanceMeters: Double
     public var scale: Double           // apparent size multiplier
     public var curvatureRadius: Double // horizontal curve amount 0 = flat … 5 = max wrap
-    public var verticalCurve: Double   // vertical curve amount 0 = flat … 5 = max wrap
     public var autoCurveH: Bool        // horizontal curve follows natural sphere
-    public var autoCurveV: Bool        // vertical curve follows natural sphere
     public var showInAR: Bool
 
     public init(id: UUID = UUID(), name: String, width: Int, height: Int, hiDPI: Bool = false,
                 yawDegrees: Double = 0, pitchDegrees: Double = 0, distanceMeters: Double = 2.0,
-                scale: Double = 1.0, curvatureRadius: Double = 0, verticalCurve: Double = 0,
-                autoCurveH: Bool = false, autoCurveV: Bool = false, showInAR: Bool = true) {
+                scale: Double = 1.0, curvatureRadius: Double = 0,
+                autoCurveH: Bool = false, showInAR: Bool = true) {
         self.id = id
         self.name = name
         self.width = width
@@ -36,13 +34,11 @@ public struct VirtualScreenConfig: Codable, Identifiable, Hashable, Sendable {
         self.distanceMeters = distanceMeters
         self.scale = scale
         self.curvatureRadius = curvatureRadius
-        self.verticalCurve = verticalCurve
         self.autoCurveH = autoCurveH
-        self.autoCurveV = autoCurveV
         self.showInAR = showInAR
     }
 
-    // Custom decoding so older saved workspaces (without the newer curve fields) still load.
+    // Custom decoding so older saved workspaces (without the newer fields) still load.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
@@ -55,11 +51,9 @@ public struct VirtualScreenConfig: Codable, Identifiable, Hashable, Sendable {
         distanceMeters = try c.decodeIfPresent(Double.self, forKey: .distanceMeters) ?? 2.0
         scale = try c.decodeIfPresent(Double.self, forKey: .scale) ?? 1.0
         curvatureRadius = try c.decodeIfPresent(Double.self, forKey: .curvatureRadius) ?? 0
-        verticalCurve = try c.decodeIfPresent(Double.self, forKey: .verticalCurve) ?? 0
-        // Migrate the old single autoCurve flag to both axes if present.
+        // Migrate the old single autoCurve flag if present.
         let legacyAuto = try c.decodeIfPresent(Bool.self, forKey: .autoCurve) ?? false
         autoCurveH = try c.decodeIfPresent(Bool.self, forKey: .autoCurveH) ?? legacyAuto
-        autoCurveV = try c.decodeIfPresent(Bool.self, forKey: .autoCurveV) ?? legacyAuto
         showInAR = try c.decodeIfPresent(Bool.self, forKey: .showInAR) ?? true
     }
 
@@ -75,15 +69,13 @@ public struct VirtualScreenConfig: Codable, Identifiable, Hashable, Sendable {
         try c.encode(distanceMeters, forKey: .distanceMeters)
         try c.encode(scale, forKey: .scale)
         try c.encode(curvatureRadius, forKey: .curvatureRadius)
-        try c.encode(verticalCurve, forKey: .verticalCurve)
         try c.encode(autoCurveH, forKey: .autoCurveH)
-        try c.encode(autoCurveV, forKey: .autoCurveV)
         try c.encode(showInAR, forKey: .showInAR)
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, width, height, hiDPI, yawDegrees, pitchDegrees, distanceMeters
-        case scale, curvatureRadius, verticalCurve, autoCurve, autoCurveH, autoCurveV, showInAR
+        case scale, curvatureRadius, autoCurve, autoCurveH, showInAR
     }
 
     /// Default placement values (position/size/curve), independent of identity & resolution.
@@ -100,9 +92,7 @@ public struct VirtualScreenConfig: Codable, Identifiable, Hashable, Sendable {
         distanceMeters = Self.defaultDistanceMeters
         scale = Self.defaultScale
         curvatureRadius = Self.defaultCurvature
-        verticalCurve = 0
         autoCurveH = false
-        autoCurveV = false
     }
 }
 

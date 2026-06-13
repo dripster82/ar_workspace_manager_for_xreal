@@ -316,7 +316,6 @@ struct ScreenRow: View {
                 slider("Distance", $cfg.distanceMeters, 0.5...6, "m")
                 slider("Scale", $cfg.scale, 0.3...3, "×")
                 curveSlider("Curve", $cfg.curvatureRadius, auto: $cfg.autoCurveH)
-                curveSlider("V. curve", $cfg.verticalCurve, auto: $cfg.autoCurveV)
                 HStack {
                     Button("Reset placement") { cfg.resetPlacement() }
                     Button("Remove", role: .destructive) { onRemove() }

@@ -12,16 +12,13 @@ public struct SceneScreen: Identifiable {
     public var widthMeters: Float   // apparent width at `distance`
     public var aspect: Float        // width / height of content
     public var curveH: Float        // horizontal curve amount, 0 = flat
-    public var curveV: Float        // vertical curve amount, 0 = flat
-    /// When set, that axis curves to follow the natural sphere around the eye
+    /// When set, the screen curves to follow the natural sphere around the eye
     /// (radius = distance), so the surface is equidistant and matches the space.
     public var autoCurveH: Bool
-    public var autoCurveV: Bool
     public var textureProvider: () -> MTLTexture?
 
     public init(id: UUID, yaw: Float, pitch: Float, distance: Float, widthMeters: Float,
-                aspect: Float, curveH: Float, curveV: Float,
-                autoCurveH: Bool, autoCurveV: Bool,
+                aspect: Float, curveH: Float, autoCurveH: Bool,
                 textureProvider: @escaping () -> MTLTexture?) {
         self.id = id
         self.yaw = yaw
@@ -30,9 +27,7 @@ public struct SceneScreen: Identifiable {
         self.widthMeters = widthMeters
         self.aspect = aspect
         self.curveH = max(0, min(5, curveH))
-        self.curveV = max(0, min(5, curveV))
         self.autoCurveH = autoCurveH
-        self.autoCurveV = autoCurveV
         self.textureProvider = textureProvider
     }
 
@@ -48,11 +43,10 @@ public struct SceneScreen: Identifiable {
 
     /// Total horizontal / vertical subtended angles (radians).
     private var angles: (x: Float, y: Float) {
-        // Each axis independently: auto = natural sphere arc (size / distance, so closer
-        // screens curve more); manual = curve amount × arc-per-unit.
+        // Horizontal curve only: auto = natural sphere arc (width / distance, so closer
+        // screens curve more); manual = curve amount × arc-per-unit. Vertical stays flat.
         let x = autoCurveH ? widthMeters / distance : curveH * Self.arcPerUnit
-        let y = autoCurveV ? height / distance : curveV * Self.arcPerUnit
-        return (x, y)
+        return (x, 0)
     }
 
     func vertices() -> [Vertex] {
