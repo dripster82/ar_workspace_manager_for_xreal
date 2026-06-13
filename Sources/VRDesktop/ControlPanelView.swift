@@ -44,6 +44,10 @@ struct ControlPanelView: View {
             Text(String(format: "yaw %+7.1f°  pitch %+6.1f°  roll %+6.1f°",
                         coordinator.euler.yaw, coordinator.euler.pitch, coordinator.euler.roll))
                 .font(.system(.caption, design: .monospaced))
+            if let looking = coordinator.lookedAtScreenName {
+                Label("Looking at: \(looking)", systemImage: "eye")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             HStack {
                 Button("Recenter (⌃⌥Space)") { coordinator.recenter() }
                 Toggle("Include roll", isOn: $coordinator.recenterRoll)
@@ -209,6 +213,7 @@ struct ControlPanelView: View {
             ForEach(coordinator.editableScreens()) { screen in
                 ScreenRow(initial: screen,
                           isPhysical: isPhysical(screen.id),
+                          lookedAt: coordinator.lookedAtScreenID == screen.id,
                           onChange: { coordinator.updateScreen($0) },
                           onRemove: { coordinator.removeScreen(id: screen.id) })
                     .id(screen.id)
@@ -261,6 +266,8 @@ struct ControlPanelView: View {
             Text("General").font(.headline)
             Toggle("Launch at login", isOn: $launchAtLogin)
                 .onChange(of: launchAtLogin) { _, newValue in LaunchAtLogin.set(newValue) }
+                .font(.caption)
+            Toggle("Keep cursor off the AR screen", isOn: $coordinator.confineCursor)
                 .font(.caption)
         }
     }
@@ -334,6 +341,7 @@ struct ControlPanelView: View {
 struct ScreenRow: View {
     let initial: VirtualScreenConfig
     var isPhysical: Bool = false
+    var lookedAt: Bool = false
     var onChange: (VirtualScreenConfig) -> Void = { _ in }
     var onRemove: () -> Void = {}
 
@@ -342,11 +350,12 @@ struct ScreenRow: View {
     @State private var cfg: VirtualScreenConfig
     @State private var expanded = false
 
-    init(initial: VirtualScreenConfig, isPhysical: Bool = false,
+    init(initial: VirtualScreenConfig, isPhysical: Bool = false, lookedAt: Bool = false,
          onChange: @escaping (VirtualScreenConfig) -> Void = { _ in },
          onRemove: @escaping () -> Void = {}) {
         self.initial = initial
         self.isPhysical = isPhysical
+        self.lookedAt = lookedAt
         self.onChange = onChange
         self.onRemove = onRemove
         _cfg = State(initialValue: initial)
@@ -373,6 +382,9 @@ struct ScreenRow: View {
                 Image(systemName: isPhysical ? "display" : "rectangle.on.rectangle")
                     .foregroundStyle(.secondary)
                 Text(cfg.name)
+                if lookedAt {
+                    Image(systemName: "eye.fill").foregroundStyle(.tint).font(.caption)
+                }
                 Text("\(cfg.width)×\(cfg.height)")
                     .font(.caption).foregroundStyle(.secondary)
             }

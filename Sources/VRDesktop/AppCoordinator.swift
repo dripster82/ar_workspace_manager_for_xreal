@@ -43,6 +43,20 @@ final class AppCoordinator: ObservableObject {
     private var captures: [UUID: CaptureSource] = [:]
     private var statsTimer: Timer?
     private var lastSampleCount: UInt64 = 0
+    private let cursorConfiner = CursorConfiner()
+
+    /// Keep the cursor off the AR output display while AR runs.
+    @Published var confineCursor: Bool = UserDefaults.standard.object(forKey: "confineCursor") == nil
+        ? true : UserDefaults.standard.bool(forKey: "confineCursor") {
+        didSet {
+            UserDefaults.standard.set(confineCursor, forKey: "confineCursor")
+            updateCursorConfinement()
+        }
+    }
+
+    /// The screen the user is currently looking at (gaze nearest its centre), if any.
+    @Published var lookedAtScreenID: UUID?
+    @Published var lookedAtScreenName: String?
 
     init() {
         renderer = GlassesRenderer(poseStore: IMUService.shared.poseStore)
@@ -108,6 +122,8 @@ final class AppCoordinator: ObservableObject {
         screenList = NSScreen.screens.map {
             "\($0.localizedName): \(Int($0.frame.width))×\(Int($0.frame.height)) at (\(Int($0.frame.origin.x)),\(Int($0.frame.origin.y))) scale \($0.backingScaleFactor)"
         }
+
+        updateLookedAtScreen()
 
         let q = IMUService.shared.poseStore.latest().orientation
         let toDeg = 180.0 / Double.pi
@@ -370,6 +386,39 @@ final class AppCoordinator: ObservableObject {
     /// The display AR is currently rendering to (the glasses), if a session is active.
     var arOutputDisplayID: CGDirectDisplayID? { arActive ? glassesDisplayID : nil }
 
+    private func updateCursorConfinement() {
+        if arActive, confineCursor, glassesDisplayID != 0 {
+            cursorConfiner.start(arDisplayID: glassesDisplayID)
+        } else {
+            cursorConfiner.stop()
+        }
+    }
+
+    /// Pick the screen whose centre is closest to the head's forward direction.
+    private func updateLookedAtScreen() {
+        guard arActive, let ws = workspaceStore.activeWorkspace else {
+            if lookedAtScreenID != nil { lookedAtScreenID = nil; lookedAtScreenName = nil }
+            return
+        }
+        let head = IMUService.shared.poseStore.latest().orientation
+        let forward = simd_normalize(head.act(SIMD3<Float>(0, 0, -1)))
+
+        let screens = ws.virtualScreens.filter { $0.showInAR } + ws.physicalInAR.values.filter { $0.showInAR }
+        var bestID: UUID?
+        var bestName: String?
+        var bestDot: Float = -1
+        for s in screens {
+            let qYaw = simd_quatf(angle: Float(s.yawDegrees * .pi / 180), axis: SIMD3(0, 1, 0))
+            let qPitch = simd_quatf(angle: Float(s.pitchDegrees * .pi / 180), axis: SIMD3(1, 0, 0))
+            let dir = simd_normalize((qYaw * qPitch).act(SIMD3<Float>(0, 0, -1)))
+            let d = simd_dot(forward, dir)
+            if d > bestDot { bestDot = d; bestID = s.id; bestName = s.name }
+        }
+        // Only count it as "looking at" within ~30° of the screen centre.
+        if bestDot < cosf(30 * .pi / 180) { bestID = nil; bestName = nil }
+        if bestID != lookedAtScreenID { lookedAtScreenID = bestID; lookedAtScreenName = bestName }
+    }
+
     /// The display that looks like the XREAL glasses, if currently connected.
     func glassesScreenID() -> CGDirectDisplayID? {
         for screen in NSScreen.screens {
@@ -448,6 +497,7 @@ final class AppCoordinator: ObservableObject {
             renderer.startOutput(on: target)
             self.outputScreenName = target.localizedName
             self.applyConfiguredMirrors() // restore any virtual→physical mirrors
+            self.updateCursorConfinement()
             self.statusMessage = "AR active on \(target.localizedName) \(Int(target.frame.width))×\(Int(target.frame.height)) at (\(Int(target.frame.origin.x)),\(Int(target.frame.origin.y))) with \(screenCount) screen(s)"
         }
     }
@@ -696,6 +746,7 @@ final class AppCoordinator: ObservableObject {
             }
             MCUService.shared.setDisplayMode(.mono1080p60)
         }
+        cursorConfiner.stop()
         renderer?.stopOutput()
         renderer?.setScreens([])
         let activeCaptures = captures.values
