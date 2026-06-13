@@ -383,11 +383,11 @@ struct ControlPanelView: View {
 
     private var testSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            tuningSlider("Smoothing", $coordinator.orientationSmoothingMs, 0...80,
-                         help: "higher = smoother, laggier")
-            tuningSlider("Vel. smooth", $coordinator.velocitySmoothingMs, 0...200,
-                         help: "smooths the prediction input")
-            tuningSlider("Prediction", $coordinator.predictionLeadMs, 0...50,
+            tuningSlider("Calm", $coordinator.minCutoffHz, 0.2...5, unit: "Hz", decimals: 1,
+                         help: "lower = calmer at rest (removes heartbeat jitter), but softer on slow moves")
+            tuningSlider("Response", $coordinator.betaResponsiveness, 0...2, unit: "", decimals: 2,
+                         help: "higher = snappier on fast head turns (less lag)")
+            tuningSlider("Prediction", $coordinator.predictionLeadMs, 0...50, unit: "ms", decimals: 0,
                          help: "higher = compensates lag, may overshoot")
             Divider()
             Toggle("Fake head pose (no glasses needed)", isOn: $coordinator.useFakePose)
@@ -407,11 +407,13 @@ struct ControlPanelView: View {
     }
 
     private func tuningSlider(_ label: String, _ value: Binding<Double>,
-                              _ range: ClosedRange<Double>, help: String) -> some View {
+                              _ range: ClosedRange<Double>, unit: String, decimals: Int,
+                              help: String) -> some View {
         HStack {
             Text(label).frame(width: 78, alignment: .leading).font(.caption)
             Slider(value: value, in: range)
-            Text("\(Int(value.wrappedValue)) ms").frame(width: 48).font(.caption).monospacedDigit()
+            Text(String(format: "%.\(decimals)f %@", value.wrappedValue, unit))
+                .frame(width: 52).font(.caption).monospacedDigit()
         }
         .help(help)
     }

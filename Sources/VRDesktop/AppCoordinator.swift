@@ -18,14 +18,14 @@ final class AppCoordinator: ObservableObject {
     @Published var outputScreenName: String?
     @Published var statusMessage = ""
 
-    // Tracking-feel tuning (live, persisted in UserDefaults).
-    @Published var orientationSmoothingMs: Double = 42 {
-        didSet { IMUService.shared.orientationTimeConstant = Float(orientationSmoothingMs / 1000)
-                 UserDefaults.standard.set(orientationSmoothingMs, forKey: "orientationSmoothingMs") }
+    // Tracking-feel tuning (One-Euro filter; live, persisted in UserDefaults).
+    @Published var minCutoffHz: Double = 1.0 {            // lower = calmer at rest
+        didSet { IMUService.shared.minCutoff = Float(minCutoffHz)
+                 UserDefaults.standard.set(minCutoffHz, forKey: "minCutoffHz") }
     }
-    @Published var velocitySmoothingMs: Double = 84 {
-        didSet { IMUService.shared.velocityTimeConstant = Float(velocitySmoothingMs / 1000)
-                 UserDefaults.standard.set(velocitySmoothingMs, forKey: "velocitySmoothingMs") }
+    @Published var betaResponsiveness: Double = 0.5 {     // higher = less lag when turning
+        didSet { IMUService.shared.beta = Float(betaResponsiveness)
+                 UserDefaults.standard.set(betaResponsiveness, forKey: "beta") }
     }
     @Published var predictionLeadMs: Double = 21 {
         didSet { renderer?.predictionLead = Float(predictionLeadMs / 1000)
@@ -89,15 +89,18 @@ final class AppCoordinator: ObservableObject {
         IMUService.shared.start()
 
         let defaults = UserDefaults.standard
-        if defaults.object(forKey: "orientationSmoothingMs") != nil {
-            orientationSmoothingMs = defaults.double(forKey: "orientationSmoothingMs")
+        if defaults.object(forKey: "minCutoffHz") != nil {
+            minCutoffHz = defaults.double(forKey: "minCutoffHz")
         }
-        if defaults.object(forKey: "velocitySmoothingMs") != nil {
-            velocitySmoothingMs = defaults.double(forKey: "velocitySmoothingMs")
+        if defaults.object(forKey: "beta") != nil {
+            betaResponsiveness = defaults.double(forKey: "beta")
         }
         if defaults.object(forKey: "predictionLeadMs") != nil {
             predictionLeadMs = defaults.double(forKey: "predictionLeadMs")
         }
+        // Push initial values into the filter.
+        IMUService.shared.minCutoff = Float(minCutoffHz)
+        IMUService.shared.beta = Float(betaResponsiveness)
 
         refreshMirroringState()
         NotificationCenter.default.addObserver(

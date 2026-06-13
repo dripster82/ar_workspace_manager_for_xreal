@@ -1,6 +1,48 @@
 import simd
 import Foundation
 
+/// One-Euro filter for orientation: an adaptive low-pass whose cutoff rises with angular
+/// speed. At rest it smooths hard (removing heartbeat/sensor jitter); during fast turns it
+/// opens up so there's no perceptible lag. (Casiez, Roussel & Vogel, 2012.)
+struct OneEuroOrientation {
+    var minCutoff: Float = 1.0   // Hz — lower = calmer at rest
+    var beta: Float = 0.5        // higher = more responsive to speed
+    var dCutoff: Float = 1.0     // Hz — smoothing of the speed estimate
+
+    private var initialized = false
+    private var prevRaw = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+    private var smoothed = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+    private var speedLPF: Float = 0
+
+    private func alpha(cutoff: Float, dt: Float) -> Float {
+        let tau = 1 / (2 * Float.pi * cutoff)
+        return 1 / (1 + tau / dt)
+    }
+
+    mutating func update(_ raw: simd_quatf, dt: Float) -> simd_quatf {
+        guard dt > 0 else { return smoothed }
+        if !initialized {
+            initialized = true
+            prevRaw = raw; smoothed = raw; speedLPF = 0
+            return raw
+        }
+        // Take the shortest-path representation relative to the current estimate.
+        var r = raw
+        if simd_dot(r.vector, smoothed.vector) < 0 { r = simd_quatf(vector: -r.vector) }
+
+        // Angular speed between consecutive raw samples, low-passed.
+        var dq = r * prevRaw.inverse
+        if dq.real < 0 { dq = simd_quatf(vector: -dq.vector) }
+        let speed = (2 * acosf(min(1, dq.real))) / dt
+        speedLPF += alpha(cutoff: dCutoff, dt: dt) * (speed - speedLPF)
+
+        let cutoff = minCutoff + beta * speedLPF
+        smoothed = simd_normalize(simd_slerp(smoothed, r, alpha(cutoff: cutoff, dt: dt)))
+        prevRaw = r
+        return smoothed
+    }
+}
+
 /// A 3DoF head pose sampled from the glasses' IMU.
 public struct Pose: Sendable {
     public var orientation: simd_quatf

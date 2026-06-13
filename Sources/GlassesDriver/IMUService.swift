@@ -96,31 +96,31 @@ public final class IMUService: @unchecked Sendable {
             }
         }
         lastSample = (raw, now)
-
-        // Low-pass both signals: at ~1kHz the per-sample orientation and especially the
-        // finite-difference angular velocity are noisy, which reads as jitter in the view.
         let dt = Float(prev.map { now - $0.t } ?? 0.001)
-        let orientationAlpha = 1 - expf(-dt / orientationTimeConstant)
+
+        // Orientation: One-Euro adaptive filter — heavy smoothing when nearly still (kills
+        // heartbeat/sensor jitter), little smoothing when turning (no perceptible lag).
+        orientationFilter.minCutoff = minCutoff
+        orientationFilter.beta = beta
+        let qSmooth = orientationFilter.update(raw, dt: dt)
+
+        // Angular velocity for prediction: a plain low-pass is fine here.
         let velocityAlpha = 1 - expf(-dt / velocityTimeConstant)
-        if let current = smoothed {
-            var target = raw
-            if simd_dot(current.q.vector, raw.vector) < 0 { target = simd_quatf(vector: -raw.vector) }
-            let qSmooth = simd_normalize(simd_slerp(current.q, target, orientationAlpha))
-            let wSmooth = current.w + (instAngVel - current.w) * velocityAlpha
-            smoothed = (qSmooth, wSmooth)
-        } else {
-            smoothed = (raw, instAngVel)
-        }
-        let s = smoothed!
-        poseStore.update(Pose(orientation: s.q, angularVelocity: s.w, timestamp: now))
+        velFiltered += (instAngVel - velFiltered) * velocityAlpha
+
+        poseStore.update(Pose(orientation: qSmooth, angularVelocity: velFiltered, timestamp: now))
     }
 
-    /// Smoothing time constants (seconds). Bigger = smoother but laggier.
-    public var orientationTimeConstant: Float = 0.042
+    /// One-Euro parameters (set from the UI). Lower minCutoff = calmer at rest;
+    /// higher beta = more responsive to fast head turns (less lag).
+    public var minCutoff: Float = 1.0   // Hz
+    public var beta: Float = 0.5
+    /// Low-pass time constant (s) for the prediction velocity estimate.
     public var velocityTimeConstant: Float = 0.084
 
     private var lastSample: (q: simd_quatf, t: TimeInterval)?
-    private var smoothed: (q: simd_quatf, w: SIMD3<Float>)?
+    private var orientationFilter = OneEuroOrientation()
+    private var velFiltered: SIMD3<Float> = .zero
 }
 
 private func imuEventCallback(
