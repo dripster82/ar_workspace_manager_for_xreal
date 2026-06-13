@@ -75,7 +75,17 @@ final class AppCoordinator: ObservableObject {
             forName: NSApplication.didChangeScreenParametersNotification,
             object: nil, queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.refreshMirroringState() }
+            Task { @MainActor in
+                self?.refreshMirroringState()
+                self?.handleScreenChange()
+            }
+        }
+
+        // Recover the AR session across sleep/wake (captures and displays drop out).
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.handleSystemWake() }
         }
 
         statsTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
@@ -443,15 +453,44 @@ final class AppCoordinator: ObservableObject {
         restartARIfActive()
     }
 
+    /// If the glasses display vanishes while AR is running (unplugged), tear down cleanly
+    /// so we don't keep rendering to a dead screen or leave SBS/mirroring half-applied.
+    private func handleScreenChange() {
+        guard arActive, glassesDisplayID != 0 else { return }
+        let present = NSScreen.screens.contains { Self.screenDisplayID($0) == glassesDisplayID }
+        if !present {
+            stopAR()
+            statusMessage = "Glasses disconnected — AR stopped"
+        }
+    }
+
+    /// After the Mac wakes, capture streams and the output window are usually dead.
+    /// Rebuild the session on the same display if it's still there.
+    private func handleSystemWake() {
+        guard arActive else { return }
+        statusMessage = "Woke from sleep — restarting AR…"
+        restartARIfActive()
+    }
+
     /// Restart AR on the same output so a workspace change rebuilds its virtual displays.
     private func restartARIfActive() {
         guard arActive, lastOutputScreenID != 0 else { return }
         let id = lastOutputScreenID
         stopAR()
+        // The display can take a few seconds to re-enumerate (after wake/replug); retry.
+        retryStartAR(displayID: id, attemptsLeft: 6)
+    }
+
+    private func retryStartAR(displayID id: CGDirectDisplayID, attemptsLeft: Int) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-            guard let self,
-                  let screen = NSScreen.screens.first(where: { Self.screenDisplayID($0) == id }) else { return }
-            self.startAR(on: screen)
+            guard let self, !self.arActive else { return }
+            if let screen = NSScreen.screens.first(where: { Self.screenDisplayID($0) == id }) {
+                self.startAR(on: screen)
+            } else if attemptsLeft > 1 {
+                self.retryStartAR(displayID: id, attemptsLeft: attemptsLeft - 1)
+            } else {
+                self.statusMessage = "Output display didn't return — pick it and Start AR again"
+            }
         }
     }
 
