@@ -46,13 +46,16 @@ final class HelpOverlayController {
     private func makePanel() -> NSPanel {
         let hosting = NSHostingView(rootView: HelpView())
         hosting.frame = NSRect(origin: .zero, size: hosting.fittingSize)
+        // Borderless (no title bar) — the HelpView draws its own rounded card; close with ⌃⌥H.
         let panel = NSPanel(contentRect: hosting.frame,
-                            styleMask: [.titled, .closable, .hudWindow, .nonactivatingPanel],
+                            styleMask: [.borderless, .nonactivatingPanel],
                             backing: .buffered, defer: false)
-        panel.title = "Shortcuts"
         panel.isFloatingPanel = true
         panel.level = .floating
         panel.hidesOnDeactivate = false
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
         panel.contentView = hosting
         return panel
     }
