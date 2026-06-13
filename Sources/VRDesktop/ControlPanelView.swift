@@ -552,6 +552,10 @@ struct PlacementMapView: View {
         coordinator.editableScreens().filter { $0.showInAR && $0.placement == placement }
     }
 
+    // Map ranges (must match ScreenBox) and the glasses' field of view in degrees.
+    private static let yawRange = 150.0, pitchRange = 60.0
+    private static let fovHDeg = 40.0, fovVDeg = 23.0
+
     private func zone(title: String, placement: ScreenPlacement, accent: Color) -> some View {
         let spaceName = "zone-\(placement.rawValue)"
         return VStack(alignment: .leading, spacing: 3) {
@@ -563,6 +567,16 @@ struct PlacementMapView: View {
                         .position(x: geo.size.width / 2, y: geo.size.height / 2)
                     Rectangle().fill(.white.opacity(0.08)).frame(height: 1)
                         .position(x: geo.size.width / 2, y: geo.size.height / 2)
+                    // Field-of-view outline (what the glasses can show at once), centred.
+                    if placement == .floating {
+                        let fovW = CGFloat(Self.fovHDeg / (2 * Self.yawRange)) * geo.size.width
+                        let fovH = CGFloat(Self.fovVDeg / (2 * Self.pitchRange)) * geo.size.height
+                        RoundedRectangle(cornerRadius: 4)
+                            .strokeBorder(.green.opacity(0.6),
+                                          style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+                            .frame(width: fovW, height: fovH)
+                            .position(x: geo.size.width / 2, y: geo.size.height / 2)
+                    }
                     ForEach(screens(placement)) { cfg in
                         ScreenBox(initial: cfg, area: geo.size, coordinateSpace: spaceName,
                                   accent: accent,
