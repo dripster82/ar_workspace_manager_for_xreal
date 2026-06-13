@@ -14,9 +14,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var coordinator: AppCoordinator!
     var statusItem: NSStatusItem!
     let brightnessHotKey = BrightnessHotKey()
+    var helpOverlay: HelpOverlayController!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         coordinator = AppCoordinator()
+        helpOverlay = HelpOverlayController(coordinator: coordinator)
 
         window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 520, height: 680),
@@ -47,8 +49,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var recenterHotKeyRef: EventHotKeyRef?
     private var stopARHotKeyRef: EventHotKeyRef?
     private static let hotKeySignature = OSType(0x56524454) // 'VRDT'
+    private var helpHotKeyRef: EventHotKeyRef?
     private static let recenterHotKeyID: UInt32 = 1
     private static let stopARHotKeyID: UInt32 = 2
+    private static let helpHotKeyID: UInt32 = 3
 
     private func registerGlobalRecenterHotKey() {
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
@@ -65,6 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 switch hotKeyID.id {
                 case AppDelegate.recenterHotKeyID: delegate.coordinator.recenter()
                 case AppDelegate.stopARHotKeyID: delegate.coordinator.stopAR()
+                case AppDelegate.helpHotKeyID: delegate.helpOverlay.toggle()
                 default: break
                 }
             }
@@ -82,6 +87,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         register(kVK_Space, AppDelegate.recenterHotKeyID, &recenterHotKeyRef)
         register(kVK_Escape, AppDelegate.stopARHotKeyID, &stopARHotKeyRef)
+        register(kVK_ANSI_H, AppDelegate.helpHotKeyID, &helpHotKeyRef)
     }
 
     // MARK: Menu bar
@@ -120,6 +126,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         recenter.target = self
         menu.addItem(recenter)
 
+        let help = NSMenuItem(title: "Keyboard Shortcuts (⌃⌥H)", action: #selector(toggleHelp),
+                              keyEquivalent: "")
+        help.target = self
+        menu.addItem(help)
+
         menu.addItem(.separator())
         let launch = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin),
                                 keyEquivalent: "")
@@ -141,19 +152,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// Open on the screen under the cursor. While AR is running, never the AR output screen.
     @MainActor private func placeWindowUnderCursor() {
-        let cursor = NSEvent.mouseLocation
-        let arOutput = coordinator.arOutputDisplayID // nil unless AR is running
-        let allowed = NSScreen.screens.filter { AppCoordinator.screenDisplayID($0) != arOutput }
-
-        let target = allowed.first { NSMouseInRect(cursor, $0.frame, false) }
-            ?? allowed.first { $0 == NSScreen.main }
-            ?? allowed.first
-        guard let target else { return }
-
-        let size = window.frame.size
-        let origin = NSPoint(x: target.frame.midX - size.width / 2,
-                             y: target.frame.midY - size.height / 2)
-        window.setFrame(NSRect(origin: origin, size: size), display: true)
+        let origin = ScreenPlacement.originUnderCursor(
+            size: window.frame.size, excluding: coordinator.arOutputDisplayID)
+        window.setFrameOrigin(origin)
     }
 
     @MainActor @objc private func toggleAR() {
@@ -171,6 +172,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @MainActor @objc private func menuRecenter() { coordinator.recenter() }
+
+    @MainActor @objc private func toggleHelp() { helpOverlay.toggle() }
 
     @objc private func toggleLaunchAtLogin() { LaunchAtLogin.set(!LaunchAtLogin.isEnabled) }
 

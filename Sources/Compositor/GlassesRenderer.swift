@@ -1,6 +1,7 @@
 import AppKit
 import GlassesDriver
 import Metal
+import MetalKit
 import QuartzCore
 import simd
 
@@ -41,6 +42,13 @@ public final class GlassesRenderer: NSObject {
     public private(set) var renderScale: Double = 1.0
     private var ssColorTexture: MTLTexture?
     private var downscalePipeline: MTLRenderPipelineState!
+
+    // Screen-space help overlay (drawn on top of everything).
+    private var overlayPipeline: MTLRenderPipelineState!
+    private var helpTexture: MTLTexture?
+    public var showHelp = false
+
+    private struct OverlayVertex { var position: SIMD2<Float>; var uv: SIMD2<Float> }
 
     private let poseStore: PoseStore
     private let lock = NSLock()
@@ -97,7 +105,28 @@ public final class GlassesRenderer: NSObject {
         dDesc.fragmentFunction = library.makeFunction(name: "blit_fragment")
         dDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
         downscalePipeline = try? device.makeRenderPipelineState(descriptor: dDesc)
+
+        let oDesc = MTLRenderPipelineDescriptor()
+        oDesc.vertexFunction = library.makeFunction(name: "overlay_vertex")
+        oDesc.fragmentFunction = library.makeFunction(name: "overlay_fragment")
+        oDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
+        oDesc.colorAttachments[0].isBlendingEnabled = true   // premultiplied-alpha over
+        oDesc.colorAttachments[0].sourceRGBBlendFactor = .one
+        oDesc.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
+        oDesc.colorAttachments[0].sourceAlphaBlendFactor = .one
+        oDesc.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
+        overlayPipeline = try? device.makeRenderPipelineState(descriptor: oDesc)
     }
+
+    /// Provide the help HUD image (from rasterized SwiftUI) and show it.
+    public func setHelpImage(_ cgImage: CGImage) {
+        let loader = MTKTextureLoader(device: device)
+        helpTexture = try? loader.newTexture(cgImage: cgImage,
+            options: [.SRGB: false, .origin: MTKTextureLoader.Origin.topLeft as NSObject])
+        showHelp = helpTexture != nil
+    }
+
+    public func clearHelp() { showHelp = false }
 
     /// Set supersample factor (1.0 off, up to 2.0).
     public func setRenderScale(_ scale: Double) {
@@ -468,6 +497,8 @@ public final class GlassesRenderer: NSObject {
             }
         }
 
+        drawHelpOverlay(commandBuffer: commandBuffer, drawable: drawable)
+
         commandBuffer.present(drawable)
         commandBuffer.commit()
 
@@ -478,6 +509,45 @@ public final class GlassesRenderer: NSObject {
             frameCount = 0
             lastFPSUpdate = now
         }
+    }
+
+    /// Draw the help HUD as a centered, alpha-blended quad on top of the final frame
+    /// (in each eye half when stereo), so it appears above everything.
+    private func drawHelpOverlay(commandBuffer: MTLCommandBuffer, drawable: CAMetalDrawable) {
+        guard showHelp, let tex = helpTexture, let pipe = overlayPipeline else { return }
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture = drawable.texture
+        pass.colorAttachments[0].loadAction = .load
+        pass.colorAttachments[0].storeAction = .store
+        guard let enc = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
+        enc.setRenderPipelineState(pipe)
+        enc.setFragmentSamplerState(linearSampler, index: 0)
+        enc.setFragmentTexture(tex, index: 0)
+
+        let W = drawable.texture.width, H = drawable.texture.height
+        let regions: [(x: Int, w: Int)] = stereoEnabled ? [(0, W / 2), (W / 2, W / 2)] : [(0, W)]
+        let texAspect = Float(tex.width) / Float(max(1, tex.height))
+        for region in regions {
+            let regionW = Float(region.w), regionH = Float(H)
+            var panelH = regionH * 0.7
+            var panelW = panelH * texAspect
+            if panelW > regionW * 0.9 { panelW = regionW * 0.9; panelH = panelW / texAspect }
+            let nw = panelW / regionW * 2, nh = panelH / regionH * 2
+            enc.setViewport(MTLViewport(originX: Double(region.x), originY: 0,
+                                        width: Double(region.w), height: Double(H),
+                                        znear: 0, zfar: 1))
+            var verts = [
+                OverlayVertex(position: SIMD2(-nw/2,  nh/2), uv: SIMD2(0, 0)),
+                OverlayVertex(position: SIMD2( nw/2,  nh/2), uv: SIMD2(1, 0)),
+                OverlayVertex(position: SIMD2(-nw/2, -nh/2), uv: SIMD2(0, 1)),
+                OverlayVertex(position: SIMD2( nw/2,  nh/2), uv: SIMD2(1, 0)),
+                OverlayVertex(position: SIMD2( nw/2, -nh/2), uv: SIMD2(1, 1)),
+                OverlayVertex(position: SIMD2(-nw/2, -nh/2), uv: SIMD2(0, 1)),
+            ]
+            enc.setVertexBytes(&verts, length: verts.count * MemoryLayout<OverlayVertex>.stride, index: 0)
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+        }
+        enc.endEncoding()
     }
 
     /// Draw the AR scene (mono or stereo) into the current encoder at the given target size.
