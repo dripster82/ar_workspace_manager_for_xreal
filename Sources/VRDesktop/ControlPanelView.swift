@@ -15,6 +15,7 @@ struct ControlPanelView: View {
             VStack(spacing: 14) {
                 statusCard
                 card("AR Output", "display") { outputSection }
+                card("Layout", "square.on.square.dashed") { PlacementMapView(coordinator: coordinator) }
                 card("Workspace", "square.grid.2x2") { workspaceSection }
                 card("Tracking & Testing", "gauge.with.dots.needle.33percent") { testSection }
                 card("Permissions", "lock.shield") { permissionsSection }
@@ -530,5 +531,106 @@ struct ScreenRow: View {
                 .frame(width: 34).font(.caption).monospacedDigit()
                 .foregroundStyle(auto.wrappedValue ? .secondary : .primary)
         }
+    }
+}
+
+/// Drag-to-place layout: two zones (anchored "around you" and floating "in view"); each
+/// screen is a box you drag to set its yaw (horizontal) and pitch (vertical).
+struct PlacementMapView: View {
+    @ObservedObject var coordinator: AppCoordinator
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            zone(title: "Around you (anchored)", placement: .anchored, accent: .blue)
+            zone(title: "In view (floating)", placement: .floating, accent: .accentColor)
+            Text("Drag to position. Left↔right = yaw, up↔down = pitch. Set Anchored/Floating per screen below.")
+                .font(.caption2).foregroundStyle(.secondary)
+        }
+    }
+
+    private func screens(_ placement: ScreenPlacement) -> [VirtualScreenConfig] {
+        coordinator.editableScreens().filter { $0.showInAR && $0.placement == placement }
+    }
+
+    private func zone(title: String, placement: ScreenPlacement, accent: Color) -> some View {
+        let spaceName = "zone-\(placement.rawValue)"
+        return VStack(alignment: .leading, spacing: 3) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            GeometryReader { geo in
+                ZStack(alignment: .topLeading) {
+                    RoundedRectangle(cornerRadius: 8).fill(Color.gray.opacity(0.12))
+                    Rectangle().fill(.white.opacity(0.08)).frame(width: 1)
+                        .position(x: geo.size.width / 2, y: geo.size.height / 2)
+                    Rectangle().fill(.white.opacity(0.08)).frame(height: 1)
+                        .position(x: geo.size.width / 2, y: geo.size.height / 2)
+                    ForEach(screens(placement)) { cfg in
+                        ScreenBox(initial: cfg, area: geo.size, coordinateSpace: spaceName,
+                                  accent: accent,
+                                  lookedAt: coordinator.lookedAtScreenID == cfg.id,
+                                  onChange: { coordinator.updateScreen($0) })
+                    }
+                }
+                .coordinateSpace(name: spaceName)
+            }
+            .frame(height: 132)
+        }
+    }
+}
+
+private struct ScreenBox: View {
+    let initial: VirtualScreenConfig
+    let area: CGSize
+    let coordinateSpace: String
+    let accent: Color
+    let lookedAt: Bool
+    var onChange: (VirtualScreenConfig) -> Void
+
+    @State private var cfg: VirtualScreenConfig
+
+    init(initial: VirtualScreenConfig, area: CGSize, coordinateSpace: String, accent: Color,
+         lookedAt: Bool, onChange: @escaping (VirtualScreenConfig) -> Void) {
+        self.initial = initial
+        self.area = area
+        self.coordinateSpace = coordinateSpace
+        self.accent = accent
+        self.lookedAt = lookedAt
+        self.onChange = onChange
+        _cfg = State(initialValue: initial)
+    }
+
+    // yaw [-150,150] → x; pitch [+60,-60] → y (up = top)
+    private static let yawRange = 150.0, pitchRange = 60.0
+
+    private func point() -> CGPoint {
+        CGPoint(x: (cfg.yawDegrees + Self.yawRange) / (2 * Self.yawRange) * area.width,
+                y: (Self.pitchRange - cfg.pitchDegrees) / (2 * Self.pitchRange) * area.height)
+    }
+
+    private func apply(location: CGPoint) {
+        let x = min(max(0, location.x), area.width)
+        let y = min(max(0, location.y), area.height)
+        cfg.yawDegrees = (Double(x / max(1, area.width)) * 2 - 1) * Self.yawRange
+        cfg.pitchDegrees = Self.pitchRange - Double(y / max(1, area.height)) * 2 * Self.pitchRange
+        onChange(cfg)
+    }
+
+    var body: some View {
+        let aspect = CGFloat(cfg.width) / CGFloat(max(1, cfg.height))
+        let w: CGFloat = 60
+        let h = min(60, max(24, w / aspect))
+        return RoundedRectangle(cornerRadius: 4)
+            .fill(accent.opacity(0.45))
+            .overlay(
+                Text(cfg.name).font(.system(size: 9)).lineLimit(1)
+                    .padding(.horizontal, 3).foregroundStyle(.white))
+            .overlay(RoundedRectangle(cornerRadius: 4)
+                .strokeBorder(lookedAt ? Color.yellow : .white.opacity(0.5), lineWidth: lookedAt ? 2 : 1))
+            .frame(width: w, height: h)
+            .position(point())
+            .gesture(
+                DragGesture(coordinateSpace: .named(coordinateSpace))
+                    .onChanged { apply(location: $0.location) }
+            )
+            .onChange(of: initial) { newValue in if newValue != cfg { cfg = newValue } }
     }
 }
