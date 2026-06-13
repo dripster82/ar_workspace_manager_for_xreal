@@ -602,14 +602,15 @@ private struct ScreenBox: View {
     private static let yawRange = 150.0, pitchRange = 60.0
 
     private func point() -> CGPoint {
-        CGPoint(x: (cfg.yawDegrees + Self.yawRange) / (2 * Self.yawRange) * area.width,
+        // Map left↔right so dragging right moves the screen to the viewer's right.
+        CGPoint(x: (Self.yawRange - cfg.yawDegrees) / (2 * Self.yawRange) * area.width,
                 y: (Self.pitchRange - cfg.pitchDegrees) / (2 * Self.pitchRange) * area.height)
     }
 
     private func apply(location: CGPoint) {
         let x = min(max(0, location.x), area.width)
         let y = min(max(0, location.y), area.height)
-        cfg.yawDegrees = (Double(x / max(1, area.width)) * 2 - 1) * Self.yawRange
+        cfg.yawDegrees = (1 - Double(x / max(1, area.width)) * 2) * Self.yawRange
         cfg.pitchDegrees = Self.pitchRange - Double(y / max(1, area.height)) * 2 * Self.pitchRange
         onChange(cfg)
     }
