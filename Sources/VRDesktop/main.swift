@@ -12,7 +12,6 @@ app.run()
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var window: NSWindow!
     var coordinator: AppCoordinator!
-    var hotKeyMonitor: Any?
     var statusItem: NSStatusItem!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -31,15 +30,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         setupMenuBar()
         registerGlobalRecenterHotKey()
-
-        hotKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            // Esc stops AR output.
-            if event.keyCode == UInt16(kVK_Escape), self?.coordinator.arActive == true {
-                self?.coordinator.stopAR()
-                return nil
-            }
-            return event
-        }
     }
 
     // System-wide hotkeys (work while any app is focused):

@@ -21,7 +21,7 @@ Apple Development certificate makes the grant stick.
    yaw/pitch/roll at ~500–1000 Hz. Unplug → *not connected*, no crash.
 2. **Render output**: pick any external monitor (a stand-in works) under *AR Output*,
    Start AR → screens render fullscreen there (placeholder grid until capture permission
-   is granted). Esc stops.
+   is granted). ⌃⌥Esc stops AR; ⌃⌥Space recenters (both global).
 3. **Head tracking without glasses**: enable *Fake head pose* and drag the yaw/pitch
    sliders — the scene should pan on the output display.
 4. **Virtual desktops**: add screens to the workspace; each becomes a real macOS display
