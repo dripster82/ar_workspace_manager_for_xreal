@@ -19,11 +19,14 @@ public struct VirtualScreenConfig: Codable, Identifiable, Hashable, Sendable {
     public var curvatureRadius: Double // horizontal curve amount 0 = flat … 5 = max wrap
     public var autoCurveH: Bool        // horizontal curve follows natural sphere
     public var showInAR: Bool
+    /// Persistent UUID of a physical display this (virtual) screen is mirrored onto, if any.
+    public var mirrorToPhysical: String?
 
     public init(id: UUID = UUID(), name: String, width: Int, height: Int, hiDPI: Bool = false,
                 yawDegrees: Double = 0, pitchDegrees: Double = 0, distanceMeters: Double = 2.0,
                 scale: Double = 1.0, curvatureRadius: Double = 0,
-                autoCurveH: Bool = false, showInAR: Bool = true) {
+                autoCurveH: Bool = false, showInAR: Bool = true,
+                mirrorToPhysical: String? = nil) {
         self.id = id
         self.name = name
         self.width = width
@@ -36,6 +39,7 @@ public struct VirtualScreenConfig: Codable, Identifiable, Hashable, Sendable {
         self.curvatureRadius = curvatureRadius
         self.autoCurveH = autoCurveH
         self.showInAR = showInAR
+        self.mirrorToPhysical = mirrorToPhysical
     }
 
     // Custom decoding so older saved workspaces (without the newer fields) still load.
@@ -55,6 +59,7 @@ public struct VirtualScreenConfig: Codable, Identifiable, Hashable, Sendable {
         let legacyAuto = try c.decodeIfPresent(Bool.self, forKey: .autoCurve) ?? false
         autoCurveH = try c.decodeIfPresent(Bool.self, forKey: .autoCurveH) ?? legacyAuto
         showInAR = try c.decodeIfPresent(Bool.self, forKey: .showInAR) ?? true
+        mirrorToPhysical = try c.decodeIfPresent(String.self, forKey: .mirrorToPhysical)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -71,11 +76,12 @@ public struct VirtualScreenConfig: Codable, Identifiable, Hashable, Sendable {
         try c.encode(curvatureRadius, forKey: .curvatureRadius)
         try c.encode(autoCurveH, forKey: .autoCurveH)
         try c.encode(showInAR, forKey: .showInAR)
+        try c.encodeIfPresent(mirrorToPhysical, forKey: .mirrorToPhysical)
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, width, height, hiDPI, yawDegrees, pitchDegrees, distanceMeters
-        case scale, curvatureRadius, autoCurve, autoCurveH, showInAR
+        case scale, curvatureRadius, autoCurve, autoCurveH, showInAR, mirrorToPhysical
     }
 
     /// Default placement values (position/size/curve), independent of identity & resolution.

@@ -18,6 +18,8 @@ struct ControlPanelView: View {
             workspaceSection
             Divider()
             testSection
+            Divider()
+            generalSection
             if !coordinator.statusMessage.isEmpty {
                 Text(coordinator.statusMessage)
                     .font(.caption)
@@ -210,6 +212,9 @@ struct ControlPanelView: View {
                           onChange: { coordinator.updateScreen($0) },
                           onRemove: { coordinator.removeScreen(id: screen.id) })
                     .id(screen.id)
+                if !isPhysical(screen.id) {
+                    mirrorMenu(for: screen)
+                }
             }
 
             HStack {
@@ -247,6 +252,36 @@ struct ControlPanelView: View {
         let ids = NSScreen.screens.map { AppCoordinator.screenDisplayID($0) }
         if let sel = selectedScreenID, !ids.contains(sel) { selectedScreenID = nil }
         if selectedScreenID == nil { selectedScreenID = coordinator.glassesScreenID() }
+    }
+
+    @State private var launchAtLogin = LaunchAtLogin.isEnabled
+
+    private var generalSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("General").font(.headline)
+            Toggle("Launch at login", isOn: $launchAtLogin)
+                .onChange(of: launchAtLogin) { _, newValue in LaunchAtLogin.set(newValue) }
+                .font(.caption)
+        }
+    }
+
+    private func mirrorMenu(for screen: VirtualScreenConfig) -> some View {
+        let targets = coordinator.mirrorTargets()
+        let currentName = targets.first { $0.uuid == screen.mirrorToPhysical }?.name
+        return HStack(spacing: 6) {
+            Image(systemName: "rectangle.on.rectangle.angled").foregroundStyle(.secondary)
+            Menu(currentName.map { "Mirroring to \($0)" } ?? "Mirror to monitor: off") {
+                Button("Off") { coordinator.setMirrorTarget(screenID: screen.id, physicalUUID: nil) }
+                ForEach(targets, id: \.uuid) { target in
+                    Button(target.name) {
+                        coordinator.setMirrorTarget(screenID: screen.id, physicalUUID: target.uuid)
+                    }
+                }
+            }
+            .frame(width: 220)
+        }
+        .font(.caption)
+        .padding(.leading, 24)
     }
 
     private func syncWorkspaceName() {

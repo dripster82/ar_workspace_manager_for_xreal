@@ -238,12 +238,71 @@ final class AppCoordinator: ObservableObject {
         refreshPermissions()
     }
 
+    /// Physical displays we deliberately mirror onto a virtual screen — excluded from the
+    /// "a display is mirroring" warning, which is only about the glasses arriving mirrored.
+    private var intentionalMirrors: Set<CGDirectDisplayID> = []
+
     func refreshMirroringState() {
         var ids = [CGDirectDisplayID](repeating: 0, count: 16)
         var count: UInt32 = 0
         CGGetOnlineDisplayList(16, &ids, &count)
         mirroringActive = ids.prefix(Int(count)).contains {
-            CGDisplayMirrorsDisplay($0) != kCGNullDirectDisplay
+            CGDisplayMirrorsDisplay($0) != kCGNullDirectDisplay && !intentionalMirrors.contains($0)
+        }
+    }
+
+    // MARK: Virtual → physical mirroring
+
+    /// Physical displays a virtual screen can be mirrored onto (excludes glasses + virtuals).
+    func mirrorTargets() -> [(uuid: String, name: String)] {
+        let virtualIDs = Set(virtualDisplays.active.values.map { $0.displayID })
+        return NSScreen.screens.compactMap { screen in
+            let id = Self.screenDisplayID(screen)
+            guard id != glassesDisplayID, !virtualIDs.contains(id),
+                  let uuid = Self.displayUUIDString(id) else { return nil }
+            return (uuid, screen.localizedName)
+        }
+    }
+
+    /// Persist the mirror choice on the screen config and apply it live if AR is running.
+    func setMirrorTarget(screenID: UUID, physicalUUID: String?) {
+        guard var ws = workspaceStore.activeWorkspace,
+              let i = ws.virtualScreens.firstIndex(where: { $0.id == screenID }) else { return }
+        ws.virtualScreens[i].mirrorToPhysical = physicalUUID
+        workspaceStore.activeWorkspace = ws
+        workspaceStore.save()
+        objectWillChange.send()
+        applyMirror(for: ws.virtualScreens[i])
+    }
+
+    /// Make the configured physical display mirror this virtual screen (or clear it).
+    private func applyMirror(for config: VirtualScreenConfig) {
+        guard arActive, let vid = virtualDisplays.displayID(for: config.id) else { return }
+        var configRef: CGDisplayConfigRef?
+        guard CGBeginDisplayConfiguration(&configRef) == .success, let configRef else { return }
+        // Clear any physical currently mirroring this virtual display.
+        for screen in NSScreen.screens {
+            let id = Self.screenDisplayID(screen)
+            if CGDisplayMirrorsDisplay(id) == vid {
+                CGConfigureDisplayMirrorOfDisplay(configRef, id, kCGNullDirectDisplay)
+                intentionalMirrors.remove(id)
+            }
+        }
+        if let uuid = config.mirrorToPhysical,
+           let physicalID = Self.resolvePhysicalDisplay(uuidString: uuid),
+           physicalID != glassesDisplayID {
+            CGConfigureDisplayMirrorOfDisplay(configRef, physicalID, vid)
+            intentionalMirrors.insert(physicalID)
+        }
+        CGCompleteDisplayConfiguration(configRef, .permanently)
+        refreshMirroringState()
+    }
+
+    /// Re-apply all configured mirrors after the virtual displays exist (called from beginAR).
+    private func applyConfiguredMirrors() {
+        guard let ws = workspaceStore.activeWorkspace else { return }
+        for config in ws.virtualScreens where config.mirrorToPhysical != nil {
+            applyMirror(for: config)
         }
     }
 
@@ -360,6 +419,7 @@ final class AppCoordinator: ObservableObject {
             let target = NSScreen.screens.first { Self.screenDisplayID($0) == outputDisplayID } ?? screen
             renderer.startOutput(on: target)
             self.outputScreenName = target.localizedName
+            self.applyConfiguredMirrors() // restore any virtual→physical mirrors
             self.statusMessage = "AR active on \(target.localizedName) \(Int(target.frame.width))×\(Int(target.frame.height)) at (\(Int(target.frame.origin.x)),\(Int(target.frame.origin.y))) with \(screenCount) screen(s)"
         }
     }
@@ -613,7 +673,8 @@ final class AppCoordinator: ObservableObject {
         let activeCaptures = captures.values
         captures.removeAll()
         Task { for c in activeCaptures { await c.stop() } }
-        virtualDisplays.destroyAll()
+        virtualDisplays.destroyAll() // destroying virtual displays auto-breaks their mirrors
+        intentionalMirrors.removeAll()
         glassesDisplayID = 0
         arActive = false
         outputScreenName = nil
