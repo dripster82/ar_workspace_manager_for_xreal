@@ -275,18 +275,24 @@ final class AppCoordinator: ObservableObject {
         applyMirror(for: ws.virtualScreens[i])
     }
 
+    /// All currently-online display IDs (mirror slaves included — these collapse into a
+    /// single NSScreen, so NSScreen.screens can't be used to find/break mirrors).
+    private static func onlineDisplayIDs() -> [CGDirectDisplayID] {
+        var ids = [CGDirectDisplayID](repeating: 0, count: 32)
+        var count: UInt32 = 0
+        CGGetOnlineDisplayList(32, &ids, &count)
+        return Array(ids.prefix(Int(count)))
+    }
+
     /// Make the configured physical display mirror this virtual screen (or clear it).
     private func applyMirror(for config: VirtualScreenConfig) {
         guard arActive, let vid = virtualDisplays.displayID(for: config.id) else { return }
         var configRef: CGDisplayConfigRef?
         guard CGBeginDisplayConfiguration(&configRef) == .success, let configRef else { return }
-        // Clear any physical currently mirroring this virtual display.
-        for screen in NSScreen.screens {
-            let id = Self.screenDisplayID(screen)
-            if CGDisplayMirrorsDisplay(id) == vid {
-                CGConfigureDisplayMirrorOfDisplay(configRef, id, kCGNullDirectDisplay)
-                intentionalMirrors.remove(id)
-            }
+        // Clear any display currently mirroring this virtual one (iterate real display IDs).
+        for id in Self.onlineDisplayIDs() where CGDisplayMirrorsDisplay(id) == vid {
+            CGConfigureDisplayMirrorOfDisplay(configRef, id, kCGNullDirectDisplay)
+            intentionalMirrors.remove(id)
         }
         if let uuid = config.mirrorToPhysical,
            let physicalID = Self.resolvePhysicalDisplay(uuidString: uuid),
@@ -298,12 +304,31 @@ final class AppCoordinator: ObservableObject {
         refreshMirroringState()
     }
 
-    /// Re-apply all configured mirrors after the virtual displays exist (called from beginAR).
+    /// Reconcile mirroring at session start: macOS persists and auto-restores mirrors for
+    /// our (stable-identity) virtual displays, so first break *every* mirror onto a virtual
+    /// display, then apply only the ones the workspace says should be on.
     private func applyConfiguredMirrors() {
-        guard let ws = workspaceStore.activeWorkspace else { return }
-        for config in ws.virtualScreens where config.mirrorToPhysical != nil {
-            applyMirror(for: config)
+        let virtualIDs = Set(virtualDisplays.active.values.map { $0.displayID })
+        guard !virtualIDs.isEmpty else { return }
+
+        var configRef: CGDisplayConfigRef?
+        if CGBeginDisplayConfiguration(&configRef) == .success, let configRef {
+            var changed = false
+            for id in Self.onlineDisplayIDs() where virtualIDs.contains(CGDisplayMirrorsDisplay(id)) {
+                CGConfigureDisplayMirrorOfDisplay(configRef, id, kCGNullDirectDisplay)
+                intentionalMirrors.remove(id)
+                changed = true
+            }
+            if changed { CGCompleteDisplayConfiguration(configRef, .permanently) }
+            else { CGCancelDisplayConfiguration(configRef) }
         }
+
+        if let ws = workspaceStore.activeWorkspace {
+            for config in ws.virtualScreens where config.mirrorToPhysical != nil {
+                applyMirror(for: config)
+            }
+        }
+        refreshMirroringState()
     }
 
     /// Break all mirroring so every display (glasses included) is an extended desktop.
