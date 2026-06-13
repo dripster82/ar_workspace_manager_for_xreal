@@ -35,14 +35,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @MainActor private func startBrightnessHotKey() {
-        let ok = brightnessHotKey.start { [weak self] up in
+        // Starts only if Accessibility is already granted; otherwise the user enables it
+        // from the control panel's "Grant" button (no auto-prompt at launch).
+        brightnessHotKey.start { [weak self] up in
             MainActor.assumeIsolated { self?.coordinator.adjustBrightness(up: up) }
-        }
-        if !ok {
-            // Needs Accessibility permission to tap the brightness keys.
-            _ = BrightnessHotKey.accessibilityTrusted(prompt: true)
-            coordinator.statusMessage =
-                "Grant Accessibility, then relaunch, to use ⌃⌥+brightness keys"
         }
     }
 

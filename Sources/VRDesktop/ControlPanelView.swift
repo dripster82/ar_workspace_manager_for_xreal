@@ -87,11 +87,16 @@ struct ControlPanelView: View {
                 if coordinator.brightnessAvailable {
                     HStack(spacing: 8) {
                         Image(systemName: "sun.min").foregroundStyle(.secondary)
-                        Slider(value: $coordinator.glassesBrightness, in: 0...7, step: 1) { editing in
+                        // Device is 0–7; show it as 1–8 to the user.
+                        Slider(value: Binding(
+                            get: { coordinator.glassesBrightness + 1 },
+                            set: { coordinator.glassesBrightness = $0 - 1 }
+                        ), in: 1...8, step: 1) { editing in
+                            coordinator.editingBrightness = editing
                             if !editing { coordinator.applyBrightness() }
                         }
                         Image(systemName: "sun.max").foregroundStyle(.secondary)
-                        Text("\(Int(coordinator.glassesBrightness))").frame(width: 14).monospacedDigit()
+                        Text("\(Int(coordinator.glassesBrightness) + 1)").frame(width: 14).monospacedDigit()
                     }.font(.caption)
                 }
             }
@@ -305,6 +310,15 @@ struct ControlPanelView: View {
                 .font(.caption)
             Toggle("Keep cursor off the AR screen", isOn: $coordinator.confineCursor)
                 .font(.caption)
+            if !coordinator.hasAccessibilityPermission {
+                HStack {
+                    Label("Accessibility needed for ⌃⌥+brightness keys",
+                          systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.orange)
+                    Button("Grant permission…") { coordinator.requestAccessibilityPermission() }
+                        .controlSize(.small)
+                }
+            }
         }
     }
 

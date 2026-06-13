@@ -19,6 +19,21 @@ public final class MCUService: @unchecked Sendable {
         }
     }
 
+    /// Drain pending MCU events (e.g. physical brightness-button presses) and return the
+    /// up-to-date brightness, so the UI can follow changes made on the glasses themselves.
+    public func pollBrightness(completion: @escaping @Sendable (Int?) -> Void) {
+        queue.async { [self] in
+            guard openIfNeeded() else { completion(nil); return }
+            for _ in 0..<4 {
+                let r = device_mcu_read(&device, 15)
+                if r == DEVICE_MCU_ERROR_UNPLUGGED || r == DEVICE_MCU_ERROR_NO_HANDLE {
+                    closeDevice(); completion(nil); return
+                }
+            }
+            completion(Int(device.brightness))
+        }
+    }
+
     public func setBrightness(_ value: Int, completion: (@Sendable (Bool) -> Void)? = nil) {
         queue.async { [self] in
             guard openIfNeeded() else { completion?(false); return }

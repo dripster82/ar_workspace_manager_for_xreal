@@ -125,6 +125,18 @@ final class AppCoordinator: ObservableObject {
 
         updateLookedAtScreen()
 
+        // Reflect brightness changed via the glasses' own buttons (unless mid-drag).
+        if brightnessAvailable, !editingBrightness {
+            MCUService.shared.pollBrightness { value in
+                guard let value else { return }
+                Task { @MainActor in
+                    if !self.editingBrightness, Int(self.glassesBrightness) != value {
+                        self.glassesBrightness = Double(value)
+                    }
+                }
+            }
+        }
+
         let q = IMUService.shared.poseStore.latest().orientation
         let toDeg = 180.0 / Double.pi
         euler = (
@@ -156,8 +168,9 @@ final class AppCoordinator: ObservableObject {
 
     // MARK: Glasses brightness (0–7)
 
-    @Published var glassesBrightness: Double = 4
+    @Published var glassesBrightness: Double = 4 // device value 0–7
     @Published var brightnessAvailable = false
+    var editingBrightness = false // suppress polling while the user drags the slider
 
     func refreshBrightness() {
         MCUService.shared.brightness { value in
@@ -238,26 +251,26 @@ final class AppCoordinator: ObservableObject {
     /// in macOS's default mirror mode instead of extending the desktop).
     @Published var mirroringActive = false
     @Published var hasScreenRecordingPermission = CGPreflightScreenCaptureAccess()
+    @Published var hasAccessibilityPermission = BrightnessHotKey.accessibilityTrusted(prompt: false)
 
     func refreshPermissions() {
         hasScreenRecordingPermission = CGPreflightScreenCaptureAccess()
+        hasAccessibilityPermission = BrightnessHotKey.accessibilityTrusted(prompt: false)
     }
 
-    /// First click: trigger the system permission request — this registers the app in
-    /// the Screen Recording list and shows the system prompt. If permission still isn't
-    /// granted on a later click (prompt dismissed/denied), open the Settings pane.
+    /// Trigger the Screen Recording system prompt (allow/deny). The OS dialog itself offers
+    /// to open Settings, so we never open it ourselves.
     func requestScreenRecordingPermission() {
-        let alreadyAsked = UserDefaults.standard.bool(forKey: "askedScreenRecording")
-        let granted = CGRequestScreenCaptureAccess()
-        UserDefaults.standard.set(true, forKey: "askedScreenRecording")
-        if !granted && alreadyAsked {
-            let url = URL(string:
-                "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!
-            NSWorkspace.shared.open(url)
+        if !CGRequestScreenCaptureAccess() {
+            statusMessage = "Allow Screen Recording in the prompt (or Privacy settings), then relaunch"
         }
-        if !granted {
-            statusMessage = "After granting Screen Recording, quit and relaunch the app"
-        }
+        refreshPermissions()
+    }
+
+    /// Trigger the Accessibility system prompt (needed for the ⌃⌥+brightness keys).
+    func requestAccessibilityPermission() {
+        _ = BrightnessHotKey.accessibilityTrusted(prompt: true) // shows the allow/deny dialog
+        statusMessage = "Allow Accessibility in the prompt, then relaunch for ⌃⌥+brightness"
         refreshPermissions()
     }
 
