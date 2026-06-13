@@ -129,16 +129,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    /// Open on the screen under the cursor, but never on the AR output (the glasses).
+    /// Open on the screen under the cursor. While AR is running, never the AR output screen.
     @MainActor private func placeWindowUnderCursor() {
-        let excluded = Set([coordinator.arOutputDisplayID, coordinator.glassesScreenID()].compactMap { $0 })
         let cursor = NSEvent.mouseLocation
-        let allowed = NSScreen.screens.filter { !excluded.contains(AppCoordinator.screenDisplayID($0)) }
+        let arOutput = coordinator.arOutputDisplayID // nil unless AR is running
+        let allowed = NSScreen.screens.filter { AppCoordinator.screenDisplayID($0) != arOutput }
 
         let target = allowed.first { NSMouseInRect(cursor, $0.frame, false) }
             ?? allowed.first { $0 == NSScreen.main }
             ?? allowed.first
-        guard let target else { return } // every screen is the glasses — leave as-is
+        guard let target else { return }
 
         let size = window.frame.size
         let origin = NSPoint(x: target.frame.midX - size.width / 2,
