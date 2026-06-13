@@ -330,12 +330,9 @@ struct ControlPanelView: View {
         if selectedScreenID == nil { selectedScreenID = coordinator.glassesScreenID() }
     }
 
-    @State private var launchAtLogin = LaunchAtLogin.isEnabled
-
     private var generalSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Toggle("Launch at login", isOn: $launchAtLogin)
-                .onChange(of: launchAtLogin) { _, newValue in LaunchAtLogin.set(newValue) }
+            Toggle("Launch at login", isOn: $coordinator.launchAtLogin)
                 .font(.caption)
             Toggle("Keep cursor off the AR screen", isOn: $coordinator.confineCursor)
                 .font(.caption)

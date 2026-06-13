@@ -153,7 +153,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let launch = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin),
                                 keyEquivalent: "")
         launch.target = self
-        launch.state = LaunchAtLogin.isEnabled ? .on : .off
+        launch.state = coordinator.launchAtLogin ? .on : .off
         menu.addItem(launch)
 
         menu.addItem(.separator())
@@ -195,7 +195,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @MainActor @objc private func toggleSBS() { coordinator.setStereo(!coordinator.stereoEnabled) }
 
-    @objc private func toggleLaunchAtLogin() { LaunchAtLogin.set(!LaunchAtLogin.isEnabled) }
+    @MainActor @objc private func toggleLaunchAtLogin() { coordinator.launchAtLogin.toggle() }
 
     func applicationWillTerminate(_ notification: Notification) {
         coordinator.stopAR()

@@ -83,6 +83,11 @@ final class AppCoordinator: ObservableObject {
             DebugLog.shared.setEnabled(debugLogging)
         }
     }
+    /// Login-item state, shared by the control panel and the menu bar.
+    @Published var launchAtLogin: Bool = LaunchAtLogin.isEnabled {
+        didSet { LaunchAtLogin.set(launchAtLogin) }
+    }
+
     var debugLogURL: URL { DebugLog.shared.fileURL }
     func revealDebugLog() { NSWorkspace.shared.activateFileViewerSelecting([DebugLog.shared.fileURL]) }
     func clearDebugLog() { DebugLog.shared.clear() }
