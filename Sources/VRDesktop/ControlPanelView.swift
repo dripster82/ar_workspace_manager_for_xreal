@@ -551,9 +551,11 @@ struct PlacementMapView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             zone(title: "Around you (anchored)", placement: .anchored, accent: .blue,
-                 baseYaw: Self.anchoredYaw, basePitch: Self.anchoredPitch, zoom: $zoomAnchored)
+                 baseYaw: Self.anchoredYaw, basePitch: Self.anchoredPitch,
+                 aspect: 1.0, zoom: $zoomAnchored)               // square
             zone(title: "In view (floating)", placement: .floating, accent: .accentColor,
-                 baseYaw: Self.floatYaw, basePitch: Self.floatPitch, zoom: $zoomFloating)
+                 baseYaw: Self.floatYaw, basePitch: Self.floatPitch,
+                 aspect: Self.floatYaw / Self.floatPitch, zoom: $zoomFloating) // FOV+margin ratio
             Text("Drag to position. Left↔right = yaw, up↔down = pitch. Use +/− to zoom.")
                 .font(.caption2).foregroundStyle(.secondary)
         }
@@ -564,7 +566,8 @@ struct PlacementMapView: View {
     }
 
     private func zone(title: String, placement: ScreenPlacement, accent: Color,
-                      baseYaw: Double, basePitch: Double, zoom: Binding<Double>) -> some View {
+                      baseYaw: Double, basePitch: Double, aspect: Double,
+                      zoom: Binding<Double>) -> some View {
         let spaceName = "zone-\(placement.rawValue)"
         let yawRange = baseYaw / zoom.wrappedValue
         let pitchRange = basePitch / zoom.wrappedValue
@@ -581,6 +584,8 @@ struct PlacementMapView: View {
             }
             .buttonStyle(.borderless).controlSize(.small)
             GeometryReader { geo in
+                // Equal pixels-per-degree on both axes (no squish); pitch maps about centre.
+                let ppd = geo.size.width / CGFloat(2 * yawRange)
                 ZStack(alignment: .topLeading) {
                     RoundedRectangle(cornerRadius: 8).fill(Color.gray.opacity(0.12))
                     Rectangle().fill(.white.opacity(0.08)).frame(width: 1)
@@ -589,17 +594,16 @@ struct PlacementMapView: View {
                         .position(x: geo.size.width / 2, y: geo.size.height / 2)
                     // Field-of-view outline (what the glasses can show at once), centred.
                     if placement == .floating {
-                        let fovW = CGFloat(Self.fovHDeg / (2 * yawRange)) * geo.size.width
-                        let fovH = CGFloat(Self.fovVDeg / (2 * pitchRange)) * geo.size.height
                         RoundedRectangle(cornerRadius: 4)
                             .strokeBorder(.green.opacity(0.6),
                                           style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
-                            .frame(width: fovW, height: fovH)
+                            .frame(width: CGFloat(Self.fovHDeg) * ppd, height: CGFloat(Self.fovVDeg) * ppd)
                             .position(x: geo.size.width / 2, y: geo.size.height / 2)
                     }
                     ForEach(screens(placement)) { cfg in
                         ScreenBox(initial: cfg, area: geo.size, coordinateSpace: spaceName,
-                                  accent: accent, yawRange: yawRange, pitchRange: pitchRange,
+                                  accent: accent, pxPerDeg: ppd,
+                                  yawRange: yawRange, pitchRange: pitchRange,
                                   lookedAt: coordinator.lookedAtScreenID == cfg.id,
                                   onChange: { coordinator.updateScreen($0) })
                     }
@@ -607,7 +611,8 @@ struct PlacementMapView: View {
                 .coordinateSpace(name: spaceName)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
             }
-            .frame(height: 132)
+            .aspectRatio(aspect, contentMode: .fit)
+            .frame(maxWidth: 360)
         }
     }
 }
@@ -617,6 +622,7 @@ private struct ScreenBox: View {
     let area: CGSize
     let coordinateSpace: String
     let accent: Color
+    let pxPerDeg: CGFloat
     let yawRange: Double
     let pitchRange: Double
     let lookedAt: Bool
@@ -625,12 +631,13 @@ private struct ScreenBox: View {
     @State private var cfg: VirtualScreenConfig
 
     init(initial: VirtualScreenConfig, area: CGSize, coordinateSpace: String, accent: Color,
-         yawRange: Double, pitchRange: Double,
+         pxPerDeg: CGFloat, yawRange: Double, pitchRange: Double,
          lookedAt: Bool, onChange: @escaping (VirtualScreenConfig) -> Void) {
         self.initial = initial
         self.area = area
         self.coordinateSpace = coordinateSpace
         self.accent = accent
+        self.pxPerDeg = pxPerDeg
         self.yawRange = yawRange
         self.pitchRange = pitchRange
         self.lookedAt = lookedAt
@@ -639,16 +646,16 @@ private struct ScreenBox: View {
     }
 
     private func point() -> CGPoint {
-        // Map left↔right so dragging right moves the screen to the viewer's right.
-        CGPoint(x: (yawRange - cfg.yawDegrees) / (2 * yawRange) * area.width,
-                y: (pitchRange - cfg.pitchDegrees) / (2 * pitchRange) * area.height)
+        // Centre-based with equal scale on both axes; +yaw to the left (flip), +pitch up.
+        CGPoint(x: area.width / 2 - CGFloat(cfg.yawDegrees) * pxPerDeg,
+                y: area.height / 2 - CGFloat(cfg.pitchDegrees) * pxPerDeg)
     }
 
     private func apply(location: CGPoint) {
-        let x = min(max(0, location.x), area.width)
-        let y = min(max(0, location.y), area.height)
-        cfg.yawDegrees = (1 - Double(x / max(1, area.width)) * 2) * yawRange
-        cfg.pitchDegrees = pitchRange - Double(y / max(1, area.height)) * 2 * pitchRange
+        let yaw = Double((area.width / 2 - location.x) / pxPerDeg)
+        let pitch = Double((area.height / 2 - location.y) / pxPerDeg)
+        cfg.yawDegrees = min(yawRange, max(-yawRange, yaw))
+        cfg.pitchDegrees = min(pitchRange, max(-pitchRange, pitch))
         onChange(cfg)
     }
 
@@ -664,8 +671,8 @@ private struct ScreenBox: View {
         let dist = max(0.1, cfg.distanceMeters)
         let angW = 2 * atan((widthMeters / 2) / dist) * 180 / .pi
         let angH = 2 * atan((heightMeters / 2) / dist) * 180 / .pi
-        let w = max(14, CGFloat(angW / (2 * yawRange)) * area.width)
-        let h = max(10, CGFloat(angH / (2 * pitchRange)) * area.height)
+        let w = max(14, CGFloat(angW) * pxPerDeg)
+        let h = max(10, CGFloat(angH) * pxPerDeg)
         return RoundedRectangle(cornerRadius: 4)
             .fill(accent.opacity(0.45))
             .overlay(
