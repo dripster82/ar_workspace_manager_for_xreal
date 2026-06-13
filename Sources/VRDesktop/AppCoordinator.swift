@@ -342,6 +342,9 @@ final class AppCoordinator: ObservableObject {
         (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) ?? 0
     }
 
+    /// The display AR is currently rendering to (the glasses), if a session is active.
+    var arOutputDisplayID: CGDirectDisplayID? { arActive ? glassesDisplayID : nil }
+
     /// The display that looks like the XREAL glasses, if currently connected.
     func glassesScreenID() -> CGDirectDisplayID? {
         for screen in NSScreen.screens {

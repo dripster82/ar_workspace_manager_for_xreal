@@ -124,8 +124,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @MainActor @objc private func openWindow() {
+        placeWindowUnderCursor()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// Open on the screen under the cursor, but never on the AR output (the glasses).
+    @MainActor private func placeWindowUnderCursor() {
+        let excluded = Set([coordinator.arOutputDisplayID, coordinator.glassesScreenID()].compactMap { $0 })
+        let cursor = NSEvent.mouseLocation
+        let allowed = NSScreen.screens.filter { !excluded.contains(AppCoordinator.screenDisplayID($0)) }
+
+        let target = allowed.first { NSMouseInRect(cursor, $0.frame, false) }
+            ?? allowed.first { $0 == NSScreen.main }
+            ?? allowed.first
+        guard let target else { return } // every screen is the glasses — leave as-is
+
+        let size = window.frame.size
+        let origin = NSPoint(x: target.frame.midX - size.width / 2,
+                             y: target.frame.midY - size.height / 2)
+        window.setFrame(NSRect(origin: origin, size: size), display: true)
     }
 
     @MainActor @objc private func toggleAR() {
