@@ -39,6 +39,12 @@ public final class GlassesRenderer: NSObject {
     /// Pose-prediction lead time in seconds.
     public var predictionLead: Float = 0.021
 
+    /// Side-by-side stereo (experimental): render the scene twice into the left/right
+    /// halves of a 3840×1080 frame so the glasses give each eye its own perspective.
+    public var stereoEnabled = false
+    /// Interpupillary distance in metres (eye separation).
+    public var ipd: Float = 0.063
+
     public private(set) var framesPerSecond: Double = 0
     private var frameCount = 0
     private var lastFPSUpdate = CACurrentMediaTime()
@@ -107,6 +113,14 @@ public final class GlassesRenderer: NSObject {
         else { return }
         if window.frame != screen.frame {
             window.setFrame(screen.frame, display: true)
+        }
+        // The display's resolution may have changed (e.g. mono ↔ SBS 3840×1080);
+        // keep the Metal layer's backing store matched to it.
+        let scale = screen.backingScaleFactor
+        let wanted = CGSize(width: screen.frame.width * scale, height: screen.frame.height * scale)
+        if metalLayer.drawableSize != wanted {
+            metalLayer.contentsScale = scale
+            metalLayer.drawableSize = wanted
         }
     }
 
@@ -208,16 +222,19 @@ public final class GlassesRenderer: NSObject {
         var viewProjection: simd_float4x4
     }
 
-    private func currentViewMatrix() -> simd_float4x4 {
-        let orientation: simd_quatf
-        if let fake = fakePose {
-            orientation = fake
-        } else {
-            let pose = poseStore.latest()
-            orientation = pose.predicted(by: predictionLead)
-        }
-        // View = inverse of head rotation (3DoF: rotation only).
-        return simd_float4x4(orientation.inverse)
+    private func currentOrientation() -> simd_quatf {
+        if let fake = fakePose { return fake }
+        return poseStore.latest().predicted(by: predictionLead)
+    }
+
+    /// View matrix for one eye. `eyeOffsetX` is the eye's position in head space
+    /// (−ipd/2 = left, +ipd/2 = right, 0 = mono cyclopean view).
+    private func viewMatrix(orientation: simd_quatf, eyeOffsetX: Float) -> simd_float4x4 {
+        let rotation = simd_float4x4(orientation.inverse)
+        guard eyeOffsetX != 0 else { return rotation }
+        var translate = matrix_identity_float4x4
+        translate.columns.3.x = -eyeOffsetX // world shifts opposite the camera
+        return translate * rotation
     }
 
     private func projectionMatrix(aspect: Float) -> simd_float4x4 {
@@ -236,8 +253,8 @@ public final class GlassesRenderer: NSObject {
     }
 
     func renderFrame(drawable: CAMetalDrawable) {
-        let aspect = Float(metalLayer.drawableSize.width / max(1, metalLayer.drawableSize.height))
-        var uniforms = Uniforms(viewProjection: projectionMatrix(aspect: aspect) * currentViewMatrix())
+        let fullWidth = Double(metalLayer.drawableSize.width)
+        let height = Double(metalLayer.drawableSize.height)
 
         guard let commandBuffer = commandQueue.makeCommandBuffer() else { return }
         let pass = MTLRenderPassDescriptor()
@@ -258,17 +275,25 @@ public final class GlassesRenderer: NSObject {
         let currentScreens = screens
         lock.unlock()
 
-        for screen in currentScreens {
-            let geometry = vertexBuffer(for: screen)
-            encoder.setVertexBuffer(geometry.buffer, offset: 0, index: 0)
-            encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.size, index: 1)
-            if let texture = screen.textureProvider() {
-                encoder.setRenderPipelineState(screenPipeline)
-                encoder.setFragmentTexture(texture, index: 0)
-            } else {
-                encoder.setRenderPipelineState(placeholderPipeline)
+        let orientation = currentOrientation()
+
+        if stereoEnabled {
+            // Two viewports across a 3840×1080 frame; each eye is half-width, 16:9.
+            let eyeWidth = fullWidth / 2
+            let aspect = Float(eyeWidth / max(1, height))
+            let projection = projectionMatrix(aspect: aspect)
+            let eyes: [(x: Double, offset: Float)] = [(0, -ipd / 2), (eyeWidth, ipd / 2)]
+            for eye in eyes {
+                encoder.setViewport(MTLViewport(originX: eye.x, originY: 0,
+                                                width: eyeWidth, height: height,
+                                                znear: 0, zfar: 1))
+                let vp = projection * viewMatrix(orientation: orientation, eyeOffsetX: eye.offset)
+                drawScreens(currentScreens, viewProjection: vp, encoder: encoder)
             }
-            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: geometry.count)
+        } else {
+            let aspect = Float(fullWidth / max(1, height))
+            let vp = projectionMatrix(aspect: aspect) * viewMatrix(orientation: orientation, eyeOffsetX: 0)
+            drawScreens(currentScreens, viewProjection: vp, encoder: encoder)
         }
 
         encoder.endEncoding()
@@ -281,6 +306,23 @@ public final class GlassesRenderer: NSObject {
             framesPerSecond = Double(frameCount) / (now - lastFPSUpdate)
             frameCount = 0
             lastFPSUpdate = now
+        }
+    }
+
+    private func drawScreens(_ screens: [SceneScreen], viewProjection: simd_float4x4,
+                             encoder: MTLRenderCommandEncoder) {
+        var uniforms = Uniforms(viewProjection: viewProjection)
+        for screen in screens {
+            let geometry = vertexBuffer(for: screen)
+            encoder.setVertexBuffer(geometry.buffer, offset: 0, index: 0)
+            encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.size, index: 1)
+            if let texture = screen.textureProvider() {
+                encoder.setRenderPipelineState(screenPipeline)
+                encoder.setFragmentTexture(texture, index: 0)
+            } else {
+                encoder.setRenderPipelineState(placeholderPipeline)
+            }
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: geometry.count)
         }
     }
 

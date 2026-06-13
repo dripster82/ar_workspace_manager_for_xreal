@@ -34,6 +34,30 @@ public final class MCUService: @unchecked Sendable {
         }
     }
 
+    /// XREAL Air 2 MCU display modes (subset).
+    public enum DisplayMode: UInt8 {
+        case mono1080p60 = 0x1
+        case sbs3840x1080_60 = 0x3
+        case sbs3840x1080_72 = 0x4
+    }
+
+    /// Switch the glasses' display mode (mono vs side-by-side stereo).
+    public func setDisplayMode(_ mode: DisplayMode, completion: (@Sendable (Bool) -> Void)? = nil) {
+        queue.async { [self] in
+            guard openIfNeeded() else { completion?(false); return }
+            device.disp_mode = mode.rawValue
+            var err = device_mcu_update_display_mode(&device)
+            if err == DEVICE_MCU_ERROR_UNPLUGGED || err == DEVICE_MCU_ERROR_NO_HANDLE {
+                closeDevice()
+                if openIfNeeded() {
+                    device.disp_mode = mode.rawValue
+                    err = device_mcu_update_display_mode(&device)
+                }
+            }
+            completion?(err == DEVICE_MCU_ERROR_NO_ERROR)
+        }
+    }
+
     public func disconnect() {
         queue.async { [self] in closeDevice() }
     }

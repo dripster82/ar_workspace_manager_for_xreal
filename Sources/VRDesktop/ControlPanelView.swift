@@ -114,6 +114,27 @@ struct ControlPanelView: View {
                 }
             }
 
+            if coordinator.arActive {
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle("Stereo (SBS) — experimental", isOn: Binding(
+                        get: { coordinator.stereoEnabled },
+                        set: { coordinator.setStereo($0) }
+                    ))
+                    .font(.caption)
+                    if !coordinator.sbsModeAvailable {
+                        Text("No 3840×1080 mode on this display — stereo will render but may look squished")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                    if coordinator.stereoEnabled {
+                        HStack {
+                            Text("IPD").frame(width: 30, alignment: .leading).font(.caption)
+                            Slider(value: $coordinator.ipdMillimeters, in: 50...75)
+                            Text("\(Int(coordinator.ipdMillimeters)) mm").frame(width: 52).font(.caption).monospacedDigit()
+                        }
+                    }
+                }
+            }
+
             // Diagnostics: screen layout + live window placement & manual move.
             VStack(alignment: .leading, spacing: 3) {
                 ForEach(coordinator.screenList, id: \.self) { line in

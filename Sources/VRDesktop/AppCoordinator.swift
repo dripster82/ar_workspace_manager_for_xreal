@@ -154,6 +154,50 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
+    // MARK: Stereo / SBS (experimental)
+
+    @Published var stereoEnabled = false
+    @Published var ipdMillimeters: Double = 63 {
+        didSet { renderer?.ipd = Float(ipdMillimeters / 1000) }
+    }
+    private var glassesDisplayID: CGDirectDisplayID = 0
+
+    var sbsModeAvailable: Bool {
+        glassesDisplayID != 0 &&
+        DisplayModeSwitcher.hasMode(displayID: glassesDisplayID, width: 3840, height: 1080)
+    }
+
+    func setStereo(_ on: Bool) {
+        guard let renderer, arActive, glassesDisplayID != 0 else {
+            stereoEnabled = false
+            return
+        }
+        if on {
+            MCUService.shared.setDisplayMode(.sbs3840x1080_60) { ok in
+                Task { @MainActor in
+                    if !ok { self.statusMessage = "Glasses didn't accept SBS mode" }
+                }
+            }
+            // Give the glasses a moment to renegotiate, then drive 3840×1080 from macOS.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                guard let self else { return }
+                let switched = DisplayModeSwitcher.switchTo(displayID: self.glassesDisplayID,
+                                                            width: 3840, height: 1080)
+                renderer.stereoEnabled = true
+                self.stereoEnabled = true
+                self.statusMessage = switched
+                    ? "SBS stereo on (3840×1080)"
+                    : "SBS rendering on, but no 3840×1080 macOS mode — image may be squished"
+            }
+        } else {
+            renderer.stereoEnabled = false
+            stereoEnabled = false
+            DisplayModeSwitcher.switchTo(displayID: glassesDisplayID, width: 1920, height: 1080)
+            MCUService.shared.setDisplayMode(.mono1080p60)
+            statusMessage = "SBS stereo off"
+        }
+    }
+
     // MARK: Display mirroring
 
     /// True when any online display is mirroring another (e.g. the glasses arrived
@@ -260,6 +304,7 @@ final class AppCoordinator: ObservableObject {
         guard let workspace = workspaceStore.activeWorkspace else { return }
 
         let outputDisplayID = Self.screenDisplayID(screen)
+        glassesDisplayID = outputDisplayID
 
         // 1. Create virtual displays for the workspace.
         var sceneScreens: [SceneScreen] = []
@@ -355,12 +400,21 @@ final class AppCoordinator: ObservableObject {
 
     func stopAR() {
         guard arActive else { return }
+        if stereoEnabled {
+            renderer?.stereoEnabled = false
+            stereoEnabled = false
+            if glassesDisplayID != 0 {
+                DisplayModeSwitcher.switchTo(displayID: glassesDisplayID, width: 1920, height: 1080)
+            }
+            MCUService.shared.setDisplayMode(.mono1080p60)
+        }
         renderer?.stopOutput()
         renderer?.setScreens([])
         let activeCaptures = captures.values
         captures.removeAll()
         Task { for c in activeCaptures { await c.stop() } }
         virtualDisplays.destroyAll()
+        glassesDisplayID = 0
         arActive = false
         outputScreenName = nil
         statusMessage = "AR stopped"
