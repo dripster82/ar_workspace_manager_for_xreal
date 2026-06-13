@@ -22,7 +22,7 @@ public struct SceneScreen: Identifiable {
         self.distance = distance
         self.widthMeters = widthMeters
         self.aspect = aspect
-        self.curveAmount = max(0, min(1, curveAmount))
+        self.curveAmount = max(0, min(5, curveAmount))
         self.textureProvider = textureProvider
     }
 
@@ -33,9 +33,9 @@ public struct SceneScreen: Identifiable {
 
     /// Tessellate into a triangle list. Flat screens are a single quad; curved
     /// screens are segmented along the horizontal axis around the viewer.
-    /// Total horizontal arc (radians) at curveAmount = 1. ~80° gives a strong but
-    /// comfortable wrap without the screen folding back on itself.
-    private static let maxArc: Float = 80 * .pi / 180
+    /// Horizontal arc (radians) per unit of curveAmount. At the max amount of 5 this
+    /// gives a ~150° wrap; amount 1 ≈ 30°.
+    private static let arcPerUnit: Float = 30 * .pi / 180
 
     func vertices() -> [Vertex] {
         let height = widthMeters / aspect
@@ -69,7 +69,7 @@ public struct SceneScreen: Identifiable {
             // Bend the screen onto a cylinder while keeping its arc length equal to
             // widthMeters (so curving doesn't change the screen's size). The total
             // subtended angle scales with curveAmount; radius follows from arc length.
-            let theta = curveAmount * Self.maxArc          // full angle across the screen
+            let theta = curveAmount * Self.arcPerUnit      // full angle across the screen
             let radius = widthMeters / theta               // so arc length == widthMeters
             let a = (u - 0.5) * theta                       // this column's angle
             // Centre of curvature sits behind the screen centre; centre stays at -distance.

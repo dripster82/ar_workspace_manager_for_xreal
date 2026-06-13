@@ -16,7 +16,7 @@ public struct VirtualScreenConfig: Codable, Identifiable, Hashable, Sendable {
     public var pitchDegrees: Double
     public var distanceMeters: Double
     public var scale: Double           // apparent size multiplier
-    public var curvatureRadius: Double // curve amount 0 = flat … 1 = maximum wrap
+    public var curvatureRadius: Double // curve amount 0 = flat … 5 = maximum wrap
     public var showInAR: Bool
 
     public init(id: UUID = UUID(), name: String, width: Int, height: Int, hiDPI: Bool = false,
