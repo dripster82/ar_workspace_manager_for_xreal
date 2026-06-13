@@ -393,10 +393,9 @@ struct ControlPanelView: View {
             HStack {
                 Text("Anti-alias").frame(width: 78, alignment: .leading).font(.caption)
                 Picker("", selection: $coordinator.antialiasLevel) {
-                    Text("Off").tag(1)
-                    Text("2×").tag(2)
-                    Text("4×").tag(4)
-                    Text("8×").tag(8)
+                    ForEach(coordinator.supportedAALevels, id: \.self) { level in
+                        Text(level == 1 ? "Off" : "\(level)×").tag(level)
+                    }
                 }
                 .pickerStyle(.segmented).labelsHidden()
             }

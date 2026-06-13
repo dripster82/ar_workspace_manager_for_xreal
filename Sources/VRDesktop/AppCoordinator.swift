@@ -34,9 +34,17 @@ final class AppCoordinator: ObservableObject {
 
     // Image quality.
     @Published var antialiasLevel: Int = 4 {   // 1 (off), 2, 4, 8
-        didSet { renderer?.setSampleCount(antialiasLevel)
-                 UserDefaults.standard.set(antialiasLevel, forKey: "antialiasLevel") }
+        didSet {
+            renderer?.setSampleCount(antialiasLevel)
+            // Reflect any GPU clamp (e.g. 8× unsupported → 4×) back into the control.
+            if let applied = renderer?.sampleCount, applied != antialiasLevel {
+                antialiasLevel = applied
+                return
+            }
+            UserDefaults.standard.set(antialiasLevel, forKey: "antialiasLevel")
+        }
     }
+    var supportedAALevels: [Int] { renderer?.supportedSampleCounts() ?? [1, 2, 4] }
     @Published var sharpenScreens: Bool = false {
         didSet { renderer?.sharpenScreens = sharpenScreens
                  UserDefaults.standard.set(sharpenScreens, forKey: "sharpenScreens") }

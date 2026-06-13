@@ -89,9 +89,18 @@ public final class GlassesRenderer: NSObject {
         sharpSampler = device.makeSamplerState(descriptor: sharp)
     }
 
+    /// MSAA levels this GPU actually supports (1 = off is always allowed).
+    public func supportedSampleCounts() -> [Int] {
+        [1, 2, 4, 8].filter { $0 == 1 || device.supportsTextureSampleCount($0) }
+    }
+
     /// Set MSAA level (1 = off, 2, 4, 8); rebuilds pipelines and discards stale MSAA targets.
+    /// Falls back to the highest supported level if the requested one isn't available.
     public func setSampleCount(_ n: Int) {
-        let valid = [1, 2, 4, 8].contains(n) ? n : 4
+        var valid = [1, 2, 4, 8].contains(n) ? n : 4
+        if valid > 1 && !device.supportsTextureSampleCount(valid) {
+            valid = supportedSampleCounts().filter { $0 <= valid }.max() ?? 1
+        }
         guard valid != sampleCount else { return }
         sampleCount = valid
         do {
