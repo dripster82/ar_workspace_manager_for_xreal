@@ -15,10 +15,12 @@ public struct SceneScreen: Identifiable {
     /// When set, the screen curves to follow the natural sphere around the eye
     /// (radius = distance), so the surface is equidistant and matches the space.
     public var autoCurveH: Bool
+    /// Head-locked: render without head rotation so it stays fixed in the field of view.
+    public var headLocked: Bool
     public var textureProvider: () -> MTLTexture?
 
     public init(id: UUID, yaw: Float, pitch: Float, distance: Float, widthMeters: Float,
-                aspect: Float, curveH: Float, autoCurveH: Bool,
+                aspect: Float, curveH: Float, autoCurveH: Bool, headLocked: Bool = false,
                 textureProvider: @escaping () -> MTLTexture?) {
         self.id = id
         self.yaw = yaw
@@ -28,6 +30,7 @@ public struct SceneScreen: Identifiable {
         self.aspect = aspect
         self.curveH = max(0, min(5, curveH))
         self.autoCurveH = autoCurveH
+        self.headLocked = headLocked
         self.textureProvider = textureProvider
     }
 

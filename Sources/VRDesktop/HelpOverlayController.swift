@@ -38,7 +38,7 @@ final class HelpOverlayController {
         self.panel = panel
         // Centre on the screen under the cursor, never the AR output.
         let size = panel.frame.size
-        panel.setFrameOrigin(ScreenPlacement.originUnderCursor(
+        panel.setFrameOrigin(WindowPlacement.originUnderCursor(
             size: size, excluding: coordinator.arOutputDisplayID))
         panel.makeKeyAndOrderFront(nil)
     }
@@ -62,7 +62,7 @@ final class HelpOverlayController {
 }
 
 /// Shared placement: window origin centered on the screen under the cursor, excluding a display.
-enum ScreenPlacement {
+enum WindowPlacement {
     @MainActor
     static func originUnderCursor(size: NSSize, excluding excludedID: CGDirectDisplayID?) -> NSPoint {
         let cursor = NSEvent.mouseLocation

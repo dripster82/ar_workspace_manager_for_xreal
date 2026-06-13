@@ -170,7 +170,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// Open on the screen under the cursor. While AR is running, never the AR output screen.
     @MainActor private func placeWindowUnderCursor() {
-        let origin = ScreenPlacement.originUnderCursor(
+        let origin = WindowPlacement.originUnderCursor(
             size: window.frame.size, excluding: coordinator.arOutputDisplayID)
         window.setFrameOrigin(origin)
     }

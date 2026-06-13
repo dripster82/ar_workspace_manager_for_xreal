@@ -572,27 +572,32 @@ public final class GlassesRenderer: NSObject {
     }
 
     /// Draw the AR scene (mono or stereo) into the current encoder at the given target size.
+    /// Anchored screens use the head rotation; floating (head-locked) screens skip it so they
+    /// stay fixed in the field of view.
     private func encodeScene(encoder: MTLRenderCommandEncoder, width: Double, height: Double,
                              screens: [SceneScreen], sharp: [UUID: MTLTexture]) {
         let orientation = currentOrientation()
+        let anchored = screens.filter { !$0.headLocked }
+        let floating = screens.filter { $0.headLocked }
+
+        func drawEye(viewportX: Double, eyeWidth: Double, eyeOffset: Float) {
+            encoder.setViewport(MTLViewport(originX: viewportX, originY: 0,
+                                            width: eyeWidth, height: height, znear: 0, zfar: 1))
+            let projection = projectionMatrix(aspect: Float(eyeWidth / max(1, height)))
+            // Anchored: include head rotation. Floating: identity rotation (just the eye offset).
+            let anchoredVP = projection * viewMatrix(orientation: orientation, eyeOffsetX: eyeOffset)
+            let floatingVP = projection * viewMatrix(orientation: simd_quatf(ix: 0, iy: 0, iz: 0, r: 1),
+                                                     eyeOffsetX: eyeOffset)
+            if !anchored.isEmpty { drawScreens(anchored, viewProjection: anchoredVP, encoder: encoder, sharp: sharp) }
+            if !floating.isEmpty { drawScreens(floating, viewProjection: floatingVP, encoder: encoder, sharp: sharp) }
+        }
+
         if stereoEnabled {
             let eyeWidth = width / 2
-            let aspect = Float(eyeWidth / max(1, height))
-            let projection = projectionMatrix(aspect: aspect)
-            let eyes: [(x: Double, offset: Float)] = [(0, -ipd / 2), (eyeWidth, ipd / 2)]
-            for eye in eyes {
-                encoder.setViewport(MTLViewport(originX: eye.x, originY: 0,
-                                                width: eyeWidth, height: height,
-                                                znear: 0, zfar: 1))
-                let vp = projection * viewMatrix(orientation: orientation, eyeOffsetX: eye.offset)
-                drawScreens(screens, viewProjection: vp, encoder: encoder, sharp: sharp)
-            }
+            drawEye(viewportX: 0, eyeWidth: eyeWidth, eyeOffset: -ipd / 2)
+            drawEye(viewportX: eyeWidth, eyeWidth: eyeWidth, eyeOffset: ipd / 2)
         } else {
-            encoder.setViewport(MTLViewport(originX: 0, originY: 0,
-                                            width: width, height: height, znear: 0, zfar: 1))
-            let aspect = Float(width / max(1, height))
-            let vp = projectionMatrix(aspect: aspect) * viewMatrix(orientation: orientation, eyeOffsetX: 0)
-            drawScreens(screens, viewProjection: vp, encoder: encoder, sharp: sharp)
+            drawEye(viewportX: 0, eyeWidth: width, eyeOffset: 0)
         }
     }
 

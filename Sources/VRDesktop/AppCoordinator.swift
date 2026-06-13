@@ -498,7 +498,8 @@ final class AppCoordinator: ObservableObject {
             return
         }
         let head = IMUService.shared.poseStore.latest().orientation
-        let forward = simd_normalize(head.act(SIMD3<Float>(0, 0, -1)))
+        let worldForward = simd_normalize(head.act(SIMD3<Float>(0, 0, -1)))
+        let viewForward = SIMD3<Float>(0, 0, -1) // floating screens live in view space
 
         let screens = ws.virtualScreens.filter { $0.showInAR } + ws.physicalInAR.values.filter { $0.showInAR }
         var bestID: UUID?
@@ -508,7 +509,8 @@ final class AppCoordinator: ObservableObject {
             let qYaw = simd_quatf(angle: Float(s.yawDegrees * .pi / 180), axis: SIMD3(0, 1, 0))
             let qPitch = simd_quatf(angle: Float(s.pitchDegrees * .pi / 180), axis: SIMD3(1, 0, 0))
             let dir = simd_normalize((qYaw * qPitch).act(SIMD3<Float>(0, 0, -1)))
-            let d = simd_dot(forward, dir)
+            // Floating screens are fixed in view space; compare to the view forward instead.
+            let d = simd_dot(s.placement == .floating ? viewForward : worldForward, dir)
             if d > bestDot { bestDot = d; bestID = s.id; bestName = s.name }
         }
         // Only count it as "looking at" within ~30° of the screen centre.
@@ -623,6 +625,7 @@ final class AppCoordinator: ObservableObject {
             aspect: Float(config.width) / Float(config.height),
             curveH: Float(config.curvatureRadius),
             autoCurveH: config.autoCurveH,
+            headLocked: config.placement == .floating,
             textureProvider: { [weak capture] in capture?.latestTexture }
         )
     }

@@ -475,6 +475,12 @@ struct ScreenRow: View {
     var body: some View {
         DisclosureGroup(isExpanded: $expanded) {
             VStack(alignment: .leading, spacing: 6) {
+                Picker("Placement", selection: $cfg.placement) {
+                    Text("Anchored").tag(ScreenPlacement.anchored)
+                    Text("Floating").tag(ScreenPlacement.floating)
+                }
+                .pickerStyle(.segmented)
+                .help("Anchored: fixed in space. Floating: stays in view (yaw/pitch/distance are the offset).")
                 slider("Yaw", $cfg.yawDegrees, -150...150, "°")
                 slider("Pitch", $cfg.pitchDegrees, -60...60, "°")
                 slider("Distance", $cfg.distanceMeters, 0.5...6, "m")
