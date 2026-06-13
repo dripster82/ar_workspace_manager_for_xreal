@@ -589,6 +589,8 @@ struct PlacementMapView: View {
                 ScrollView([.horizontal, .vertical], showsIndicators: false) {
                     ZStack(alignment: .topLeading) {
                         Rectangle().fill(Color.gray.opacity(0.12))
+                        // Limit boundary (edges of the placeable range).
+                        Rectangle().strokeBorder(.white.opacity(0.35), lineWidth: 1.5)
                         Rectangle().fill(.white.opacity(0.08)).frame(width: 1)
                             .position(x: contentW / 2, y: contentH / 2)
                         Rectangle().fill(.white.opacity(0.08)).frame(height: 1)
