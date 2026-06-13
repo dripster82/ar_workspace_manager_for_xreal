@@ -399,9 +399,18 @@ struct ControlPanelView: View {
                 }
                 .pickerStyle(.segmented).labelsHidden()
             }
-            Toggle("Sharpen screen content (mipmaps + anisotropic)", isOn: $coordinator.sharpenScreens)
-                .font(.caption)
-                .help("Smooths jagged lines inside captured windows (e.g. small text in VS Code)")
+            HStack {
+                Text("Sharpen").frame(width: 78, alignment: .leading).font(.caption)
+                Picker("", selection: $coordinator.sharpenLevel) {
+                    Text("Off").tag(1)
+                    Text("2×").tag(2)
+                    Text("4×").tag(4)
+                    Text("8×").tag(8)
+                    Text("16×").tag(16)
+                }
+                .pickerStyle(.segmented).labelsHidden()
+            }
+            .help("Anisotropic sharpening of captured content (e.g. small text in VS Code); higher = crisper, more GPU")
             Divider()
             Toggle("Fake head pose (no glasses needed)", isOn: $coordinator.useFakePose)
             if coordinator.useFakePose {

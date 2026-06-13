@@ -29,8 +29,9 @@ public final class GlassesRenderer: NSObject {
 
     /// MSAA sample count: 1 (off), 2, 4, or 8. Changing it rebuilds the pipelines.
     public private(set) var sampleCount = 4
-    /// Sharpen screen content with mipmaps + anisotropic filtering (helps minified/angled text).
-    public var sharpenScreens = false { didSet { if !sharpenScreens { mipTargets.removeAll() } } }
+    /// Anisotropic sharpening level for screen content: 1 = off, else 2/4/8/16.
+    /// Higher = crisper minified/angled text (mipmaps + anisotropic filtering), more GPU cost.
+    public private(set) var sharpenAnisotropy = 1
     private var linearSampler: MTLSamplerState!
     private var sharpSampler: MTLSamplerState!
     private var mipTargets: [UUID: MTLTexture] = [:]
@@ -83,10 +84,23 @@ public final class GlassesRenderer: NSObject {
         let lin = MTLSamplerDescriptor()
         lin.minFilter = .linear; lin.magFilter = .linear
         linearSampler = device.makeSamplerState(descriptor: lin)
-        let sharp = MTLSamplerDescriptor()
-        sharp.minFilter = .linear; sharp.magFilter = .linear; sharp.mipFilter = .linear
-        sharp.maxAnisotropy = 8
-        sharpSampler = device.makeSamplerState(descriptor: sharp)
+        rebuildSharpSampler()
+    }
+
+    private func rebuildSharpSampler() {
+        let d = MTLSamplerDescriptor()
+        d.minFilter = .linear; d.magFilter = .linear; d.mipFilter = .linear
+        d.maxAnisotropy = max(1, min(16, sharpenAnisotropy))
+        sharpSampler = device.makeSamplerState(descriptor: d)
+    }
+
+    /// Set the anisotropic sharpening level (1 = off, 2, 4, 8, 16).
+    public func setSharpenAnisotropy(_ n: Int) {
+        let valid = [1, 2, 4, 8, 16].contains(n) ? n : 1
+        guard valid != sharpenAnisotropy else { return }
+        sharpenAnisotropy = valid
+        rebuildSharpSampler()
+        if valid == 1 { mipTargets.removeAll() }
     }
 
     /// MSAA levels this GPU actually supports (1 = off is always allowed).
@@ -165,7 +179,7 @@ public final class GlassesRenderer: NSObject {
     /// mips so anisotropic sampling can smooth minified/angled content (e.g. small text).
     private func prepareSharpTextures(_ screens: [SceneScreen],
                                       commandBuffer: MTLCommandBuffer) -> [UUID: MTLTexture] {
-        guard sharpenScreens, let blit = commandBuffer.makeBlitCommandEncoder() else { return [:] }
+        guard sharpenAnisotropy > 1, let blit = commandBuffer.makeBlitCommandEncoder() else { return [:] }
         var result: [UUID: MTLTexture] = [:]
         for s in screens {
             guard let src = s.textureProvider(), src.width > 0, src.height > 0 else { continue }

@@ -45,9 +45,9 @@ final class AppCoordinator: ObservableObject {
         }
     }
     var supportedAALevels: [Int] { renderer?.supportedSampleCounts() ?? [1, 2, 4] }
-    @Published var sharpenScreens: Bool = false {
-        didSet { renderer?.sharpenScreens = sharpenScreens
-                 UserDefaults.standard.set(sharpenScreens, forKey: "sharpenScreens") }
+    @Published var sharpenLevel: Int = 1 {   // 1 (off), 2, 4, 8, 16
+        didSet { renderer?.setSharpenAnisotropy(sharpenLevel)
+                 UserDefaults.standard.set(sharpenLevel, forKey: "sharpenLevel") }
     }
 
     // Fake pose for glasses-free testing.
@@ -123,9 +123,11 @@ final class AppCoordinator: ObservableObject {
         if defaults.object(forKey: "antialiasLevel") != nil {
             antialiasLevel = defaults.integer(forKey: "antialiasLevel")
         }
-        sharpenScreens = defaults.bool(forKey: "sharpenScreens")
+        if defaults.object(forKey: "sharpenLevel") != nil {
+            sharpenLevel = defaults.integer(forKey: "sharpenLevel")
+        }
         renderer?.setSampleCount(antialiasLevel)
-        renderer?.sharpenScreens = sharpenScreens
+        renderer?.setSharpenAnisotropy(sharpenLevel)
 
         refreshMirroringState()
         NotificationCenter.default.addObserver(
