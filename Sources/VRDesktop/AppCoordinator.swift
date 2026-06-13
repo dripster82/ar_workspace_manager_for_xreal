@@ -220,6 +220,7 @@ final class AppCoordinator: ObservableObject {
             return
         }
         if on {
+            switchingDisplayMode = true // don't let the renegotiation look like an unplug
             MCUService.shared.setDisplayMode(.sbs3840x1080_60) { ok in
                 Task { @MainActor in
                     if !ok { self.statusMessage = "Glasses didn't accept SBS mode" }
@@ -235,13 +236,16 @@ final class AppCoordinator: ObservableObject {
                 self.statusMessage = switched
                     ? "SBS stereo on (3840×1080)"
                     : "SBS rendering on, but no 3840×1080 macOS mode — image may be squished"
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { self.switchingDisplayMode = false }
             }
         } else {
+            switchingDisplayMode = true
             renderer.stereoEnabled = false
             stereoEnabled = false
             DisplayModeSwitcher.switchTo(displayID: glassesDisplayID, width: 1920, height: 1080)
             MCUService.shared.setDisplayMode(.mono1080p60)
             statusMessage = "SBS stereo off"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { self.switchingDisplayMode = false }
         }
     }
 
@@ -622,14 +626,23 @@ final class AppCoordinator: ObservableObject {
         restartARIfActive()
     }
 
-    /// If the glasses display vanishes while AR is running (unplugged), tear down cleanly
-    /// so we don't keep rendering to a dead screen or leave SBS/mirroring half-applied.
+    /// Set while we deliberately change the glasses' display mode (e.g. enabling SBS), so a
+    /// transient disconnect during renegotiation isn't mistaken for an unplug.
+    var switchingDisplayMode = false
+
+    /// If the glasses display vanishes while AR is running (unplugged), tear down cleanly.
+    /// Debounced + mode-switch-aware: a momentary drop during SBS renegotiation or a glitch
+    /// shouldn't kill the session, only a display that's still gone a moment later.
     private func handleScreenChange() {
-        guard arActive, glassesDisplayID != 0 else { return }
-        let present = NSScreen.screens.contains { Self.screenDisplayID($0) == glassesDisplayID }
-        if !present {
-            stopAR()
-            statusMessage = "Glasses disconnected — AR stopped"
+        guard arActive, glassesDisplayID != 0, !switchingDisplayMode else { return }
+        guard !NSScreen.screens.contains(where: { Self.screenDisplayID($0) == glassesDisplayID }) else { return }
+        let missingID = glassesDisplayID
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            guard let self, self.arActive, self.glassesDisplayID == missingID, !self.switchingDisplayMode else { return }
+            if !NSScreen.screens.contains(where: { Self.screenDisplayID($0) == missingID }) {
+                self.stopAR()
+                self.statusMessage = "Glasses disconnected — AR stopped"
+            }
         }
     }
 
