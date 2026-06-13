@@ -77,6 +77,9 @@ scale, curvature, distance, placement mode, label, and background.
 
 ## Roadmap
 
+> Detailed, code-level implementation plans for floating screens and the help overlay live in
+> [Plan-2.0.md](Plan-2.0.md).
+
 ### Phase 1 — Floating screens + placement modes  *(highest value, small change)*
 - Add a `placement` mode (anchored | floating) to the screen config.
 - Renderer: for floating screens, skip the head-rotation transform and place at a fixed
