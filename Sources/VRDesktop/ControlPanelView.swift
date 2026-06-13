@@ -339,6 +339,17 @@ struct ControlPanelView: View {
                 .font(.caption)
             Toggle("Keep cursor off the AR screen", isOn: $coordinator.confineCursor)
                 .font(.caption)
+            Divider()
+            Toggle("Write debug log", isOn: $coordinator.debugLogging)
+                .font(.caption)
+                .help(coordinator.debugLogURL.path)
+            if coordinator.debugLogging {
+                HStack {
+                    Button("Reveal log") { coordinator.revealDebugLog() }
+                    Button("Clear log") { coordinator.clearDebugLog() }
+                }
+                .controlSize(.small)
+            }
         }
     }
 

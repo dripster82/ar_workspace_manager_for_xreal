@@ -54,15 +54,30 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
+    /// Write detailed troubleshooting info to debug.log.
+    @Published var debugLogging: Bool = UserDefaults.standard.bool(forKey: "debugLogging") {
+        didSet {
+            UserDefaults.standard.set(debugLogging, forKey: "debugLogging")
+            DebugLog.shared.setEnabled(debugLogging)
+        }
+    }
+    var debugLogURL: URL { DebugLog.shared.fileURL }
+    func revealDebugLog() { NSWorkspace.shared.activateFileViewerSelecting([DebugLog.shared.fileURL]) }
+    func clearDebugLog() { DebugLog.shared.clear() }
+    private var lastLogSnapshot: TimeInterval = 0
+
     /// The screen the user is currently looking at (gaze nearest its centre), if any.
     @Published var lookedAtScreenID: UUID?
     @Published var lookedAtScreenName: String?
 
     init() {
+        if UserDefaults.standard.bool(forKey: "debugLogging") { DebugLog.shared.setEnabled(true) }
+        DebugLog.shared.log("App launched")
         renderer = GlassesRenderer(poseStore: IMUService.shared.poseStore)
         IMUService.shared.stateChanged = { [weak self] state in
             Task { @MainActor in
                 self?.glassesState = state
+                DebugLog.shared.log("Glasses state: \(state)")
                 if case .connected = state {
                     self?.refreshBrightness()
                 } else {
@@ -135,6 +150,18 @@ final class AppCoordinator: ObservableObject {
                     }
                 }
             }
+        }
+
+        // Periodic snapshot (~every 2s) for drift/perf troubleshooting.
+        let now = CACurrentMediaTime()
+        if debugLogging, now - lastLogSnapshot >= 2.0 {
+            lastLogSnapshot = now
+            let snapshot = String(
+                format: "snapshot imu=%.0fHz fps=%.0f yaw=%+.1f pitch=%+.1f roll=%+.1f ar=%@ stereo=%@ look=%@",
+                imuRate, renderFPS, euler.yaw, euler.pitch, euler.roll,
+                arActive ? "on" : "off", stereoEnabled ? "on" : "off",
+                lookedAtScreenName ?? "-")
+            DebugLog.shared.log(snapshot)
         }
 
         let q = IMUService.shared.poseStore.latest().orientation
@@ -215,6 +242,8 @@ final class AppCoordinator: ObservableObject {
     }
 
     func setStereo(_ on: Bool) {
+        let stereoLog = "setStereo(\(on)) arActive=\(arActive) sbsModeAvailable=\(sbsModeAvailable)"
+        DebugLog.shared.log(stereoLog)
         guard let renderer, arActive, glassesDisplayID != 0 else {
             stereoEnabled = false
             return
@@ -236,6 +265,7 @@ final class AppCoordinator: ObservableObject {
                 self.statusMessage = switched
                     ? "SBS stereo on (3840×1080)"
                     : "SBS rendering on, but no 3840×1080 macOS mode — image may be squished"
+                DebugLog.shared.log("SBS on: macOS 3840x1080 switch=\(switched)")
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { self.switchingDisplayMode = false }
             }
         } else {
@@ -488,6 +518,7 @@ final class AppCoordinator: ObservableObject {
         let outputDisplayID = Self.screenDisplayID(screen)
         glassesDisplayID = outputDisplayID
         lastOutputScreenID = outputDisplayID
+        DebugLog.shared.log("beginAR on '\(screen.localizedName)' id=\(outputDisplayID) frame=\(NSStringFromRect(screen.frame))")
 
         // 1. Create virtual displays for the workspace.
         var sceneScreens: [SceneScreen] = []
@@ -640,6 +671,7 @@ final class AppCoordinator: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
             guard let self, self.arActive, self.glassesDisplayID == missingID, !self.switchingDisplayMode else { return }
             if !NSScreen.screens.contains(where: { Self.screenDisplayID($0) == missingID }) {
+                DebugLog.shared.log("Output display \(missingID) gone — stopping AR")
                 self.stopAR()
                 self.statusMessage = "Glasses disconnected — AR stopped"
             }
@@ -650,6 +682,7 @@ final class AppCoordinator: ObservableObject {
     /// Rebuild the session on the same display if it's still there.
     private func handleSystemWake() {
         guard arActive else { return }
+        DebugLog.shared.log("System woke — restarting AR")
         statusMessage = "Woke from sleep — restarting AR…"
         restartARIfActive()
     }
@@ -771,6 +804,7 @@ final class AppCoordinator: ObservableObject {
 
     func stopAR() {
         guard arActive else { return }
+        DebugLog.shared.log("stopAR")
         if stereoEnabled {
             renderer?.stereoEnabled = false
             stereoEnabled = false
