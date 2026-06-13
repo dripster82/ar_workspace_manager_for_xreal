@@ -8,61 +8,95 @@ struct ControlPanelView: View {
     @State private var selectedScreenID: CGDirectDisplayID?
     @State private var moveX = ""
     @State private var moveY = ""
+    @State private var showDiagnostics = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            statusSection
-            Divider()
-            outputSection
-            Divider()
-            workspaceSection
-            Divider()
-            testSection
-            Divider()
-            generalSection
+        ScrollView {
+            VStack(spacing: 14) {
+                statusCard
+                card("AR Output", "display") { outputSection }
+                card("Workspace", "square.grid.2x2") { workspaceSection }
+                card("Tracking & Testing", "gauge.with.dots.needle.33percent") { testSection }
+                card("General", "gearshape") { generalSection }
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity)
+        }
+        .frame(minWidth: 460, idealWidth: 540, minHeight: 420, idealHeight: 720)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .safeAreaInset(edge: .bottom) {
             if !coordinator.statusMessage.isEmpty {
                 Text(coordinator.statusMessage)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16).padding(.vertical, 8)
+                    .background(.thinMaterial)
             }
-            Spacer()
         }
-        .padding(20)
-        .frame(minWidth: 480, minHeight: 600)
     }
 
-    // MARK: Sections
+    /// A titled card container for a section.
+    private func card<Content: View>(_ title: String, _ icon: String,
+                                     @ViewBuilder _ content: () -> Content) -> some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 10) { content() }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 4)
+        } label: {
+            Label(title, systemImage: icon).font(.headline)
+        }
+    }
 
-    private var statusSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Label(glassesLabel, systemImage: glassesConnected ? "eyeglasses" : "eyeglasses.slash")
-                .font(.headline)
-            HStack(spacing: 16) {
-                Text(String(format: "IMU %.0f Hz", coordinator.imuRate)).monospacedDigit()
-                Text(String(format: "Render %.0f fps", coordinator.renderFPS)).monospacedDigit()
-            }.font(.caption)
-            Text(String(format: "yaw %+7.1f°  pitch %+6.1f°  roll %+6.1f°",
-                        coordinator.euler.yaw, coordinator.euler.pitch, coordinator.euler.roll))
-                .font(.system(.caption, design: .monospaced))
-            if let looking = coordinator.lookedAtScreenName {
-                Label("Looking at: \(looking)", systemImage: "eye")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            HStack {
-                Button("Recenter (⌃⌥Space)") { coordinator.recenter() }
-                Toggle("Include roll", isOn: $coordinator.recenterRoll)
-                    .help("Off: horizon stays gravity-level when recentering")
-            }
-            if coordinator.brightnessAvailable {
-                HStack {
-                    Image(systemName: "sun.min")
-                    Slider(value: $coordinator.glassesBrightness, in: 0...7, step: 1) { editing in
-                        if !editing { coordinator.applyBrightness() }
+    // MARK: Status (header card)
+
+    private var statusCard: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Circle().fill(glassesConnected ? Color.green : Color.secondary)
+                        .frame(width: 9, height: 9)
+                    Text(glassesLabel).font(.headline)
+                    Spacer()
+                    if coordinator.arActive {
+                        Text("AR ON").font(.caption.bold())
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Color.accentColor.opacity(0.2), in: Capsule())
                     }
-                    Image(systemName: "sun.max")
-                    Text("\(Int(coordinator.glassesBrightness))").frame(width: 16).monospacedDigit()
-                }.font(.caption)
+                }
+                HStack(spacing: 16) {
+                    Label(String(format: "%.0f Hz", coordinator.imuRate), systemImage: "gyroscope")
+                    Label(String(format: "%.0f fps", coordinator.renderFPS), systemImage: "speedometer")
+                }
+                .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                Text(String(format: "yaw %+6.1f°   pitch %+6.1f°   roll %+6.1f°",
+                            coordinator.euler.yaw, coordinator.euler.pitch, coordinator.euler.roll))
+                    .font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
+                if let looking = coordinator.lookedAtScreenName {
+                    Label("Looking at: \(looking)", systemImage: "eye")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                HStack {
+                    Button("Recenter") { coordinator.recenter() }
+                    Text("⌃⌥Space").font(.caption2).foregroundStyle(.secondary)
+                    Spacer()
+                    Toggle("Include roll", isOn: $coordinator.recenterRoll)
+                        .toggleStyle(.checkbox)
+                        .help("Off: horizon stays gravity-level when recentering")
+                }
+                if coordinator.brightnessAvailable {
+                    HStack(spacing: 8) {
+                        Image(systemName: "sun.min").foregroundStyle(.secondary)
+                        Slider(value: $coordinator.glassesBrightness, in: 0...7, step: 1) { editing in
+                            if !editing { coordinator.applyBrightness() }
+                        }
+                        Image(systemName: "sun.max").foregroundStyle(.secondary)
+                        Text("\(Int(coordinator.glassesBrightness))").frame(width: 14).monospacedDigit()
+                    }.font(.caption)
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 2)
         }
     }
 
@@ -74,14 +108,13 @@ struct ControlPanelView: View {
     private var glassesLabel: String {
         switch coordinator.glassesState {
         case .disconnected: return "Glasses: not connected"
-        case .connected(let p): return "Glasses: \(p)"
+        case .connected(let p): return p
         case .error(let e): return "Glasses error: \(e)"
         }
     }
 
     private var outputSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("AR Output").font(.headline)
             if !coordinator.hasScreenRecordingPermission {
                 HStack {
                     Label("Screen Recording permission needed to capture displays",
@@ -143,36 +176,40 @@ struct ControlPanelView: View {
                 }
             }
 
-            // Diagnostics: screen layout + live window placement & manual move.
-            VStack(alignment: .leading, spacing: 3) {
-                ForEach(coordinator.screenList, id: \.self) { line in
-                    Text(line).font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-                HStack(alignment: .firstTextBaseline) {
-                    Text(coordinator.outputWindowInfo)
-                        .font(.system(.caption2, design: .monospaced))
-                        .textSelection(.enabled)
-                    Button("Copy info") {
-                        let all = (coordinator.screenList + [coordinator.outputWindowInfo])
-                            .joined(separator: "\n")
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(all, forType: .string)
+            DisclosureGroup(isExpanded: $showDiagnostics) {
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(coordinator.screenList, id: \.self) { line in
+                        Text(line).font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
                     }
-                    .controlSize(.small)
-                }
-                if coordinator.arActive {
-                    HStack {
-                        TextField("x", text: $moveX).frame(width: 64)
-                        TextField("y", text: $moveY).frame(width: 64)
-                        Button("Move window") {
-                            if let x = Double(moveX), let y = Double(moveY) {
-                                coordinator.moveOutputWindow(x: x, y: y)
-                            }
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(coordinator.outputWindowInfo)
+                            .font(.system(.caption2, design: .monospaced))
+                            .textSelection(.enabled)
+                        Button("Copy info") {
+                            let all = (coordinator.screenList + [coordinator.outputWindowInfo])
+                                .joined(separator: "\n")
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(all, forType: .string)
                         }
-                    }.font(.caption)
+                        .controlSize(.small)
+                    }
+                    if coordinator.arActive {
+                        HStack {
+                            TextField("x", text: $moveX).frame(width: 64)
+                            TextField("y", text: $moveY).frame(width: 64)
+                            Button("Move window") {
+                                if let x = Double(moveX), let y = Double(moveY) {
+                                    coordinator.moveOutputWindow(x: x, y: y)
+                                }
+                            }
+                        }.font(.caption)
+                    }
                 }
+                .padding(.top, 4)
+            } label: {
+                Text("Diagnostics").font(.caption).foregroundStyle(.secondary)
             }
         }
     }
@@ -182,8 +219,6 @@ struct ControlPanelView: View {
     private var workspaceSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Workspace").font(.headline)
-                Spacer()
                 Picker("", selection: Binding(
                     get: { coordinator.workspaceStore.activeWorkspaceID },
                     set: { coordinator.selectWorkspace($0) }
@@ -192,7 +227,7 @@ struct ControlPanelView: View {
                         Text(ws.name).tag(UUID?.some(ws.id))
                     }
                 }
-                .frame(width: 160)
+                .labelsHidden()
                 Button { coordinator.addWorkspace(); syncWorkspaceName() } label: {
                     Image(systemName: "plus")
                 }.help("New workspace")
@@ -209,6 +244,8 @@ struct ControlPanelView: View {
                 .onSubmit { coordinator.renameActiveWorkspace(workspaceName) }
                 .onAppear { syncWorkspaceName() }
                 .onChange(of: coordinator.workspaceStore.activeWorkspaceID) { _ in syncWorkspaceName() }
+
+            Divider()
 
             ForEach(coordinator.editableScreens()) { screen in
                 ScreenRow(initial: screen,
@@ -263,7 +300,6 @@ struct ControlPanelView: View {
 
     private var generalSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("General").font(.headline)
             Toggle("Launch at login", isOn: $launchAtLogin)
                 .onChange(of: launchAtLogin) { _, newValue in LaunchAtLogin.set(newValue) }
                 .font(.caption)
@@ -302,7 +338,6 @@ struct ControlPanelView: View {
 
     private var testSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Tracking feel").font(.headline)
             tuningSlider("Smoothing", $coordinator.orientationSmoothingMs, 0...80,
                          help: "higher = smoother, laggier")
             tuningSlider("Vel. smooth", $coordinator.velocitySmoothingMs, 0...200,
@@ -310,7 +345,6 @@ struct ControlPanelView: View {
             tuningSlider("Prediction", $coordinator.predictionLeadMs, 0...50,
                          help: "higher = compensates lag, may overshoot")
             Divider()
-            Text("Testing").font(.headline)
             Toggle("Fake head pose (no glasses needed)", isOn: $coordinator.useFakePose)
             if coordinator.useFakePose {
                 HStack {
