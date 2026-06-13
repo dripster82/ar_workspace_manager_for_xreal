@@ -548,15 +548,15 @@ struct PlacementMapView: View {
     private static var floatYaw: Double { fovHDeg / 2 + floatMargin }
     private static var floatPitch: Double { fovVDeg / 2 + floatMargin }
 
+    private static let viewportHeight: CGFloat = 200
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             zone(title: "Around you (anchored)", placement: .anchored, accent: .blue,
-                 baseYaw: Self.anchoredYaw, basePitch: Self.anchoredPitch,
-                 aspect: 1.0, zoom: $zoomAnchored)               // square
+                 baseYaw: Self.anchoredYaw, basePitch: Self.anchoredPitch, zoom: $zoomAnchored)
             zone(title: "In view (floating)", placement: .floating, accent: .accentColor,
-                 baseYaw: Self.floatYaw, basePitch: Self.floatPitch,
-                 aspect: Self.floatYaw / Self.floatPitch, zoom: $zoomFloating) // FOV+margin ratio
-            Text("Drag to position. Left↔right = yaw, up↔down = pitch. Use +/− to zoom.")
+                 baseYaw: Self.floatYaw, basePitch: Self.floatPitch, zoom: $zoomFloating)
+            Text("Drag a screen to position it. Two-finger scroll to pan, +/− to zoom.")
                 .font(.caption2).foregroundStyle(.secondary)
         }
     }
@@ -566,11 +566,8 @@ struct PlacementMapView: View {
     }
 
     private func zone(title: String, placement: ScreenPlacement, accent: Color,
-                      baseYaw: Double, basePitch: Double, aspect: Double,
-                      zoom: Binding<Double>) -> some View {
+                      baseYaw: Double, basePitch: Double, zoom: Binding<Double>) -> some View {
         let spaceName = "zone-\(placement.rawValue)"
-        let yawRange = baseYaw / zoom.wrappedValue
-        let pitchRange = basePitch / zoom.wrappedValue
         return VStack(alignment: .leading, spacing: 3) {
             HStack {
                 Text(title).font(.caption).foregroundStyle(.secondary)
@@ -584,35 +581,39 @@ struct PlacementMapView: View {
             }
             .buttonStyle(.borderless).controlSize(.small)
             GeometryReader { geo in
-                // Equal pixels-per-degree on both axes (no squish); pitch maps about centre.
-                let ppd = geo.size.width / CGFloat(2 * yawRange)
-                ZStack(alignment: .topLeading) {
-                    RoundedRectangle(cornerRadius: 8).fill(Color.gray.opacity(0.12))
-                    Rectangle().fill(.white.opacity(0.08)).frame(width: 1)
-                        .position(x: geo.size.width / 2, y: geo.size.height / 2)
-                    Rectangle().fill(.white.opacity(0.08)).frame(height: 1)
-                        .position(x: geo.size.width / 2, y: geo.size.height / 2)
-                    // Field-of-view outline (what the glasses can show at once), centred.
-                    if placement == .floating {
-                        RoundedRectangle(cornerRadius: 4)
-                            .strokeBorder(.green.opacity(0.6),
-                                          style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
-                            .frame(width: CGFloat(Self.fovHDeg) * ppd, height: CGFloat(Self.fovVDeg) * ppd)
-                            .position(x: geo.size.width / 2, y: geo.size.height / 2)
+                // Equal pixels-per-degree both axes (no squish). At zoom 1 the full yaw range
+                // fits the width; content is scrollable (two-finger) for the rest / when zoomed.
+                let ppd = geo.size.width * CGFloat(zoom.wrappedValue) / CGFloat(2 * baseYaw)
+                let contentW = CGFloat(2 * baseYaw) * ppd
+                let contentH = CGFloat(2 * basePitch) * ppd
+                ScrollView([.horizontal, .vertical], showsIndicators: false) {
+                    ZStack(alignment: .topLeading) {
+                        Rectangle().fill(Color.gray.opacity(0.12))
+                        Rectangle().fill(.white.opacity(0.08)).frame(width: 1)
+                            .position(x: contentW / 2, y: contentH / 2)
+                        Rectangle().fill(.white.opacity(0.08)).frame(height: 1)
+                            .position(x: contentW / 2, y: contentH / 2)
+                        if placement == .floating {
+                            RoundedRectangle(cornerRadius: 4)
+                                .strokeBorder(.green.opacity(0.6),
+                                              style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+                                .frame(width: CGFloat(Self.fovHDeg) * ppd, height: CGFloat(Self.fovVDeg) * ppd)
+                                .position(x: contentW / 2, y: contentH / 2)
+                        }
+                        ForEach(screens(placement)) { cfg in
+                            ScreenBox(initial: cfg, area: CGSize(width: contentW, height: contentH),
+                                      coordinateSpace: spaceName, accent: accent, pxPerDeg: ppd,
+                                      yawRange: baseYaw, pitchRange: basePitch,
+                                      lookedAt: coordinator.lookedAtScreenID == cfg.id,
+                                      onChange: { coordinator.updateScreen($0) })
+                        }
                     }
-                    ForEach(screens(placement)) { cfg in
-                        ScreenBox(initial: cfg, area: geo.size, coordinateSpace: spaceName,
-                                  accent: accent, pxPerDeg: ppd,
-                                  yawRange: yawRange, pitchRange: pitchRange,
-                                  lookedAt: coordinator.lookedAtScreenID == cfg.id,
-                                  onChange: { coordinator.updateScreen($0) })
-                    }
+                    .frame(width: contentW, height: contentH)
+                    .coordinateSpace(name: spaceName)
                 }
-                .coordinateSpace(name: spaceName)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
             }
-            .aspectRatio(aspect, contentMode: .fit)
-            .frame(maxWidth: 360)
+            .frame(height: Self.viewportHeight)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
         }
     }
 }
