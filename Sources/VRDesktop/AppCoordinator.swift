@@ -283,6 +283,17 @@ final class AppCoordinator: ObservableObject {
         (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) ?? 0
     }
 
+    /// The display that looks like the XREAL glasses, if currently connected.
+    func glassesScreenID() -> CGDirectDisplayID? {
+        for screen in NSScreen.screens {
+            let name = screen.localizedName.lowercased()
+            if name.contains("air") || name.contains("xreal") || name.contains("nreal") {
+                return Self.screenDisplayID(screen)
+            }
+        }
+        return nil
+    }
+
     // MARK: AR session
 
     func startAR(on screen: NSScreen) {

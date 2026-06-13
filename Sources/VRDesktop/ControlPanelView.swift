@@ -99,6 +99,8 @@ struct ControlPanelView: View {
                         .tag(CGDirectDisplayID?.some(AppCoordinator.screenDisplayID(screen)))
                 }
             }
+            .onAppear { validateOutputSelection() }
+            .onChange(of: coordinator.screenList) { _ in validateOutputSelection() }
             HStack {
                 Button(coordinator.arActive ? "Stop AR" : "Start AR") {
                     if coordinator.arActive {
@@ -238,6 +240,13 @@ struct ControlPanelView: View {
             Text("Monitors appear in AR while still showing on the physical screen.")
                 .font(.caption2).foregroundStyle(.secondary)
         }
+    }
+
+    /// Drop a selection whose display has gone away, and auto-pick the glasses when present.
+    private func validateOutputSelection() {
+        let ids = NSScreen.screens.map { AppCoordinator.screenDisplayID($0) }
+        if let sel = selectedScreenID, !ids.contains(sel) { selectedScreenID = nil }
+        if selectedScreenID == nil { selectedScreenID = coordinator.glassesScreenID() }
     }
 
     private func syncWorkspaceName() {
