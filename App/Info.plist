@@ -8,6 +8,8 @@
     <string>co.ketelle.vrdesktop</string>
     <key>CFBundleName</key>
     <string>VR Desktop</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>

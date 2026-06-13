@@ -16,9 +16,8 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/VRDesktop"
 cp "$ROOT/App/Info.plist" "$APP/Contents/Info.plist"
+[[ -f "$ROOT/App/AppIcon.icns" ]] && cp "$ROOT/App/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 
-# Sign with an Apple Development identity if available (keeps TCC grants stable),
-# otherwise fall back to ad-hoc.
 # Prefer a stable identity (so TCC permissions persist across rebuilds), most-trusted first.
 # Override with CODESIGN_IDENTITY=... if you have a specific cert.
 IDENTITY="${CODESIGN_IDENTITY:-}"
