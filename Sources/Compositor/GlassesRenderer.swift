@@ -21,8 +21,10 @@ public final class GlassesRenderer: NSObject {
     private var screenPipeline: MTLRenderPipelineState!
     private var placeholderPipeline: MTLRenderPipelineState!
     private var depthState: MTLDepthStencilState!
-    private var depthTexture: MTLTexture?
+    private var msaaColorTexture: MTLTexture?
+    private var depthTextureMS: MTLTexture?
     private static let depthFormat: MTLPixelFormat = .depth32Float
+    private let sampleCount = 4
 
     private let poseStore: PoseStore
     private let lock = NSLock()
@@ -76,17 +78,36 @@ public final class GlassesRenderer: NSObject {
         desc.fragmentFunction = library.makeFunction(name: fragment)
         desc.colorAttachments[0].pixelFormat = .bgra8Unorm
         desc.depthAttachmentPixelFormat = Self.depthFormat
+        desc.rasterSampleCount = sampleCount // MSAA
         return try device.makeRenderPipelineState(descriptor: desc)
     }
 
-    private func depthTexture(width: Int, height: Int) -> MTLTexture? {
-        if let t = depthTexture, t.width == width, t.height == height { return t }
-        let desc = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: Self.depthFormat, width: max(1, width), height: max(1, height), mipmapped: false)
-        desc.usage = .renderTarget
-        desc.storageMode = .private
-        depthTexture = device.makeTexture(descriptor: desc)
-        return depthTexture
+    /// MSAA color target (memoryless on Apple GPUs — free bandwidth-wise) and a matching
+    /// multisample depth buffer; both rebuilt when the drawable size changes.
+    private func msaaTextures(width: Int, height: Int) -> (color: MTLTexture, depth: MTLTexture)? {
+        let w = max(1, width), h = max(1, height)
+        if let c = msaaColorTexture, let d = depthTextureMS, c.width == w, c.height == h {
+            return (c, d)
+        }
+        let colorDesc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm, width: w, height: h, mipmapped: false)
+        colorDesc.textureType = .type2DMultisample
+        colorDesc.sampleCount = sampleCount
+        colorDesc.usage = .renderTarget
+        colorDesc.storageMode = .memoryless
+
+        let depthDesc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: Self.depthFormat, width: w, height: h, mipmapped: false)
+        depthDesc.textureType = .type2DMultisample
+        depthDesc.sampleCount = sampleCount
+        depthDesc.usage = .renderTarget
+        depthDesc.storageMode = .memoryless
+
+        guard let color = device.makeTexture(descriptor: colorDesc),
+              let depth = device.makeTexture(descriptor: depthDesc) else { return nil }
+        msaaColorTexture = color
+        depthTextureMS = depth
+        return (color, depth)
     }
 
     // MARK: Scene
@@ -256,14 +277,17 @@ public final class GlassesRenderer: NSObject {
         let fullWidth = Double(metalLayer.drawableSize.width)
         let height = Double(metalLayer.drawableSize.height)
 
-        guard let commandBuffer = commandQueue.makeCommandBuffer() else { return }
+        guard let commandBuffer = commandQueue.makeCommandBuffer(),
+              let ms = msaaTextures(width: drawable.texture.width, height: drawable.texture.height)
+        else { return }
         let pass = MTLRenderPassDescriptor()
-        pass.colorAttachments[0].texture = drawable.texture
+        // Render multisampled, then resolve into the drawable for smooth edges.
+        pass.colorAttachments[0].texture = ms.color
+        pass.colorAttachments[0].resolveTexture = drawable.texture
         pass.colorAttachments[0].loadAction = .clear
-        pass.colorAttachments[0].storeAction = .store
+        pass.colorAttachments[0].storeAction = .multisampleResolve
         pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
-        pass.depthAttachment.texture = depthTexture(width: drawable.texture.width,
-                                                    height: drawable.texture.height)
+        pass.depthAttachment.texture = ms.depth
         pass.depthAttachment.loadAction = .clear
         pass.depthAttachment.storeAction = .dontCare
         pass.depthAttachment.clearDepth = 1.0
