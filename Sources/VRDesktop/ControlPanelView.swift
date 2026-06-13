@@ -206,6 +206,7 @@ struct ControlPanelView: View {
                 ws.virtualScreens[i] = newValue
                 coordinator.workspaceStore.activeWorkspace = ws
                 coordinator.saveWorkspaces()
+                coordinator.liveUpdateScreens() // apply placement changes to the running AR view
             }
         )
     }

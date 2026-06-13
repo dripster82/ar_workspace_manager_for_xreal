@@ -303,6 +303,11 @@ final class AppCoordinator: ObservableObject {
             do { try await capture.start() }
             catch { await MainActor.run { self.statusMessage = "Capture failed for \(config.name): \(error.localizedDescription)" } }
         }
+        return sceneScreen(config: config, capture: capture)
+    }
+
+    /// Build the placement geometry for a screen, reusing an existing capture.
+    private func sceneScreen(config: VirtualScreenConfig, capture: CaptureSource) -> SceneScreen {
         // Apparent width: ~1.6m per 1920px at scale 1, 2m away.
         let baseWidth = Float(config.width) / 1920.0 * 1.6 * Float(config.scale)
         return SceneScreen(
@@ -315,6 +320,26 @@ final class AppCoordinator: ObservableObject {
             curvatureRadius: Float(config.curvatureRadius),
             textureProvider: { [weak capture] in capture?.latestTexture }
         )
+    }
+
+    /// Rebuild the live scene from the active workspace's current placement values,
+    /// reusing existing captures so a slider drag updates the AR view in real time.
+    /// (Adding/removing screens or toggling "show in AR" still needs a Start/Stop.)
+    func liveUpdateScreens() {
+        guard let renderer, arActive,
+              let workspace = workspaceStore.activeWorkspace else { return }
+        var sceneScreens: [SceneScreen] = []
+        for config in workspace.virtualScreens where config.showInAR {
+            if let capture = captures[config.id] {
+                sceneScreens.append(sceneScreen(config: config, capture: capture))
+            }
+        }
+        for (_, config) in workspace.physicalInAR where config.showInAR {
+            if let capture = captures[config.id] {
+                sceneScreens.append(sceneScreen(config: config, capture: capture))
+            }
+        }
+        renderer.setScreens(sceneScreens)
     }
 
     static func resolvePhysicalDisplay(uuidString: String) -> CGDirectDisplayID? {
