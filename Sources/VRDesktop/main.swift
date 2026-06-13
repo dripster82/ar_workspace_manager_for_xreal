@@ -98,8 +98,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         register(kVK_Space, AppDelegate.recenterHotKeyID, &recenterHotKeyRef)
         register(kVK_Escape, AppDelegate.stopARHotKeyID, &stopARHotKeyRef)
         register(kVK_ANSI_H, AppDelegate.helpHotKeyID, &helpHotKeyRef)
-        register(kVK_ANSI_A, AppDelegate.toggleARHotKeyID, &toggleARHotKeyRef)
-        register(kVK_ANSI_S, AppDelegate.sbsHotKeyID, &sbsHotKeyRef)
+        register(kVK_ANSI_S, AppDelegate.toggleARHotKeyID, &toggleARHotKeyRef)
+        register(kVK_ANSI_D, AppDelegate.sbsHotKeyID, &sbsHotKeyRef)
         register(kVK_ANSI_Q, AppDelegate.quitHotKeyID, &quitHotKeyRef)
     }
 
