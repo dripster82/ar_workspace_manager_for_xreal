@@ -615,10 +615,20 @@ private struct ScreenBox: View {
         onChange(cfg)
     }
 
+    // Apparent width in metres — must match AppCoordinator.sceneScreen.
+    private static let metersPerScreen = 1.6
+
     var body: some View {
-        let aspect = CGFloat(cfg.width) / CGFloat(max(1, cfg.height))
-        let w: CGFloat = 60
-        let h = min(60, max(24, w / aspect))
+        // Size the box by the screen's real angular extent (degrees of FOV) so gaps/overlap
+        // in the map match AR — which depends on distance, not just aspect.
+        let widthMeters = Double(cfg.width) / 1920.0 * Self.metersPerScreen * cfg.scale
+        let aspect = Double(cfg.width) / Double(max(1, cfg.height))
+        let heightMeters = widthMeters / aspect
+        let dist = max(0.1, cfg.distanceMeters)
+        let angW = 2 * atan((widthMeters / 2) / dist) * 180 / .pi
+        let angH = 2 * atan((heightMeters / 2) / dist) * 180 / .pi
+        let w = max(14, CGFloat(angW / (2 * Self.yawRange)) * area.width)
+        let h = max(10, CGFloat(angH / (2 * Self.pitchRange)) * area.height)
         return RoundedRectangle(cornerRadius: 4)
             .fill(accent.opacity(0.45))
             .overlay(
