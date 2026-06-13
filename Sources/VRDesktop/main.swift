@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var window: NSWindow!
     var coordinator: AppCoordinator!
     var statusItem: NSStatusItem!
+    let brightnessHotKey = BrightnessHotKey()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         coordinator = AppCoordinator()
@@ -30,6 +31,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         setupMenuBar()
         registerGlobalRecenterHotKey()
+        startBrightnessHotKey()
+    }
+
+    @MainActor private func startBrightnessHotKey() {
+        let ok = brightnessHotKey.start { [weak self] up in
+            MainActor.assumeIsolated { self?.coordinator.adjustBrightness(up: up) }
+        }
+        if !ok {
+            // Needs Accessibility permission to tap the brightness keys.
+            _ = BrightnessHotKey.accessibilityTrusted(prompt: true)
+            coordinator.statusMessage =
+                "Grant Accessibility, then relaunch, to use ⌃⌥+brightness keys"
+        }
     }
 
     // System-wide hotkeys (work while any app is focused):

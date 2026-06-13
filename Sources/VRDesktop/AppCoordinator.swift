@@ -180,6 +180,13 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
+    /// Step glasses brightness up/down by one (0–7), used by the ⌃⌥+brightness hotkey.
+    func adjustBrightness(up: Bool) {
+        guard brightnessAvailable else { return }
+        glassesBrightness = min(7, max(0, glassesBrightness + (up ? 1 : -1)))
+        applyBrightness()
+    }
+
     // MARK: Stereo / SBS (experimental)
 
     @Published var stereoEnabled = false
