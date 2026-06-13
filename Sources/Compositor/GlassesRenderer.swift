@@ -550,9 +550,9 @@ public final class GlassesRenderer: NSObject {
         let texAspect = Float(tex.width) / Float(max(1, tex.height))
         for region in regions {
             let regionW = Float(region.w), regionH = Float(H)
-            var panelH = regionH * 0.7
+            var panelH = regionH * 0.6   // ~15% smaller than before
             var panelW = panelH * texAspect
-            if panelW > regionW * 0.9 { panelW = regionW * 0.9; panelH = panelW / texAspect }
+            if panelW > regionW * 0.8 { panelW = regionW * 0.8; panelH = panelW / texAspect }
             let nw = panelW / regionW * 2, nh = panelH / regionH * 2
             enc.setViewport(MTLViewport(originX: Double(region.x), originY: 0,
                                         width: Double(region.w), height: Double(H),
