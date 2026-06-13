@@ -118,12 +118,33 @@ public final class GlassesRenderer: NSObject {
         overlayPipeline = try? device.makeRenderPipelineState(descriptor: oDesc)
     }
 
-    /// Provide the help HUD image (from rasterized SwiftUI) and show it.
-    public func setHelpImage(_ cgImage: CGImage) {
-        let loader = MTKTextureLoader(device: device)
-        helpTexture = try? loader.newTexture(cgImage: cgImage,
-            options: [.SRGB: false, .origin: MTKTextureLoader.Origin.topLeft as NSObject])
-        showHelp = helpTexture != nil
+    /// Provide the help HUD image (from rasterized SwiftUI) and show it. Rasterizes the
+    /// CGImage into a known BGRA premultiplied buffer (robust across CGImage formats that
+    /// MTKTextureLoader can reject). Returns false if the texture couldn't be made.
+    @discardableResult
+    public func setHelpImage(_ cgImage: CGImage) -> Bool {
+        let w = cgImage.width, h = cgImage.height
+        guard w > 0, h > 0 else { return false }
+        let bytesPerRow = w * 4
+        let bitmapInfo = CGImageAlphaInfo.premultipliedFirst.rawValue
+            | CGBitmapInfo.byteOrder32Little.rawValue
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8,
+                                  bytesPerRow: bytesPerRow, space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: bitmapInfo),
+              let data = ctx.data else { return false }
+        ctx.clear(CGRect(x: 0, y: 0, width: w, height: h))
+        ctx.draw(cgImage, in: CGRect(x: 0, y: 0, width: w, height: h))
+
+        let desc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm, width: w, height: h, mipmapped: false)
+        desc.usage = .shaderRead
+        desc.storageMode = .shared
+        guard let tex = device.makeTexture(descriptor: desc) else { return false }
+        tex.replace(region: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0,
+                    withBytes: data, bytesPerRow: bytesPerRow)
+        helpTexture = tex
+        showHelp = true
+        return true
     }
 
     public func clearHelp() { showHelp = false }

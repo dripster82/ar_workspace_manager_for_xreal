@@ -20,10 +20,10 @@ final class HelpOverlayController {
     func show() {
         visible = true
         if coordinator.arActive, let renderer = coordinator.renderer,
-           let image = HelpContent.renderCGImage() {
-            renderer.setHelpImage(image)
+           let image = HelpContent.renderCGImage(), renderer.setHelpImage(image) {
+            // Shown as the in-AR overlay.
         } else {
-            showPanel()
+            showPanel() // AR off, or overlay couldn't be built — use the macOS panel
         }
     }
 
