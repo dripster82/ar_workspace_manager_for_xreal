@@ -17,6 +17,7 @@ struct ControlPanelView: View {
                 card("AR Output", "display") { outputSection }
                 card("Workspace", "square.grid.2x2") { workspaceSection }
                 card("Tracking & Testing", "gauge.with.dots.needle.33percent") { testSection }
+                card("Permissions", "lock.shield") { permissionsSection }
                 card("General", "gearshape") { generalSection }
             }
             .padding(16)
@@ -118,16 +119,44 @@ struct ControlPanelView: View {
         }
     }
 
+    private var permissionsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            permissionRow(
+                title: "Screen Recording",
+                detail: "Capture your displays to show them in AR",
+                granted: coordinator.hasScreenRecordingPermission,
+                grant: { coordinator.requestScreenRecordingPermission() })
+            Divider()
+            permissionRow(
+                title: "Accessibility",
+                detail: "Use ⌃⌥+brightness keys to dim the glasses",
+                granted: coordinator.hasAccessibilityPermission,
+                grant: { coordinator.requestAccessibilityPermission() })
+            Text("Grants take effect after relaunching.")
+                .font(.caption2).foregroundStyle(.secondary)
+        }
+    }
+
+    private func permissionRow(title: String, detail: String, granted: Bool,
+                               grant: @escaping () -> Void) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: granted ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                .foregroundStyle(granted ? .green : .orange)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title).font(.callout)
+                Text(detail).font(.caption2).foregroundStyle(.secondary)
+            }
+            Spacer()
+            if granted {
+                Text("Granted").font(.caption).foregroundStyle(.green)
+            } else {
+                Button("Grant…", action: grant).controlSize(.small)
+            }
+        }
+    }
+
     private var outputSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if !coordinator.hasScreenRecordingPermission {
-                HStack {
-                    Label("Screen Recording permission needed to capture displays",
-                          systemImage: "exclamationmark.triangle")
-                        .font(.caption).foregroundStyle(.orange)
-                    Button("Grant permission…") { coordinator.requestScreenRecordingPermission() }
-                }
-            }
             if coordinator.mirroringActive {
                 HStack {
                     Label("A display is mirroring — the glasses need to be extended",
@@ -310,15 +339,6 @@ struct ControlPanelView: View {
                 .font(.caption)
             Toggle("Keep cursor off the AR screen", isOn: $coordinator.confineCursor)
                 .font(.caption)
-            if !coordinator.hasAccessibilityPermission {
-                HStack {
-                    Label("Accessibility needed for ⌃⌥+brightness keys",
-                          systemImage: "exclamationmark.triangle")
-                        .font(.caption).foregroundStyle(.orange)
-                    Button("Grant permission…") { coordinator.requestAccessibilityPermission() }
-                        .controlSize(.small)
-                }
-            }
         }
     }
 
