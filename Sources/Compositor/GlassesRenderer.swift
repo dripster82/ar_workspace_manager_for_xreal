@@ -36,6 +36,12 @@ public final class GlassesRenderer: NSObject {
     private var sharpSampler: MTLSamplerState!
     private var mipTargets: [UUID: MTLTexture] = [:]
 
+    /// Supersample factor: 1.0 = off; renders the scene at scale× the display then
+    /// downsamples, smoothing interior edges/lines while keeping text crisp.
+    public private(set) var renderScale: Double = 1.0
+    private var ssColorTexture: MTLTexture?
+    private var downscalePipeline: MTLRenderPipelineState!
+
     private let poseStore: PoseStore
     private let lock = NSLock()
     private var screens: [SceneScreen] = []
@@ -85,6 +91,31 @@ public final class GlassesRenderer: NSObject {
         lin.minFilter = .linear; lin.magFilter = .linear
         linearSampler = device.makeSamplerState(descriptor: lin)
         rebuildSharpSampler()
+
+        let dDesc = MTLRenderPipelineDescriptor()
+        dDesc.vertexFunction = library.makeFunction(name: "fullscreen_vertex")
+        dDesc.fragmentFunction = library.makeFunction(name: "blit_fragment")
+        dDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
+        downscalePipeline = try? device.makeRenderPipelineState(descriptor: dDesc)
+    }
+
+    /// Set supersample factor (1.0 off, up to 2.0).
+    public func setRenderScale(_ scale: Double) {
+        let valid = min(2.0, max(1.0, scale))
+        guard valid != renderScale else { return }
+        renderScale = valid
+        ssColorTexture = nil
+    }
+
+    private func ssColor(width: Int, height: Int) -> MTLTexture? {
+        let w = max(1, width), h = max(1, height)
+        if let t = ssColorTexture, t.width == w, t.height == h { return t }
+        let desc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm, width: w, height: h, mipmapped: false)
+        desc.usage = [.renderTarget, .shaderRead]
+        desc.storageMode = .private
+        ssColorTexture = device.makeTexture(descriptor: desc)
+        return ssColorTexture
     }
 
     private func rebuildSharpSampler() {
@@ -372,9 +403,6 @@ public final class GlassesRenderer: NSObject {
     }
 
     func renderFrame(drawable: CAMetalDrawable) {
-        let fullWidth = Double(metalLayer.drawableSize.width)
-        let height = Double(metalLayer.drawableSize.height)
-
         guard let commandBuffer = commandQueue.makeCommandBuffer() else { return }
 
         lock.lock()
@@ -384,50 +412,62 @@ public final class GlassesRenderer: NSObject {
         // Mipmap blits (if sharpening) must run before the render pass on the same buffer.
         let sharpTextures = prepareSharpTextures(currentScreens, commandBuffer: commandBuffer)
 
-        let w = drawable.texture.width, h = drawable.texture.height
+        let outW = drawable.texture.width, outH = drawable.texture.height
+        let supersample = renderScale > 1.001
+        // Scene render dimensions (supersampled when render scale > 1).
+        let rw = supersample ? Int((Double(outW) * renderScale).rounded()) : outW
+        let rh = supersample ? Int((Double(outH) * renderScale).rounded()) : outH
+
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].loadAction = .clear
         pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
         pass.depthAttachment.loadAction = .clear
         pass.depthAttachment.storeAction = .dontCare
         pass.depthAttachment.clearDepth = 1.0
+
+        // Where the (single-sample) scene ends up: the drawable directly, or an offscreen
+        // supersample buffer we then downscale into the drawable.
+        let sceneTarget: MTLTexture
+        if supersample {
+            guard let ss = ssColor(width: rw, height: rh) else { return }
+            sceneTarget = ss
+        } else {
+            sceneTarget = drawable.texture
+        }
+
         if sampleCount > 1 {
-            guard let ms = msaaTextures(width: w, height: h) else { return }
+            guard let ms = msaaTextures(width: rw, height: rh) else { return }
             pass.colorAttachments[0].texture = ms.color
-            pass.colorAttachments[0].resolveTexture = drawable.texture
+            pass.colorAttachments[0].resolveTexture = sceneTarget
             pass.colorAttachments[0].storeAction = .multisampleResolve
             pass.depthAttachment.texture = ms.depth
         } else {
-            pass.colorAttachments[0].texture = drawable.texture
+            pass.colorAttachments[0].texture = sceneTarget
             pass.colorAttachments[0].storeAction = .store
-            pass.depthAttachment.texture = singleDepth(width: w, height: h)
+            pass.depthAttachment.texture = singleDepth(width: rw, height: rh)
         }
 
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
         encoder.setDepthStencilState(depthState)
+        encodeScene(encoder: encoder, width: Double(rw), height: Double(rh),
+                    screens: currentScreens, sharp: sharpTextures)
+        encoder.endEncoding()
 
-        let orientation = currentOrientation()
-
-        if stereoEnabled {
-            // Two viewports across a 3840×1080 frame; each eye is half-width, 16:9.
-            let eyeWidth = fullWidth / 2
-            let aspect = Float(eyeWidth / max(1, height))
-            let projection = projectionMatrix(aspect: aspect)
-            let eyes: [(x: Double, offset: Float)] = [(0, -ipd / 2), (eyeWidth, ipd / 2)]
-            for eye in eyes {
-                encoder.setViewport(MTLViewport(originX: eye.x, originY: 0,
-                                                width: eyeWidth, height: height,
-                                                znear: 0, zfar: 1))
-                let vp = projection * viewMatrix(orientation: orientation, eyeOffsetX: eye.offset)
-                drawScreens(currentScreens, viewProjection: vp, encoder: encoder, sharp: sharpTextures)
+        // Downsample the supersampled scene into the drawable.
+        if supersample, let dp = downscalePipeline {
+            let dpass = MTLRenderPassDescriptor()
+            dpass.colorAttachments[0].texture = drawable.texture
+            dpass.colorAttachments[0].loadAction = .dontCare
+            dpass.colorAttachments[0].storeAction = .store
+            if let denc = commandBuffer.makeRenderCommandEncoder(descriptor: dpass) {
+                denc.setRenderPipelineState(dp)
+                denc.setFragmentTexture(sceneTarget, index: 0)
+                denc.setFragmentSamplerState(linearSampler, index: 0)
+                denc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+                denc.endEncoding()
             }
-        } else {
-            let aspect = Float(fullWidth / max(1, height))
-            let vp = projectionMatrix(aspect: aspect) * viewMatrix(orientation: orientation, eyeOffsetX: 0)
-            drawScreens(currentScreens, viewProjection: vp, encoder: encoder, sharp: sharpTextures)
         }
 
-        encoder.endEncoding()
         commandBuffer.present(drawable)
         commandBuffer.commit()
 
@@ -437,6 +477,31 @@ public final class GlassesRenderer: NSObject {
             framesPerSecond = Double(frameCount) / (now - lastFPSUpdate)
             frameCount = 0
             lastFPSUpdate = now
+        }
+    }
+
+    /// Draw the AR scene (mono or stereo) into the current encoder at the given target size.
+    private func encodeScene(encoder: MTLRenderCommandEncoder, width: Double, height: Double,
+                             screens: [SceneScreen], sharp: [UUID: MTLTexture]) {
+        let orientation = currentOrientation()
+        if stereoEnabled {
+            let eyeWidth = width / 2
+            let aspect = Float(eyeWidth / max(1, height))
+            let projection = projectionMatrix(aspect: aspect)
+            let eyes: [(x: Double, offset: Float)] = [(0, -ipd / 2), (eyeWidth, ipd / 2)]
+            for eye in eyes {
+                encoder.setViewport(MTLViewport(originX: eye.x, originY: 0,
+                                                width: eyeWidth, height: height,
+                                                znear: 0, zfar: 1))
+                let vp = projection * viewMatrix(orientation: orientation, eyeOffsetX: eye.offset)
+                drawScreens(screens, viewProjection: vp, encoder: encoder, sharp: sharp)
+            }
+        } else {
+            encoder.setViewport(MTLViewport(originX: 0, originY: 0,
+                                            width: width, height: height, znear: 0, zfar: 1))
+            let aspect = Float(width / max(1, height))
+            let vp = projectionMatrix(aspect: aspect) * viewMatrix(orientation: orientation, eyeOffsetX: 0)
+            drawScreens(screens, viewProjection: vp, encoder: encoder, sharp: sharp)
         }
     }
 

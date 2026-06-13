@@ -49,6 +49,10 @@ final class AppCoordinator: ObservableObject {
         didSet { renderer?.setSharpenAnisotropy(sharpenLevel)
                  UserDefaults.standard.set(sharpenLevel, forKey: "sharpenLevel") }
     }
+    @Published var renderScalePercent: Int = 100 {   // 100 = off, 125, 150, 200 (supersample)
+        didSet { renderer?.setRenderScale(Double(renderScalePercent) / 100)
+                 UserDefaults.standard.set(renderScalePercent, forKey: "renderScalePercent") }
+    }
 
     // Fake pose for glasses-free testing.
     @Published var useFakePose = false { didSet { applyFakePose() } }
@@ -126,8 +130,12 @@ final class AppCoordinator: ObservableObject {
         if defaults.object(forKey: "sharpenLevel") != nil {
             sharpenLevel = defaults.integer(forKey: "sharpenLevel")
         }
+        if defaults.object(forKey: "renderScalePercent") != nil {
+            renderScalePercent = defaults.integer(forKey: "renderScalePercent")
+        }
         renderer?.setSampleCount(antialiasLevel)
         renderer?.setSharpenAnisotropy(sharpenLevel)
+        renderer?.setRenderScale(Double(renderScalePercent) / 100)
 
         refreshMirroringState()
         NotificationCenter.default.addObserver(

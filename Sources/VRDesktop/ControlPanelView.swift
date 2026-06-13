@@ -411,6 +411,17 @@ struct ControlPanelView: View {
                 .pickerStyle(.segmented).labelsHidden()
             }
             .help("Anisotropic sharpening of captured content (e.g. small text in VS Code); higher = crisper, more GPU")
+            HStack {
+                Text("Supersample").frame(width: 78, alignment: .leading).font(.caption)
+                Picker("", selection: $coordinator.renderScalePercent) {
+                    Text("Off").tag(100)
+                    Text("1.25×").tag(125)
+                    Text("1.5×").tag(150)
+                    Text("2×").tag(200)
+                }
+                .pickerStyle(.segmented).labelsHidden()
+            }
+            .help("Renders the scene above display resolution then downscales — smooths edges AND keeps text crisp; 2× has real GPU cost")
             Divider()
             Toggle("Fake head pose (no glasses needed)", isOn: $coordinator.useFakePose)
             if coordinator.useFakePose {

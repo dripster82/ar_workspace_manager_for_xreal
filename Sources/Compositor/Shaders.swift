@@ -34,6 +34,22 @@ fragment float4 screen_fragment(VertexOut in [[stage_in]],
     return float4(tex.sample(s, in.uv).rgb, 1.0);
 }
 
+// Fullscreen triangle for the supersample downscale pass (orientation-preserving).
+vertex VertexOut fullscreen_vertex(uint vid [[vertex_id]]) {
+    float2 positions[3] = { float2(-1, -3), float2(-1, 1), float2(3, 1) };
+    float2 uvs[3] = { float2(0, 2), float2(0, 0), float2(2, 0) };
+    VertexOut out;
+    out.position = float4(positions[vid], 0, 1);
+    out.uv = uvs[vid];
+    return out;
+}
+
+fragment float4 blit_fragment(VertexOut in [[stage_in]],
+                              texture2d<float> tex [[texture(0)]],
+                              sampler s [[sampler(0)]]) {
+    return float4(tex.sample(s, in.uv).rgb, 1.0);
+}
+
 // Fallback pattern when a screen has no capture frame yet.
 fragment float4 placeholder_fragment(VertexOut in [[stage_in]]) {
     float grid = (fmod(floor(in.uv.x * 24.0) + floor(in.uv.y * 14.0), 2.0) < 1.0) ? 0.12 : 0.16;
