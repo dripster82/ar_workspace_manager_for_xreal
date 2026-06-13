@@ -183,7 +183,7 @@ struct ControlPanelView: View {
                         workspace.virtualScreens.append(
                             VirtualScreenConfig(name: "Ultrawide \(workspace.virtualScreens.count + 1)",
                                                 width: 5120, height: 1080,
-                                                curvatureRadius: 2.0))
+                                                curvatureRadius: 0.6))
                         coordinator.workspaceStore.activeWorkspace = workspace
                         coordinator.saveWorkspaces()
                         coordinator.objectWillChange.send()
@@ -260,7 +260,7 @@ struct ScreenRow: View {
                 slider("Pitch", $config.pitchDegrees, -60...60, "°")
                 slider("Distance", $config.distanceMeters, 0.5...6, "m")
                 slider("Scale", $config.scale, 0.3...3, "×")
-                slider("Curve r", $config.curvatureRadius, 0...5, "m")
+                slider("Curve", $config.curvatureRadius, 0...1, "")
             }
             .padding(.leading, 8)
         } label: {

@@ -317,7 +317,7 @@ final class AppCoordinator: ObservableObject {
             distance: Float(config.distanceMeters),
             widthMeters: baseWidth,
             aspect: Float(config.width) / Float(config.height),
-            curvatureRadius: Float(config.curvatureRadius),
+            curveAmount: Float(config.curvatureRadius),
             textureProvider: { [weak capture] in capture?.latestTexture }
         )
     }

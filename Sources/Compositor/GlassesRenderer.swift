@@ -20,6 +20,9 @@ public final class GlassesRenderer: NSObject {
 
     private var screenPipeline: MTLRenderPipelineState!
     private var placeholderPipeline: MTLRenderPipelineState!
+    private var depthState: MTLDepthStencilState!
+    private var depthTexture: MTLTexture?
+    private static let depthFormat: MTLPixelFormat = .depth32Float
 
     private let poseStore: PoseStore
     private let lock = NSLock()
@@ -55,6 +58,10 @@ public final class GlassesRenderer: NSObject {
             NSLog("GlassesRenderer: shader compile failed: \(error)")
             return nil
         }
+        let depthDesc = MTLDepthStencilDescriptor()
+        depthDesc.depthCompareFunction = .less
+        depthDesc.isDepthWriteEnabled = true
+        depthState = device.makeDepthStencilState(descriptor: depthDesc)
     }
 
     private func makePipeline(library: MTLLibrary, fragment: String) throws -> MTLRenderPipelineState {
@@ -62,7 +69,18 @@ public final class GlassesRenderer: NSObject {
         desc.vertexFunction = library.makeFunction(name: "screen_vertex")
         desc.fragmentFunction = library.makeFunction(name: fragment)
         desc.colorAttachments[0].pixelFormat = .bgra8Unorm
+        desc.depthAttachmentPixelFormat = Self.depthFormat
         return try device.makeRenderPipelineState(descriptor: desc)
+    }
+
+    private func depthTexture(width: Int, height: Int) -> MTLTexture? {
+        if let t = depthTexture, t.width == width, t.height == height { return t }
+        let desc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: Self.depthFormat, width: max(1, width), height: max(1, height), mipmapped: false)
+        desc.usage = .renderTarget
+        desc.storageMode = .private
+        depthTexture = device.makeTexture(descriptor: desc)
+        return depthTexture
     }
 
     // MARK: Scene
@@ -227,8 +245,14 @@ public final class GlassesRenderer: NSObject {
         pass.colorAttachments[0].loadAction = .clear
         pass.colorAttachments[0].storeAction = .store
         pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+        pass.depthAttachment.texture = depthTexture(width: drawable.texture.width,
+                                                    height: drawable.texture.height)
+        pass.depthAttachment.loadAction = .clear
+        pass.depthAttachment.storeAction = .dontCare
+        pass.depthAttachment.clearDepth = 1.0
 
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
+        encoder.setDepthStencilState(depthState)
 
         lock.lock()
         let currentScreens = screens

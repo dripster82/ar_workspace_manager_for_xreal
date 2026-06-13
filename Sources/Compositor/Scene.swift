@@ -11,18 +11,18 @@ public struct SceneScreen: Identifiable {
     public var distance: Float      // meters
     public var widthMeters: Float   // apparent width at `distance`
     public var aspect: Float        // width / height of content
-    public var curvatureRadius: Float // 0 = flat
+    public var curveAmount: Float   // 0 = flat … 1 = maximum wrap (width preserved)
     public var textureProvider: () -> MTLTexture?
 
     public init(id: UUID, yaw: Float, pitch: Float, distance: Float, widthMeters: Float,
-                aspect: Float, curvatureRadius: Float, textureProvider: @escaping () -> MTLTexture?) {
+                aspect: Float, curveAmount: Float, textureProvider: @escaping () -> MTLTexture?) {
         self.id = id
         self.yaw = yaw
         self.pitch = pitch
         self.distance = distance
         self.widthMeters = widthMeters
         self.aspect = aspect
-        self.curvatureRadius = curvatureRadius
+        self.curveAmount = max(0, min(1, curveAmount))
         self.textureProvider = textureProvider
     }
 
@@ -33,9 +33,13 @@ public struct SceneScreen: Identifiable {
 
     /// Tessellate into a triangle list. Flat screens are a single quad; curved
     /// screens are segmented along the horizontal axis around the viewer.
+    /// Total horizontal arc (radians) at curveAmount = 1. ~80° gives a strong but
+    /// comfortable wrap without the screen folding back on itself.
+    private static let maxArc: Float = 80 * .pi / 180
+
     func vertices() -> [Vertex] {
         let height = widthMeters / aspect
-        let segments = curvatureRadius > 0.01 ? max(8, Int(widthMeters * 16)) : 1
+        let segments = curveAmount > 0.001 ? max(8, Int(widthMeters * 16)) : 1
         var verts: [Vertex] = []
         verts.reserveCapacity(segments * 6)
 
@@ -61,13 +65,16 @@ public struct SceneScreen: Identifiable {
     private func point(u: Float, v: Float, height: Float) -> SIMD3<Float> {
         let y = (0.5 - v) * height
         var local: SIMD3<Float>
-        if curvatureRadius > 0.01 {
-            // Wrap the screen width onto a cylinder of radius `curvatureRadius`
-            // centred on the viewer, then push it out to `distance`.
-            let arc = widthMeters / curvatureRadius
-            let a = (u - 0.5) * arc
-            let r = distance
-            local = SIMD3(sinf(a) * r, y, -cosf(a) * r)
+        if curveAmount > 0.001 {
+            // Bend the screen onto a cylinder while keeping its arc length equal to
+            // widthMeters (so curving doesn't change the screen's size). The total
+            // subtended angle scales with curveAmount; radius follows from arc length.
+            let theta = curveAmount * Self.maxArc          // full angle across the screen
+            let radius = widthMeters / theta               // so arc length == widthMeters
+            let a = (u - 0.5) * theta                       // this column's angle
+            // Centre of curvature sits behind the screen centre; centre stays at -distance.
+            let cz = -(distance - radius)
+            local = SIMD3(sinf(a) * radius, y, cz - cosf(a) * radius)
         } else {
             let x = (u - 0.5) * widthMeters
             local = SIMD3(x, y, -distance)
