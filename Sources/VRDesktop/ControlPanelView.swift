@@ -482,8 +482,8 @@ struct ScreenRow: View {
                 }
                 .pickerStyle(.segmented)
                 .help("Anchored: fixed in space. Floating: stays in view (yaw/pitch/distance are the offset).")
-                slider("Yaw", $cfg.yawDegrees, -150...150, "°")
-                slider("Pitch", $cfg.pitchDegrees, -60...60, "°")
+                slider("Yaw", $cfg.yawDegrees, -180...180, "°")
+                slider("Pitch", $cfg.pitchDegrees, -90...90, "°")
                 slider("Distance", $cfg.distanceMeters, 0.5...6, "m")
                 slider("Scale", $cfg.scale, 0.3...3, "×")
                 curveSlider("Curve", $cfg.curvatureRadius, auto: $cfg.autoCurveH)
@@ -538,12 +538,23 @@ struct ScreenRow: View {
 /// screen is a box you drag to set its yaw (horizontal) and pitch (vertical).
 struct PlacementMapView: View {
     @ObservedObject var coordinator: AppCoordinator
+    @State private var zoomAnchored = 1.0
+    @State private var zoomFloating = 1.0
+
+    // Base half-ranges (degrees). Anchored covers the full sphere; floating only the FOV + margin.
+    private static let anchoredYaw = 180.0, anchoredPitch = 90.0
+    private static let fovHDeg = 40.0, fovVDeg = 23.0
+    private static let floatMargin = 50.0
+    private static var floatYaw: Double { fovHDeg / 2 + floatMargin }
+    private static var floatPitch: Double { fovVDeg / 2 + floatMargin }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            zone(title: "Around you (anchored)", placement: .anchored, accent: .blue)
-            zone(title: "In view (floating)", placement: .floating, accent: .accentColor)
-            Text("Drag to position. Left↔right = yaw, up↔down = pitch. Set Anchored/Floating per screen below.")
+            zone(title: "Around you (anchored)", placement: .anchored, accent: .blue,
+                 baseYaw: Self.anchoredYaw, basePitch: Self.anchoredPitch, zoom: $zoomAnchored)
+            zone(title: "In view (floating)", placement: .floating, accent: .accentColor,
+                 baseYaw: Self.floatYaw, basePitch: Self.floatPitch, zoom: $zoomFloating)
+            Text("Drag to position. Left↔right = yaw, up↔down = pitch. Use +/− to zoom.")
                 .font(.caption2).foregroundStyle(.secondary)
         }
     }
@@ -552,14 +563,23 @@ struct PlacementMapView: View {
         coordinator.editableScreens().filter { $0.showInAR && $0.placement == placement }
     }
 
-    // Map ranges (must match ScreenBox) and the glasses' field of view in degrees.
-    private static let yawRange = 150.0, pitchRange = 60.0
-    private static let fovHDeg = 40.0, fovVDeg = 23.0
-
-    private func zone(title: String, placement: ScreenPlacement, accent: Color) -> some View {
+    private func zone(title: String, placement: ScreenPlacement, accent: Color,
+                      baseYaw: Double, basePitch: Double, zoom: Binding<Double>) -> some View {
         let spaceName = "zone-\(placement.rawValue)"
+        let yawRange = baseYaw / zoom.wrappedValue
+        let pitchRange = basePitch / zoom.wrappedValue
         return VStack(alignment: .leading, spacing: 3) {
-            Text(title).font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Text(title).font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button { zoom.wrappedValue = max(1, zoom.wrappedValue / 1.25) } label: {
+                    Image(systemName: "minus.magnifyingglass")
+                }.disabled(zoom.wrappedValue <= 1.0001)
+                Button { zoom.wrappedValue = min(6, zoom.wrappedValue * 1.25) } label: {
+                    Image(systemName: "plus.magnifyingglass")
+                }
+            }
+            .buttonStyle(.borderless).controlSize(.small)
             GeometryReader { geo in
                 ZStack(alignment: .topLeading) {
                     RoundedRectangle(cornerRadius: 8).fill(Color.gray.opacity(0.12))
@@ -569,8 +589,8 @@ struct PlacementMapView: View {
                         .position(x: geo.size.width / 2, y: geo.size.height / 2)
                     // Field-of-view outline (what the glasses can show at once), centred.
                     if placement == .floating {
-                        let fovW = CGFloat(Self.fovHDeg / (2 * Self.yawRange)) * geo.size.width
-                        let fovH = CGFloat(Self.fovVDeg / (2 * Self.pitchRange)) * geo.size.height
+                        let fovW = CGFloat(Self.fovHDeg / (2 * yawRange)) * geo.size.width
+                        let fovH = CGFloat(Self.fovVDeg / (2 * pitchRange)) * geo.size.height
                         RoundedRectangle(cornerRadius: 4)
                             .strokeBorder(.green.opacity(0.6),
                                           style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
@@ -579,12 +599,13 @@ struct PlacementMapView: View {
                     }
                     ForEach(screens(placement)) { cfg in
                         ScreenBox(initial: cfg, area: geo.size, coordinateSpace: spaceName,
-                                  accent: accent,
+                                  accent: accent, yawRange: yawRange, pitchRange: pitchRange,
                                   lookedAt: coordinator.lookedAtScreenID == cfg.id,
                                   onChange: { coordinator.updateScreen($0) })
                     }
                 }
                 .coordinateSpace(name: spaceName)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
             }
             .frame(height: 132)
         }
@@ -596,36 +617,38 @@ private struct ScreenBox: View {
     let area: CGSize
     let coordinateSpace: String
     let accent: Color
+    let yawRange: Double
+    let pitchRange: Double
     let lookedAt: Bool
     var onChange: (VirtualScreenConfig) -> Void
 
     @State private var cfg: VirtualScreenConfig
 
     init(initial: VirtualScreenConfig, area: CGSize, coordinateSpace: String, accent: Color,
+         yawRange: Double, pitchRange: Double,
          lookedAt: Bool, onChange: @escaping (VirtualScreenConfig) -> Void) {
         self.initial = initial
         self.area = area
         self.coordinateSpace = coordinateSpace
         self.accent = accent
+        self.yawRange = yawRange
+        self.pitchRange = pitchRange
         self.lookedAt = lookedAt
         self.onChange = onChange
         _cfg = State(initialValue: initial)
     }
 
-    // yaw [-150,150] → x; pitch [+60,-60] → y (up = top)
-    private static let yawRange = 150.0, pitchRange = 60.0
-
     private func point() -> CGPoint {
         // Map left↔right so dragging right moves the screen to the viewer's right.
-        CGPoint(x: (Self.yawRange - cfg.yawDegrees) / (2 * Self.yawRange) * area.width,
-                y: (Self.pitchRange - cfg.pitchDegrees) / (2 * Self.pitchRange) * area.height)
+        CGPoint(x: (yawRange - cfg.yawDegrees) / (2 * yawRange) * area.width,
+                y: (pitchRange - cfg.pitchDegrees) / (2 * pitchRange) * area.height)
     }
 
     private func apply(location: CGPoint) {
         let x = min(max(0, location.x), area.width)
         let y = min(max(0, location.y), area.height)
-        cfg.yawDegrees = (1 - Double(x / max(1, area.width)) * 2) * Self.yawRange
-        cfg.pitchDegrees = Self.pitchRange - Double(y / max(1, area.height)) * 2 * Self.pitchRange
+        cfg.yawDegrees = (1 - Double(x / max(1, area.width)) * 2) * yawRange
+        cfg.pitchDegrees = pitchRange - Double(y / max(1, area.height)) * 2 * pitchRange
         onChange(cfg)
     }
 
@@ -641,8 +664,8 @@ private struct ScreenBox: View {
         let dist = max(0.1, cfg.distanceMeters)
         let angW = 2 * atan((widthMeters / 2) / dist) * 180 / .pi
         let angH = 2 * atan((heightMeters / 2) / dist) * 180 / .pi
-        let w = max(14, CGFloat(angW / (2 * Self.yawRange)) * area.width)
-        let h = max(10, CGFloat(angH / (2 * Self.pitchRange)) * area.height)
+        let w = max(14, CGFloat(angW / (2 * yawRange)) * area.width)
+        let h = max(10, CGFloat(angH / (2 * pitchRange)) * area.height)
         return RoundedRectangle(cornerRadius: 4)
             .fill(accent.opacity(0.45))
             .overlay(
