@@ -203,9 +203,11 @@ struct ControlPanelView: View {
                 .onChange(of: coordinator.workspaceStore.activeWorkspaceID) { _ in syncWorkspaceName() }
 
             ForEach(coordinator.editableScreens()) { screen in
-                ScreenRow(config: binding(for: screen.id),
+                ScreenRow(initial: screen,
                           isPhysical: isPhysical(screen.id),
+                          onChange: { coordinator.updateScreen($0) },
                           onRemove: { coordinator.removeScreen(id: screen.id) })
+                    .id(screen.id)
             }
 
             HStack {
@@ -246,15 +248,6 @@ struct ControlPanelView: View {
         coordinator.workspaceStore.activeWorkspace?.physicalInAR.values.contains { $0.id == id } ?? false
     }
 
-    private func binding(for id: UUID) -> Binding<VirtualScreenConfig> {
-        Binding(
-            get: {
-                coordinator.bindingForScreen(id: id)
-                ?? VirtualScreenConfig(name: "?", width: 1920, height: 1080)
-            },
-            set: { newValue in coordinator.updateScreen(newValue) }
-        )
-    }
 
     private var testSection: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -295,27 +288,37 @@ struct ControlPanelView: View {
 }
 
 struct ScreenRow: View {
-    @Binding var config: VirtualScreenConfig
+    let initial: VirtualScreenConfig
     var isPhysical: Bool = false
+    var onChange: (VirtualScreenConfig) -> Void = { _ in }
     var onRemove: () -> Void = {}
+
+    // Local editing state so slider values update live during a drag (the live-update
+    // path to the renderer doesn't re-publish, which otherwise froze the UI numbers).
+    @State private var cfg: VirtualScreenConfig
     @State private var expanded = false
+
+    init(initial: VirtualScreenConfig, isPhysical: Bool = false,
+         onChange: @escaping (VirtualScreenConfig) -> Void = { _ in },
+         onRemove: @escaping () -> Void = {}) {
+        self.initial = initial
+        self.isPhysical = isPhysical
+        self.onChange = onChange
+        self.onRemove = onRemove
+        _cfg = State(initialValue: initial)
+    }
 
     var body: some View {
         DisclosureGroup(isExpanded: $expanded) {
             VStack(alignment: .leading, spacing: 6) {
-                slider("Yaw", $config.yawDegrees, -150...150, "°")
-                slider("Pitch", $config.pitchDegrees, -60...60, "°")
-                slider("Distance", $config.distanceMeters, 0.5...6, "m")
-                slider("Scale", $config.scale, 0.3...3, "×")
-                Toggle("Auto curve (follow the space)", isOn: $config.autoCurve)
-                    .font(.caption)
-                    .help("Curves the screen onto the sphere around you — closer screens curve more")
-                if !config.autoCurve {
-                    slider("Curve", $config.curvatureRadius, 0...5, "")
-                    slider("V. curve", $config.verticalCurve, 0...5, "")
-                }
+                slider("Yaw", $cfg.yawDegrees, -150...150, "°")
+                slider("Pitch", $cfg.pitchDegrees, -60...60, "°")
+                slider("Distance", $cfg.distanceMeters, 0.5...6, "m")
+                slider("Scale", $cfg.scale, 0.3...3, "×")
+                curveSlider("Curve", $cfg.curvatureRadius, auto: $cfg.autoCurveH)
+                curveSlider("V. curve", $cfg.verticalCurve, auto: $cfg.autoCurveV)
                 HStack {
-                    Button("Reset placement") { config.resetPlacement() }
+                    Button("Reset placement") { cfg.resetPlacement() }
                     Button("Remove", role: .destructive) { onRemove() }
                 }
                 .controlSize(.small)
@@ -323,14 +326,16 @@ struct ScreenRow: View {
             .padding(.leading, 8)
         } label: {
             HStack {
-                Toggle("", isOn: $config.showInAR).labelsHidden()
+                Toggle("", isOn: $cfg.showInAR).labelsHidden()
                 Image(systemName: isPhysical ? "display" : "rectangle.on.rectangle")
                     .foregroundStyle(.secondary)
-                Text(config.name)
-                Text("\(config.width)×\(config.height)")
+                Text(cfg.name)
+                Text("\(cfg.width)×\(cfg.height)")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
+        .onChange(of: cfg) { newValue in onChange(newValue) }
+        .onChange(of: initial) { newValue in if newValue != cfg { cfg = newValue } }
     }
 
     private func slider(_ label: String, _ value: Binding<Double>,
@@ -340,6 +345,18 @@ struct ScreenRow: View {
             Slider(value: value, in: range)
             Text(String(format: "%.1f%@", value.wrappedValue, unit))
                 .frame(width: 52).font(.caption).monospacedDigit()
+        }
+    }
+
+    private func curveSlider(_ label: String, _ value: Binding<Double>,
+                             auto: Binding<Bool>) -> some View {
+        HStack {
+            Text(label).frame(width: 60, alignment: .leading).font(.caption)
+            Slider(value: value, in: 0...5).disabled(auto.wrappedValue)
+            Toggle("auto", isOn: auto).toggleStyle(.checkbox).font(.caption).fixedSize()
+            Text(auto.wrappedValue ? "auto" : String(format: "%.1f", value.wrappedValue))
+                .frame(width: 34).font(.caption).monospacedDigit()
+                .foregroundStyle(auto.wrappedValue ? .secondary : .primary)
         }
     }
 }
