@@ -92,7 +92,7 @@ struct ControlPanelView: View {
                         Slider(value: Binding(
                             get: { coordinator.glassesBrightness + 1 },
                             set: { coordinator.glassesBrightness = $0 - 1 }
-                        ), in: 1...8, step: 1) { editing in
+                        ), in: 1...9, step: 1) { editing in
                             coordinator.editingBrightness = editing
                             if !editing { coordinator.applyBrightness() }
                         }

@@ -37,11 +37,11 @@ public final class MCUService: @unchecked Sendable {
     public func setBrightness(_ value: Int, completion: (@Sendable (Bool) -> Void)? = nil) {
         queue.async { [self] in
             guard openIfNeeded() else { completion?(false); return }
-            let err = device_mcu_set_brightness(&device, UInt8(max(0, min(7, value))))
+            let err = device_mcu_set_brightness(&device, UInt8(max(0, min(8, value))))
             if err == DEVICE_MCU_ERROR_UNPLUGGED || err == DEVICE_MCU_ERROR_NO_HANDLE {
                 closeDevice() // stale handle after replug — retry once with a fresh open
                 if openIfNeeded() {
-                    completion?(device_mcu_set_brightness(&device, UInt8(max(0, min(7, value)))) == DEVICE_MCU_ERROR_NO_ERROR)
+                    completion?(device_mcu_set_brightness(&device, UInt8(max(0, min(8, value)))) == DEVICE_MCU_ERROR_NO_ERROR)
                     return
                 }
             }

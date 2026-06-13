@@ -850,9 +850,9 @@ device_mcu_error_type device_mcu_set_brightness(device_mcu_type *device, uint8_t
 		return DEVICE_MCU_ERROR_NO_HANDLE;
 	}
 
-	if (brightness > 7)
+	if (brightness > 8)
 	{
-		brightness = 7;
+		brightness = 8;
 	}
 
 	if (!send_payload_action(device, DEVICE_MCU_MSG_W_BRIGHTNESS, 1, &brightness))
