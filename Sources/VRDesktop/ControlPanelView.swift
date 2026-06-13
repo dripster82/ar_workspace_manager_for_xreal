@@ -169,6 +169,8 @@ struct ControlPanelView: View {
         }
     }
 
+    @State private var workspaceName = ""
+
     private var workspaceSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -176,59 +178,81 @@ struct ControlPanelView: View {
                 Spacer()
                 Picker("", selection: Binding(
                     get: { coordinator.workspaceStore.activeWorkspaceID },
-                    set: { coordinator.workspaceStore.activeWorkspaceID = $0
-                           coordinator.saveWorkspaces()
-                           coordinator.objectWillChange.send() }
+                    set: { coordinator.selectWorkspace($0) }
                 )) {
                     ForEach(coordinator.workspaceStore.workspaces) { ws in
                         Text(ws.name).tag(UUID?.some(ws.id))
                     }
                 }
-                .frame(width: 180)
+                .frame(width: 160)
+                Button { coordinator.addWorkspace(); syncWorkspaceName() } label: {
+                    Image(systemName: "plus")
+                }.help("New workspace")
+                Button(role: .destructive) { coordinator.deleteActiveWorkspace(); syncWorkspaceName() } label: {
+                    Image(systemName: "trash")
+                }
+                .help("Delete workspace")
+                .disabled(coordinator.workspaceStore.workspaces.count <= 1)
             }
 
-            if var workspace = coordinator.workspaceStore.activeWorkspace {
-                ForEach(workspace.virtualScreens) { screen in
-                    ScreenRow(config: binding(for: screen.id))
-                }
-                HStack {
-                    Button("Add 16:9 screen") {
-                        workspace.virtualScreens.append(
-                            VirtualScreenConfig(name: "Screen \(workspace.virtualScreens.count + 1)",
-                                                width: 2560, height: 1440))
-                        coordinator.workspaceStore.activeWorkspace = workspace
-                        coordinator.saveWorkspaces()
-                        coordinator.objectWillChange.send()
-                    }
-                    Button("Add ultrawide") {
-                        workspace.virtualScreens.append(
-                            VirtualScreenConfig(name: "Ultrawide \(workspace.virtualScreens.count + 1)",
-                                                width: 5120, height: 1080,
-                                                curvatureRadius: 1.5))
-                        coordinator.workspaceStore.activeWorkspace = workspace
-                        coordinator.saveWorkspaces()
-                        coordinator.objectWillChange.send()
-                    }
-                }
+            // Rename the active workspace.
+            TextField("Workspace name", text: $workspaceName)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { coordinator.renameActiveWorkspace(workspaceName) }
+                .onAppear { syncWorkspaceName() }
+                .onChange(of: coordinator.workspaceStore.activeWorkspaceID) { _ in syncWorkspaceName() }
+
+            ForEach(coordinator.editableScreens()) { screen in
+                ScreenRow(config: binding(for: screen.id),
+                          isPhysical: isPhysical(screen.id),
+                          onRemove: { coordinator.removeScreen(id: screen.id) })
             }
+
+            HStack {
+                Button("Add 16:9") {
+                    let n = (coordinator.workspaceStore.activeWorkspace?.virtualScreens.count ?? 0) + 1
+                    coordinator.addVirtualScreen(
+                        VirtualScreenConfig(name: "Screen \(n)", width: 2560, height: 1440))
+                }
+                Button("Add ultrawide") {
+                    let n = (coordinator.workspaceStore.activeWorkspace?.virtualScreens.count ?? 0) + 1
+                    coordinator.addVirtualScreen(
+                        VirtualScreenConfig(name: "Ultrawide \(n)", width: 5120, height: 1080,
+                                            curvatureRadius: 1.5))
+                }
+                let physicals = coordinator.availablePhysicalDisplays()
+                Menu("Add monitor") {
+                    if physicals.isEmpty {
+                        Text("No available monitors").disabled(true)
+                    }
+                    ForEach(physicals, id: \.uuid) { display in
+                        Button(display.name) {
+                            coordinator.addPhysicalScreen(uuidString: display.uuid, name: display.name)
+                        }
+                    }
+                }
+                .frame(width: 130)
+            }
+            Text("Monitors appear in AR while still showing on the physical screen.")
+                .font(.caption2).foregroundStyle(.secondary)
         }
+    }
+
+    private func syncWorkspaceName() {
+        workspaceName = coordinator.workspaceStore.activeWorkspace?.name ?? ""
+    }
+
+    private func isPhysical(_ id: UUID) -> Bool {
+        coordinator.workspaceStore.activeWorkspace?.physicalInAR.values.contains { $0.id == id } ?? false
     }
 
     private func binding(for id: UUID) -> Binding<VirtualScreenConfig> {
         Binding(
             get: {
-                coordinator.workspaceStore.activeWorkspace?
-                    .virtualScreens.first(where: { $0.id == id })
+                coordinator.bindingForScreen(id: id)
                 ?? VirtualScreenConfig(name: "?", width: 1920, height: 1080)
             },
-            set: { newValue in
-                guard var ws = coordinator.workspaceStore.activeWorkspace,
-                      let i = ws.virtualScreens.firstIndex(where: { $0.id == id }) else { return }
-                ws.virtualScreens[i] = newValue
-                coordinator.workspaceStore.activeWorkspace = ws
-                coordinator.saveWorkspaces()
-                coordinator.liveUpdateScreens() // apply placement changes to the running AR view
-            }
+            set: { newValue in coordinator.updateScreen(newValue) }
         )
     }
 
@@ -272,6 +296,8 @@ struct ControlPanelView: View {
 
 struct ScreenRow: View {
     @Binding var config: VirtualScreenConfig
+    var isPhysical: Bool = false
+    var onRemove: () -> Void = {}
     @State private var expanded = false
 
     var body: some View {
@@ -282,13 +308,18 @@ struct ScreenRow: View {
                 slider("Distance", $config.distanceMeters, 0.5...6, "m")
                 slider("Scale", $config.scale, 0.3...3, "×")
                 slider("Curve", $config.curvatureRadius, 0...5, "")
-                Button("Reset placement") { config.resetPlacement() }
-                    .controlSize(.small)
+                HStack {
+                    Button("Reset placement") { config.resetPlacement() }
+                    Button("Remove", role: .destructive) { onRemove() }
+                }
+                .controlSize(.small)
             }
             .padding(.leading, 8)
         } label: {
             HStack {
                 Toggle("", isOn: $config.showInAR).labelsHidden()
+                Image(systemName: isPhysical ? "display" : "rectangle.on.rectangle")
+                    .foregroundStyle(.secondary)
                 Text(config.name)
                 Text("\(config.width)×\(config.height)")
                     .font(.caption).foregroundStyle(.secondary)

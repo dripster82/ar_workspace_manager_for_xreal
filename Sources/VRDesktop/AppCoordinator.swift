@@ -161,6 +161,7 @@ final class AppCoordinator: ObservableObject {
         didSet { renderer?.ipd = Float(ipdMillimeters / 1000) }
     }
     private var glassesDisplayID: CGDirectDisplayID = 0
+    private var lastOutputScreenID: CGDirectDisplayID = 0
 
     var sbsModeAvailable: Bool {
         glassesDisplayID != 0 &&
@@ -305,6 +306,7 @@ final class AppCoordinator: ObservableObject {
 
         let outputDisplayID = Self.screenDisplayID(screen)
         glassesDisplayID = outputDisplayID
+        lastOutputScreenID = outputDisplayID
 
         // 1. Create virtual displays for the workspace.
         var sceneScreens: [SceneScreen] = []
@@ -396,6 +398,153 @@ final class AppCoordinator: ObservableObject {
             }
         }
         return nil
+    }
+
+    static func displayUUIDString(_ id: CGDirectDisplayID) -> String? {
+        guard let uuid = CGDisplayCreateUUIDFromDisplayID(id)?.takeRetainedValue() else { return nil }
+        return CFUUIDCreateString(nil, uuid) as String
+    }
+
+    // MARK: Workspace editing
+
+    func selectWorkspace(_ id: UUID?) {
+        guard id != workspaceStore.activeWorkspaceID else { return }
+        workspaceStore.activeWorkspaceID = id
+        workspaceStore.save()
+        objectWillChange.send()
+        restartARIfActive()
+    }
+
+    func addWorkspace() {
+        let ws = Workspace(name: "Workspace \(workspaceStore.workspaces.count + 1)")
+        workspaceStore.append(ws)
+        workspaceStore.activeWorkspaceID = ws.id
+        workspaceStore.save()
+        objectWillChange.send()
+        restartARIfActive()
+    }
+
+    func renameActiveWorkspace(_ name: String) {
+        guard var ws = workspaceStore.activeWorkspace else { return }
+        ws.name = name
+        workspaceStore.activeWorkspace = ws
+        workspaceStore.save()
+        objectWillChange.send()
+    }
+
+    func deleteActiveWorkspace() {
+        guard workspaceStore.workspaces.count > 1,
+              let id = workspaceStore.activeWorkspaceID else { return }
+        workspaceStore.remove(id: id)
+        workspaceStore.activeWorkspaceID = workspaceStore.workspaces.first?.id
+        workspaceStore.save()
+        objectWillChange.send()
+        restartARIfActive()
+    }
+
+    /// Restart AR on the same output so a workspace change rebuilds its virtual displays.
+    private func restartARIfActive() {
+        guard arActive, lastOutputScreenID != 0 else { return }
+        let id = lastOutputScreenID
+        stopAR()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            guard let self,
+                  let screen = NSScreen.screens.first(where: { Self.screenDisplayID($0) == id }) else { return }
+            self.startAR(on: screen)
+        }
+    }
+
+    // MARK: Screen editing (live add / remove)
+
+    func addVirtualScreen(_ config: VirtualScreenConfig) {
+        guard var ws = workspaceStore.activeWorkspace else { return }
+        ws.virtualScreens.append(config)
+        workspaceStore.activeWorkspace = ws
+        workspaceStore.save()
+        objectWillChange.send()
+        guard arActive, config.showInAR,
+              let displayID = virtualDisplays.create(config) ?? nil,
+              displayID != glassesDisplayID else { return }
+        _ = makeSceneScreen(config: config, captureDisplayID: displayID)
+        liveUpdateScreens()
+    }
+
+    /// Physical displays available to add as AR panels (excludes the glasses output,
+    /// our own virtual displays, and ones already added).
+    func availablePhysicalDisplays() -> [(uuid: String, name: String)] {
+        let virtualIDs = Set(virtualDisplays.active.values.map { $0.displayID })
+        let alreadyAdded = Set(workspaceStore.activeWorkspace?.physicalInAR.keys ?? [:].keys)
+        var result: [(String, String)] = []
+        for screen in NSScreen.screens {
+            let id = Self.screenDisplayID(screen)
+            guard id != glassesDisplayID, !virtualIDs.contains(id),
+                  let uuid = Self.displayUUIDString(id), !alreadyAdded.contains(uuid) else { continue }
+            result.append((uuid, screen.localizedName))
+        }
+        return result
+    }
+
+    func addPhysicalScreen(uuidString: String, name: String) {
+        guard var ws = workspaceStore.activeWorkspace else { return }
+        let displayID = Self.resolvePhysicalDisplay(uuidString: uuidString)
+        let size = displayID.flatMap { id in NSScreen.screens.first { Self.screenDisplayID($0) == id } }?.frame.size
+        let config = VirtualScreenConfig(
+            name: name,
+            width: Int(size?.width ?? 1920),
+            height: Int(size?.height ?? 1080))
+        ws.physicalInAR[uuidString] = config
+        workspaceStore.activeWorkspace = ws
+        workspaceStore.save()
+        objectWillChange.send()
+        guard arActive, let displayID, displayID != glassesDisplayID else { return }
+        _ = makeSceneScreen(config: config, captureDisplayID: displayID)
+        liveUpdateScreens()
+    }
+
+    func removeScreen(id: UUID) {
+        guard var ws = workspaceStore.activeWorkspace else { return }
+        if let idx = ws.virtualScreens.firstIndex(where: { $0.id == id }) {
+            ws.virtualScreens.remove(at: idx)
+        } else if let key = ws.physicalInAR.first(where: { $0.value.id == id })?.key {
+            ws.physicalInAR.removeValue(forKey: key)
+        } else {
+            return
+        }
+        workspaceStore.activeWorkspace = ws
+        workspaceStore.save()
+        objectWillChange.send()
+        if let capture = captures[id] {
+            captures.removeValue(forKey: id)
+            Task { await capture.stop() }
+        }
+        virtualDisplays.destroy(id) // no-op if it was a physical screen
+        liveUpdateScreens()
+    }
+
+    /// All editable screens in the active workspace (virtual + physical), for the UI list.
+    func editableScreens() -> [VirtualScreenConfig] {
+        guard let ws = workspaceStore.activeWorkspace else { return [] }
+        return ws.virtualScreens + ws.physicalInAR.values.sorted { $0.name < $1.name }
+    }
+
+    func bindingForScreen(id: UUID) -> VirtualScreenConfig? {
+        guard let ws = workspaceStore.activeWorkspace else { return nil }
+        return ws.virtualScreens.first { $0.id == id }
+            ?? ws.physicalInAR.values.first { $0.id == id }
+    }
+
+    func updateScreen(_ config: VirtualScreenConfig) {
+        guard var ws = workspaceStore.activeWorkspace else { return }
+        if let i = ws.virtualScreens.firstIndex(where: { $0.id == config.id }) {
+            ws.virtualScreens[i] = config
+        } else if let key = ws.physicalInAR.first(where: { $0.value.id == config.id })?.key {
+            ws.physicalInAR[key] = config
+        } else {
+            return
+        }
+        workspaceStore.activeWorkspace = ws
+        workspaceStore.save()
+        liveUpdateScreens()
     }
 
     func stopAR() {

@@ -182,4 +182,12 @@ public final class WorkspaceStore {
             workspaces[i] = newValue
         }
     }
+
+    public func append(_ workspace: Workspace) {
+        workspaces.append(workspace)
+    }
+
+    public func remove(id: UUID) {
+        workspaces.removeAll { $0.id == id }
+    }
 }
