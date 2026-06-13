@@ -307,7 +307,13 @@ struct ScreenRow: View {
                 slider("Pitch", $config.pitchDegrees, -60...60, "°")
                 slider("Distance", $config.distanceMeters, 0.5...6, "m")
                 slider("Scale", $config.scale, 0.3...3, "×")
-                slider("Curve", $config.curvatureRadius, 0...5, "")
+                Toggle("Auto curve (follow the space)", isOn: $config.autoCurve)
+                    .font(.caption)
+                    .help("Curves the screen onto the sphere around you — closer screens curve more")
+                if !config.autoCurve {
+                    slider("Curve", $config.curvatureRadius, 0...5, "")
+                    slider("V. curve", $config.verticalCurve, 0...5, "")
+                }
                 HStack {
                     Button("Reset placement") { config.resetPlacement() }
                     Button("Remove", role: .destructive) { onRemove() }
