@@ -214,7 +214,7 @@ struct ControlPanelView: View {
                 Button("Add 16:9") {
                     let n = (coordinator.workspaceStore.activeWorkspace?.virtualScreens.count ?? 0) + 1
                     coordinator.addVirtualScreen(
-                        VirtualScreenConfig(name: "Screen \(n)", width: 2560, height: 1440))
+                        VirtualScreenConfig(name: "Screen \(n)", width: 2560, height: 1440, hiDPI: true))
                 }
                 Button("Add ultrawide") {
                     let n = (coordinator.workspaceStore.activeWorkspace?.virtualScreens.count ?? 0) + 1

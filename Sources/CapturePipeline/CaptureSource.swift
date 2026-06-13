@@ -37,8 +37,15 @@ public final class CaptureSource: NSObject, @unchecked Sendable {
         }
         let filter = SCContentFilter(display: display, excludingWindows: [])
         let config = SCStreamConfiguration()
-        config.width = display.width * 2  // capture at HiDPI backing scale when available
-        config.height = display.height * 2
+        // Capture at the display's true native pixel resolution so HiDPI (Retina)
+        // displays stay crisp and 1× displays aren't upscaled into softness.
+        if let mode = CGDisplayCopyDisplayMode(displayID) {
+            config.width = mode.pixelWidth
+            config.height = mode.pixelHeight
+        } else {
+            config.width = display.width
+            config.height = display.height
+        }
         config.pixelFormat = kCVPixelFormatType_32BGRA
         config.minimumFrameInterval = CMTime(value: 1, timescale: 60)
         config.queueDepth = 3

@@ -126,14 +126,23 @@ public final class VirtualDisplayService {
         NSClassFromString("CGVirtualDisplay") != nil
     }
 
+    /// Apple Silicon display controllers cap the pixel width of a single pipe (~6.7k);
+    /// a 2× backing wider than this fails, so fall back to 1× for very wide screens.
+    private static let maxHiDPIBackingWidth = 6144
+
     @discardableResult
     public func create(_ config: VirtualScreenConfig) -> CGDirectDisplayID? {
         guard Self.isAvailable else { return nil }
 
+        let hiDPI = config.hiDPI && (config.width * 2 <= Self.maxHiDPIBackingWidth)
+        if config.hiDPI && !hiDPI {
+            NSLog("VirtualDisplayService: '\(config.name)' too wide for HiDPI backing — using 1×")
+        }
+
         let descriptor = CGVirtualDisplayDescriptor()
         descriptor.name = config.name
-        descriptor.maxPixelsWide = UInt32(config.width * (config.hiDPI ? 2 : 1))
-        descriptor.maxPixelsHigh = UInt32(config.height * (config.hiDPI ? 2 : 1))
+        descriptor.maxPixelsWide = UInt32(config.width * (hiDPI ? 2 : 1))
+        descriptor.maxPixelsHigh = UInt32(config.height * (hiDPI ? 2 : 1))
         // Approximate physical size at ~100 ppi so macOS picks sensible default scaling.
         descriptor.sizeInMillimeters = CGSize(width: Double(config.width) * 0.254,
                                               height: Double(config.height) * 0.254)
@@ -146,8 +155,8 @@ public final class VirtualDisplayService {
         let display = CGVirtualDisplay(descriptor: descriptor)
 
         let settings = CGVirtualDisplaySettings()
-        settings.hiDPI = config.hiDPI ? 1 : 0
-        if config.hiDPI {
+        settings.hiDPI = hiDPI ? 1 : 0
+        if hiDPI {
             settings.modes = [CGVirtualDisplayMode(width: UInt32(config.width * 2),
                                                    height: UInt32(config.height * 2),
                                                    refreshRate: 60)]
@@ -201,7 +210,7 @@ public final class WorkspaceStore {
             activeWorkspaceID = saved.activeWorkspaceID
         } else {
             let defaultWS = Workspace(name: "Default", virtualScreens: [
-                VirtualScreenConfig(name: "Main", width: 2560, height: 1440),
+                VirtualScreenConfig(name: "Main", width: 2560, height: 1440, hiDPI: true),
             ])
             workspaces = [defaultWS]
             activeWorkspaceID = defaultWS.id
