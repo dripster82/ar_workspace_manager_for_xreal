@@ -291,34 +291,49 @@ final class AppCoordinator: ObservableObject {
             stereoEnabled = false
             return
         }
+        // Tear the output (CAMetalDisplayLink) down BEFORE reconfiguring the display — a live
+        // display link against a display whose mode changes underneath it crashes QuartzCore.
+        switchingDisplayMode = true
+        renderer.stopOutput()
+        renderer.stereoEnabled = on
+        stereoEnabled = on
+
         if on {
-            switchingDisplayMode = true // don't let the renegotiation look like an unplug
             MCUService.shared.setDisplayMode(.sbs3840x1080_60) { ok in
                 Task { @MainActor in
                     if !ok { self.statusMessage = "Glasses didn't accept SBS mode" }
                 }
             }
-            // Give the glasses a moment to renegotiate, then drive 3840×1080 from macOS.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
                 guard let self else { return }
                 let switched = DisplayModeSwitcher.switchTo(displayID: self.glassesDisplayID,
                                                             width: 3840, height: 1080)
-                renderer.stereoEnabled = true
-                self.stereoEnabled = true
                 self.statusMessage = switched
                     ? "SBS stereo on (3840×1080)"
                     : "SBS rendering on, but no 3840×1080 macOS mode — image may be squished"
                 DebugLog.shared.log("SBS on: macOS 3840x1080 switch=\(switched)")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { self.switchingDisplayMode = false }
+                self.restartOutputOnGlasses(after: 1.0)
             }
         } else {
-            switchingDisplayMode = true
-            renderer.stereoEnabled = false
-            stereoEnabled = false
             DisplayModeSwitcher.switchTo(displayID: glassesDisplayID, width: 1920, height: 1080)
             MCUService.shared.setDisplayMode(.mono1080p60)
             statusMessage = "SBS stereo off"
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { self.switchingDisplayMode = false }
+            restartOutputOnGlasses(after: 1.0)
+        }
+    }
+
+    /// Rebuild the AR output (and its display link) on the glasses once the display mode
+    /// has settled after an SBS switch.
+    private func restartOutputOnGlasses(after delay: Double) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, self.arActive, let renderer = self.renderer,
+                  let screen = NSScreen.screens.first(where: {
+                      Self.screenDisplayID($0) == self.glassesDisplayID
+                  }) else { self?.switchingDisplayMode = false; return }
+            renderer.startOutput(on: screen)
+            self.applyConfiguredMirrors()
+            self.updateCursorConfinement()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.switchingDisplayMode = false }
         }
     }
 
@@ -851,7 +866,12 @@ final class AppCoordinator: ObservableObject {
     func stopAR() {
         guard arActive else { return }
         DebugLog.shared.log("stopAR")
-        if stereoEnabled {
+        let wasStereo = stereoEnabled
+        cursorConfiner.stop()
+        // Tear the display link down BEFORE reverting the SBS display mode (reconfiguring a
+        // display under a live CAMetalDisplayLink crashes QuartzCore).
+        renderer?.stopOutput()
+        if wasStereo {
             renderer?.stereoEnabled = false
             stereoEnabled = false
             if glassesDisplayID != 0 {
@@ -859,8 +879,6 @@ final class AppCoordinator: ObservableObject {
             }
             MCUService.shared.setDisplayMode(.mono1080p60)
         }
-        cursorConfiner.stop()
-        renderer?.stopOutput()
         renderer?.setScreens([])
         let activeCaptures = captures.values
         captures.removeAll()
