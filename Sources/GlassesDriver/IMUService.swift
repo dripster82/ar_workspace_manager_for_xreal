@@ -86,7 +86,9 @@ public final class IMUService: @unchecked Sendable {
         // Estimate instantaneous angular velocity from successive raw orientations.
         let prev = lastSample
         var instAngVel = SIMD3<Float>.zero
-        if let prev, now > prev.t {
+        // Floor the interval: at ~1 kHz, timing jitter can give a sub-millisecond dt, and
+        // angle/tiny-dt explodes into a spurious velocity spike that snaps the prediction.
+        if let prev, now - prev.t > 0.0005 {
             let dq = raw * prev.q.inverse
             let angle = 2 * acosf(min(1, abs(dq.real)))
             if angle > 1e-5 {

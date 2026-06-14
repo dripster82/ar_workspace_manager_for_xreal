@@ -62,11 +62,17 @@ public struct Pose: Sendable {
     }
 
     /// Extrapolate the orientation `dt` seconds ahead using the last angular velocity.
+    /// The extrapolation is clamped so a noisy velocity estimate can't throw the rendered
+    /// frame ahead and snap it back: angular speed is capped at a physiological maximum and
+    /// the total predicted rotation is capped at a few degrees.
     public func predicted(by dt: Float) -> simd_quatf {
         let w = angularVelocity
         let speed = simd_length(w)
         guard speed > 1e-5, dt > 0 else { return orientation }
-        let delta = simd_quatf(angle: speed * dt, axis: w / speed)
+        let maxSpeed: Float = 400 * .pi / 180   // ~400°/s — beyond this is sensor noise
+        let maxAngle: Float = 5 * .pi / 180      // never extrapolate more than 5°
+        let angle = min(min(speed, maxSpeed) * dt, maxAngle)
+        let delta = simd_quatf(angle: angle, axis: w / speed)
         return simd_normalize(orientation * delta)
     }
 }
