@@ -15,6 +15,7 @@ public final class GlassesRenderer: NSObject {
     // crashes the WindowServer notification path (notifyDisplayAdded).
     private var metalLayer = CAMetalLayer()
     private var displayLink: CAMetalDisplayLink?
+    private var displayLinkThread: Thread?
     private var window: NSWindow?
     private var targetDisplayID: CGDirectDisplayID = 0
     private var screenObserver: NSObjectProtocol?
@@ -381,10 +382,22 @@ public final class GlassesRenderer: NSObject {
             }
         }
 
+        // Run the display link on a dedicated thread so heavy main-thread UI work (e.g. the
+        // control-panel SwiftUI updates) can't stall rendering and cause head-tracking jumps.
         let link = CAMetalDisplayLink(metalLayer: metalLayer)
         link.delegate = self
-        link.add(to: .main, forMode: .common)
         displayLink = link
+        let thread = Thread { [weak self] in
+            link.add(to: .current, forMode: .common)
+            while let self, !Thread.current.isCancelled, self.displayLink === link {
+                RunLoop.current.run(mode: .common, before: Date(timeIntervalSinceNow: 0.25))
+            }
+            link.remove(from: .current, forMode: .common)
+        }
+        thread.name = "VRDesktop Render"
+        thread.qualityOfService = .userInteractive
+        displayLinkThread = thread
+        thread.start()
     }
 
     @MainActor
@@ -393,9 +406,10 @@ public final class GlassesRenderer: NSObject {
         screenObserver = nil
         targetDisplayID = 0
         displayLink?.isPaused = true
-        displayLink?.remove(from: .main, forMode: .common)
         displayLink?.invalidate()
         displayLink = nil
+        displayLinkThread?.cancel()
+        displayLinkThread = nil
         window?.contentView = nil
         window?.orderOut(nil)
         window = nil
