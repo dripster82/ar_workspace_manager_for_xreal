@@ -677,15 +677,18 @@ final class AppCoordinator: ObservableObject {
         var distance = Float(config.distanceMeters)
         var scale = Float(config.scale)
         var autoCurve = config.autoCurveH
-        // Wide curved canvas: all anchored screens share one distance + scale and auto-curve,
-        // so they wrap as one continuous surface. Uses the first anchored screen's distance/
-        // scale as the shared values (tune it by adjusting that screen). Mono only.
+        var cylindrical = false
+        // Wide curved canvas: all anchored screens share one distance + scale and sit on one
+        // shared cylinder (cylindrical), so they tile into a single continuous curved surface
+        // rather than each curving separately. Shared distance/scale come from the first
+        // anchored screen (tune it by adjusting that screen). Mono only.
         if wideCanvas, !stereoEnabled, config.placement != .floating,
            let ref = workspaceStore.activeWorkspace?.virtualScreens
                .first(where: { $0.showInAR && $0.placement != .floating }) {
             distance = Float(ref.distanceMeters)
             scale = Float(ref.scale)
             autoCurve = true
+            cylindrical = true
         }
         // Apparent width: ~1.6m per 1920px at scale 1, 2m away.
         let baseWidth = Float(config.width) / 1920.0 * 1.6 * scale
@@ -699,6 +702,7 @@ final class AppCoordinator: ObservableObject {
             curveH: Float(config.curvatureRadius),
             autoCurveH: autoCurve,
             headLocked: config.placement == .floating,
+            cylindrical: cylindrical,
             textureProvider: { [weak capture] in capture?.latestTexture }
         )
     }

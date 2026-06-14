@@ -17,10 +17,15 @@ public struct SceneScreen: Identifiable {
     public var autoCurveH: Bool
     /// Head-locked: render without head rotation so it stays fixed in the field of view.
     public var headLocked: Bool
+    /// When true, the screen is a segment of one shared cylinder centred on the eye (yaw is
+    /// baked into the arc angle), so several screens at the same distance tile into a single
+    /// continuous curved surface instead of each curving around its own centre.
+    public var cylindrical: Bool
     public var textureProvider: () -> MTLTexture?
 
     public init(id: UUID, yaw: Float, pitch: Float, distance: Float, widthMeters: Float,
                 aspect: Float, curveH: Float, autoCurveH: Bool, headLocked: Bool = false,
+                cylindrical: Bool = false,
                 textureProvider: @escaping () -> MTLTexture?) {
         self.id = id
         self.yaw = yaw
@@ -31,6 +36,7 @@ public struct SceneScreen: Identifiable {
         self.curveH = max(0, min(5, curveH))
         self.autoCurveH = autoCurveH
         self.headLocked = headLocked
+        self.cylindrical = cylindrical
         self.textureProvider = textureProvider
     }
 
@@ -48,7 +54,8 @@ public struct SceneScreen: Identifiable {
     private var angles: (x: Float, y: Float) {
         // Horizontal curve only: auto = natural sphere arc (width / distance, so closer
         // screens curve more); manual = curve amount × arc-per-unit. Vertical stays flat.
-        let x = autoCurveH ? widthMeters / distance : curveH * Self.arcPerUnit
+        // Cylindrical (unified canvas) always follows the natural arc on the shared cylinder.
+        let x = (cylindrical || autoCurveH) ? widthMeters / distance : curveH * Self.arcPerUnit
         return (x, 0)
     }
 
@@ -83,6 +90,17 @@ public struct SceneScreen: Identifiable {
     /// resizes the screen); the two bends compose into a doubly-curved patch that,
     /// when thetaX == thetaY, approximates the natural sphere around the eye.
     private func point(u: Float, v: Float, thetaX: Float, thetaY: Float) -> SIMD3<Float> {
+        // Unified cylinder: every screen lies on one cylinder of radius `distance` centred at
+        // the eye, with yaw baked into the absolute arc angle, so adjacent screens form a
+        // single continuous curve. Vertical stays flat; pitch tilts the segment.
+        if cylindrical {
+            let R = distance
+            let phi = yaw + (u - 0.5) * thetaX            // absolute angle on the shared cylinder
+            let yLocal = (0.5 - v) * height
+            let local = SIMD3(R * sinf(phi), yLocal, -R * cosf(phi))
+            return simd_quatf(angle: pitch, axis: SIMD3(1, 0, 0)).act(local)
+        }
+
         var x: Float, y: Float
         var zDev: Float = 0 // forward deviation from the flat plane at -distance
 
