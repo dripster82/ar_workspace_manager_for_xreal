@@ -66,6 +66,9 @@ final class AppCoordinator: ObservableObject {
     private var statsTimer: Timer?
     private var lastSampleCount: UInt64 = 0
     private let cursorConfiner = CursorConfiner()
+    // Held while AR runs: prevents App Nap / timer coalescing from throttling the render
+    // display link (the glasses window is never frontmost, so the app looks "idle" to macOS).
+    private var arActivity: NSObjectProtocol?
 
     /// Keep the cursor off the AR output display while AR runs.
     @Published var confineCursor: Bool = UserDefaults.standard.object(forKey: "confineCursor") == nil
@@ -626,6 +629,13 @@ final class AppCoordinator: ObservableObject {
 
         renderer.setScreens(sceneScreens)
         arActive = true
+        // Keep macOS from throttling our scheduling while head-tracking (App Nap / timer
+        // coalescing causes the irregular ~50ms render-delivery stalls).
+        if arActivity == nil {
+            arActivity = ProcessInfo.processInfo.beginActivity(
+                options: [.latencyCritical, .userInitiated, .idleSystemSleepDisabled],
+                reason: "AR head-tracked rendering")
+        }
         statusMessage = "Waiting for displays to settle…"
 
         // Adding the virtual displays just re-arranged the global screen layout
@@ -892,6 +902,7 @@ final class AppCoordinator: ObservableObject {
     func stopAR() {
         guard arActive else { return }
         DebugLog.shared.log("stopAR")
+        if let arActivity { ProcessInfo.processInfo.endActivity(arActivity); self.arActivity = nil }
         let wasStereo = stereoEnabled
         cursorConfiner.stop()
         // Tear the display link down BEFORE reverting the SBS display mode (reconfiguring a
