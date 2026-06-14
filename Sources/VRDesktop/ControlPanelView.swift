@@ -536,16 +536,10 @@ struct ScreenRow: View {
 
 /// Drag-to-place layout: two zones (anchored "around you" and floating "in view"); each
 /// screen is a box you drag to set its yaw (horizontal) and pitch (vertical).
-enum MapTool { case select, pan }
-
 struct PlacementMapView: View {
     @ObservedObject var coordinator: AppCoordinator
     @State private var zoomAnchored = 1.0
     @State private var zoomFloating = 1.0
-    @State private var panAnchored = CGSize.zero
-    @State private var panFloating = CGSize.zero
-    @State private var toolAnchored = MapTool.select
-    @State private var toolFloating = MapTool.select
 
     // Base half-ranges (degrees). Anchored covers the full sphere; floating only the FOV + margin.
     private static let anchoredYaw = 180.0, anchoredPitch = 90.0
@@ -559,12 +553,10 @@ struct PlacementMapView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             zone(title: "Around you (anchored)", placement: .anchored, accent: .blue,
-                 baseYaw: Self.anchoredYaw, basePitch: Self.anchoredPitch,
-                 zoom: $zoomAnchored, pan: $panAnchored, tool: $toolAnchored)
+                 baseYaw: Self.anchoredYaw, basePitch: Self.anchoredPitch, zoom: $zoomAnchored)
             zone(title: "In view (floating)", placement: .floating, accent: .accentColor,
-                 baseYaw: Self.floatYaw, basePitch: Self.floatPitch,
-                 zoom: $zoomFloating, pan: $panFloating, tool: $toolFloating)
-            Text("Arrow tool: drag screens. Hand tool: drag to pan. +/− to zoom.")
+                 baseYaw: Self.floatYaw, basePitch: Self.floatPitch, zoom: $zoomFloating)
+            Text("Drag a screen to position it. Two-finger scroll to pan, +/− to zoom.")
                 .font(.caption2).foregroundStyle(.secondary)
         }
     }
@@ -573,26 +565,13 @@ struct PlacementMapView: View {
         coordinator.editableScreens().filter { $0.showInAR && $0.placement == placement }
     }
 
-    private func clampPan(_ pan: CGSize, contentW: CGFloat, contentH: CGFloat,
-                          viewport: CGSize) -> CGSize {
-        let maxX = max(0, (contentW - viewport.width) / 2)
-        let maxY = max(0, (contentH - viewport.height) / 2)
-        return CGSize(width: min(maxX, max(-maxX, pan.width)),
-                      height: min(maxY, max(-maxY, pan.height)))
-    }
-
     private func zone(title: String, placement: ScreenPlacement, accent: Color,
-                      baseYaw: Double, basePitch: Double,
-                      zoom: Binding<Double>, pan: Binding<CGSize>, tool: Binding<MapTool>) -> some View {
+                      baseYaw: Double, basePitch: Double, zoom: Binding<Double>) -> some View {
         let spaceName = "zone-\(placement.rawValue)"
         return VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 6) {
+            HStack {
                 Text(title).font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                Button { tool.wrappedValue = .select } label: { Image(systemName: "cursorarrow") }
-                    .background(tool.wrappedValue == .select ? Color.accentColor.opacity(0.25) : .clear, in: RoundedRectangle(cornerRadius: 4))
-                Button { tool.wrappedValue = .pan } label: { Image(systemName: "hand.draw") }
-                    .background(tool.wrappedValue == .pan ? Color.accentColor.opacity(0.25) : .clear, in: RoundedRectangle(cornerRadius: 4))
                 Button { zoom.wrappedValue = max(1, zoom.wrappedValue / 1.25) } label: {
                     Image(systemName: "minus.magnifyingglass")
                 }.disabled(zoom.wrappedValue <= 1.0001)
@@ -603,69 +582,40 @@ struct PlacementMapView: View {
             .buttonStyle(.borderless).controlSize(.small)
             GeometryReader { geo in
                 // Equal pixels-per-degree both axes (no squish). At zoom 1 the full yaw range
-                // fits the width; the hand tool drags the view about.
+                // fits the width; content is scrollable (two-finger) for the rest / when zoomed.
                 let ppd = geo.size.width * CGFloat(zoom.wrappedValue) / CGFloat(2 * baseYaw)
                 let contentW = CGFloat(2 * baseYaw) * ppd
                 let contentH = CGFloat(2 * basePitch) * ppd
-                let live = CGSize(width: pan.wrappedValue.width + dragPan.width,
-                                  height: pan.wrappedValue.height + dragPan.height)
-                let clamped = clampPan(live, contentW: contentW, contentH: contentH, viewport: geo.size)
-                // Centre the content in the viewport, then apply the (clamped) pan deviation.
-                let offset = CGSize(width: (geo.size.width - contentW) / 2 + clamped.width,
-                                    height: (geo.size.height - contentH) / 2 + clamped.height)
-                ZStack(alignment: .topLeading) {
-                    Color.gray.opacity(0.12)
-                    content(placement: placement, accent: accent, spaceName: spaceName,
-                            ppd: ppd, contentW: contentW, contentH: contentH, baseYaw: baseYaw,
-                            basePitch: basePitch)
-                        .frame(width: contentW, height: contentH)
-                        .coordinateSpace(name: spaceName)
-                        .offset(offset)
-                        .allowsHitTesting(tool.wrappedValue == .select)
-                }
-                .frame(width: geo.size.width, height: geo.size.height)
-                .contentShape(Rectangle())
-                .gesture(tool.wrappedValue == .pan
-                    ? DragGesture()
-                        .updating($dragPan) { v, s, _ in s = v.translation }
-                        .onEnded { v in
-                            pan.wrappedValue = clampPan(
-                                CGSize(width: pan.wrappedValue.width + v.translation.width,
-                                       height: pan.wrappedValue.height + v.translation.height),
-                                contentW: contentW, contentH: contentH, viewport: geo.size)
+                ScrollView([.horizontal, .vertical], showsIndicators: false) {
+                    ZStack(alignment: .topLeading) {
+                        Rectangle().fill(Color.gray.opacity(0.12))
+                        // Limit boundary (edges of the placeable range).
+                        Rectangle().strokeBorder(.white.opacity(0.35), lineWidth: 1.5)
+                        Rectangle().fill(.white.opacity(0.08)).frame(width: 1)
+                            .position(x: contentW / 2, y: contentH / 2)
+                        Rectangle().fill(.white.opacity(0.08)).frame(height: 1)
+                            .position(x: contentW / 2, y: contentH / 2)
+                        if placement == .floating {
+                            RoundedRectangle(cornerRadius: 4)
+                                .strokeBorder(.green.opacity(0.6),
+                                              style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+                                .frame(width: CGFloat(Self.fovHDeg) * ppd, height: CGFloat(Self.fovVDeg) * ppd)
+                                .position(x: contentW / 2, y: contentH / 2)
                         }
-                    : nil)
+                        ForEach(screens(placement)) { cfg in
+                            ScreenBox(initial: cfg, area: CGSize(width: contentW, height: contentH),
+                                      coordinateSpace: spaceName, accent: accent, pxPerDeg: ppd,
+                                      yawRange: baseYaw, pitchRange: basePitch,
+                                      lookedAt: coordinator.lookedAtScreenID == cfg.id,
+                                      onChange: { coordinator.updateScreen($0) })
+                        }
+                    }
+                    .frame(width: contentW, height: contentH)
+                    .coordinateSpace(name: spaceName)
+                }
             }
             .frame(height: Self.viewportHeight)
             .clipShape(RoundedRectangle(cornerRadius: 8))
-        }
-    }
-
-    @GestureState private var dragPan = CGSize.zero
-
-    @ViewBuilder
-    private func content(placement: ScreenPlacement, accent: Color, spaceName: String,
-                         ppd: CGFloat, contentW: CGFloat, contentH: CGFloat,
-                         baseYaw: Double, basePitch: Double) -> some View {
-        ZStack(alignment: .topLeading) {
-            Rectangle().strokeBorder(.white.opacity(0.35), lineWidth: 1.5) // limit boundary
-            Rectangle().fill(.white.opacity(0.08)).frame(width: 1)
-                .position(x: contentW / 2, y: contentH / 2)
-            Rectangle().fill(.white.opacity(0.08)).frame(height: 1)
-                .position(x: contentW / 2, y: contentH / 2)
-            if placement == .floating {
-                RoundedRectangle(cornerRadius: 4)
-                    .strokeBorder(.green.opacity(0.6), style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
-                    .frame(width: CGFloat(Self.fovHDeg) * ppd, height: CGFloat(Self.fovVDeg) * ppd)
-                    .position(x: contentW / 2, y: contentH / 2)
-            }
-            ForEach(screens(placement)) { cfg in
-                ScreenBox(initial: cfg, area: CGSize(width: contentW, height: contentH),
-                          coordinateSpace: spaceName, accent: accent, pxPerDeg: ppd,
-                          yawRange: baseYaw, pitchRange: basePitch,
-                          lookedAt: coordinator.lookedAtScreenID == cfg.id,
-                          onChange: { coordinator.updateScreen($0) })
-            }
         }
     }
 }
