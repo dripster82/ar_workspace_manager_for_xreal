@@ -603,13 +603,13 @@ struct PlacementMapView: View {
                             .position(x: contentW / 2, y: contentH / 2)
                         Rectangle().fill(.white.opacity(0.08)).frame(height: 1)
                             .position(x: contentW / 2, y: contentH / 2)
-                        if placement == .floating {
-                            RoundedRectangle(cornerRadius: 4)
-                                .strokeBorder(.green.opacity(0.6),
-                                              style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
-                                .frame(width: CGFloat(Self.fovHDeg) * ppd, height: CGFloat(Self.fovVDeg) * ppd)
-                                .position(x: contentW / 2, y: contentH / 2)
-                        }
+                        // FOV outline (where the glasses' view sits when centred) — shown in
+                        // both zones to help size and position screens against the visible area.
+                        RoundedRectangle(cornerRadius: 4)
+                            .strokeBorder(.green.opacity(0.6),
+                                          style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+                            .frame(width: CGFloat(Self.fovHDeg) * ppd, height: CGFloat(Self.fovVDeg) * ppd)
+                            .position(x: contentW / 2, y: contentH / 2)
                         ForEach(screens(placement)) { cfg in
                             ScreenBox(initial: cfg, area: CGSize(width: contentW, height: contentH),
                                       coordinateSpace: spaceName, accent: accent, pxPerDeg: ppd,
