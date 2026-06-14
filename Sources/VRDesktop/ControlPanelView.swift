@@ -208,6 +208,11 @@ struct ControlPanelView: View {
                             Text("\(Int(coordinator.ipdMillimeters)) mm").frame(width: 52).font(.caption).monospacedDigit()
                         }
                     }
+                    if !coordinator.stereoEnabled {
+                        Toggle("Wide curved canvas", isOn: $coordinator.wideCanvas)
+                            .font(.caption)
+                            .help("Wrap all anchored screens onto one continuous auto-curved surface at a single shared distance/scale (tune via the first screen's distance & scale)")
+                    }
                 }
             }
 

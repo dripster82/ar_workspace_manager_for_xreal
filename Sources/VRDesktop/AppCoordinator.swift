@@ -70,6 +70,15 @@ final class AppCoordinator: ObservableObject {
     // display link (the glasses window is never frontmost, so the app looks "idle" to macOS).
     private var arActivity: NSObjectProtocol?
 
+    /// Wide curved canvas (mono only): lay all anchored screens onto one continuous
+    /// auto-curved surface at a single shared distance and scale, in their picked positions.
+    @Published var wideCanvas: Bool = UserDefaults.standard.bool(forKey: "wideCanvas") {
+        didSet {
+            UserDefaults.standard.set(wideCanvas, forKey: "wideCanvas")
+            liveUpdateScreens()
+        }
+    }
+
     /// Keep the cursor off the AR output display while AR runs.
     @Published var confineCursor: Bool = UserDefaults.standard.object(forKey: "confineCursor") == nil
         ? true : UserDefaults.standard.bool(forKey: "confineCursor") {
@@ -665,17 +674,30 @@ final class AppCoordinator: ObservableObject {
 
     /// Build the placement geometry for a screen, reusing an existing capture.
     private func sceneScreen(config: VirtualScreenConfig, capture: CaptureSource) -> SceneScreen {
+        var distance = Float(config.distanceMeters)
+        var scale = Float(config.scale)
+        var autoCurve = config.autoCurveH
+        // Wide curved canvas: all anchored screens share one distance + scale and auto-curve,
+        // so they wrap as one continuous surface. Uses the first anchored screen's distance/
+        // scale as the shared values (tune it by adjusting that screen). Mono only.
+        if wideCanvas, !stereoEnabled, config.placement != .floating,
+           let ref = workspaceStore.activeWorkspace?.virtualScreens
+               .first(where: { $0.showInAR && $0.placement != .floating }) {
+            distance = Float(ref.distanceMeters)
+            scale = Float(ref.scale)
+            autoCurve = true
+        }
         // Apparent width: ~1.6m per 1920px at scale 1, 2m away.
-        let baseWidth = Float(config.width) / 1920.0 * 1.6 * Float(config.scale)
+        let baseWidth = Float(config.width) / 1920.0 * 1.6 * scale
         return SceneScreen(
             id: config.id,
             yaw: Float(config.yawDegrees * .pi / 180),
             pitch: Float(config.pitchDegrees * .pi / 180),
-            distance: Float(config.distanceMeters),
+            distance: distance,
             widthMeters: baseWidth,
             aspect: Float(config.width) / Float(config.height),
             curveH: Float(config.curvatureRadius),
-            autoCurveH: config.autoCurveH,
+            autoCurveH: autoCurve,
             headLocked: config.placement == .floating,
             textureProvider: { [weak capture] in capture?.latestTexture }
         )
