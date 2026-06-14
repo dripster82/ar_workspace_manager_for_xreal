@@ -358,7 +358,9 @@ public final class GlassesRenderer: NSObject {
         metalLayer.pixelFormat = .bgra8Unorm
         metalLayer.framebufferOnly = true
         metalLayer.displaySyncEnabled = true
-        metalLayer.maximumDrawableCount = 2
+        // Triple-buffer: with only 2 drawables the display link periodically stalls ~50ms
+        // waiting for one to free (idle GPU but dropped frames — the head-tracking "snap").
+        metalLayer.maximumDrawableCount = 3
         let scale = screen.backingScaleFactor
         metalLayer.contentsScale = scale
         metalLayer.drawableSize = CGSize(width: screen.frame.width * scale,
