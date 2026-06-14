@@ -95,7 +95,9 @@ public struct SceneScreen: Identifiable {
         // single continuous curve. Vertical stays flat; pitch tilts the segment.
         if cylindrical {
             let R = distance
-            let phi = yaw + (u - 0.5) * thetaX            // absolute angle on the shared cylinder
+            // Absolute angle on the shared cylinder. Matches the non-cylindrical path's
+            // effective angle (arc − yaw from the +Y rotation), so left/right isn't mirrored.
+            let phi = (u - 0.5) * thetaX - yaw
             let yLocal = (0.5 - v) * height
             let local = SIMD3(R * sinf(phi), yLocal, -R * cosf(phi))
             return simd_quatf(angle: pitch, axis: SIMD3(1, 0, 0)).act(local)

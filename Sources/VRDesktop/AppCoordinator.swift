@@ -678,24 +678,39 @@ final class AppCoordinator: ObservableObject {
         var scale = Float(config.scale)
         var autoCurve = config.autoCurveH
         var cylindrical = false
-        // Wide curved canvas: all anchored screens share one distance + scale and sit on one
-        // shared cylinder (cylindrical), so they tile into a single continuous curved surface
-        // rather than each curving separately. Shared distance/scale come from the first
-        // anchored screen (tune it by adjusting that screen). Mono only.
-        if wideCanvas, !stereoEnabled, config.placement != .floating,
-           let ref = workspaceStore.activeWorkspace?.virtualScreens
-               .first(where: { $0.showInAR && $0.placement != .floating }) {
-            distance = Float(ref.distanceMeters)
-            scale = Float(ref.scale)
-            autoCurve = true
-            cylindrical = true
+        var yawRad = Float(config.yawDegrees * .pi / 180)
+        // Wide curved canvas: anchored screens share one distance + scale, sit on one shared
+        // cylinder, AND are auto-packed edge-to-edge (sorted by their picked left→right order)
+        // so they form one continuous flat strip wrapped on the cylinder — no gaps/overlaps.
+        // Shared distance/scale come from the first (leftmost) anchored screen. Mono only.
+        if wideCanvas, !stereoEnabled, config.placement != .floating {
+            let anchored = (workspaceStore.activeWorkspace?.virtualScreens ?? [])
+                .filter { $0.showInAR && $0.placement != .floating }
+                .sorted { $0.yawDegrees < $1.yawDegrees }
+            if let ref = anchored.first {
+                distance = Float(ref.distanceMeters)
+                scale = Float(ref.scale)
+                autoCurve = true
+                cylindrical = true
+                // Angular width each screen occupies on the shared cylinder (radians).
+                let angWidth = { (c: VirtualScreenConfig) -> Float in
+                    (Float(c.width) / 1920.0 * 1.6 * scale) / distance
+                }
+                let total = anchored.reduce(Float(0)) { $0 + angWidth($1) }
+                var cursor = -total / 2
+                for c in anchored {
+                    let w = angWidth(c)
+                    if c.id == config.id { yawRad = cursor + w / 2; break }
+                    cursor += w
+                }
+            }
         }
         // Apparent width: ~1.6m per 1920px at scale 1, 2m away.
         let baseWidth = Float(config.width) / 1920.0 * 1.6 * scale
         return SceneScreen(
             id: config.id,
-            yaw: Float(config.yawDegrees * .pi / 180),
-            pitch: Float(config.pitchDegrees * .pi / 180),
+            yaw: yawRad,
+            pitch: cylindrical ? 0 : Float(config.pitchDegrees * .pi / 180),
             distance: distance,
             widthMeters: baseWidth,
             aspect: Float(config.width) / Float(config.height),
