@@ -341,7 +341,10 @@ struct ControlPanelView: View {
             Toggle("Write debug log", isOn: $coordinator.debugLogging)
                 .font(.caption)
                 .help(coordinator.debugLogURL.path)
-            if coordinator.debugLogging {
+            Toggle("Log raw IMU data (~60 Hz)", isOn: $coordinator.rawIMULogging)
+                .font(.caption)
+                .help("Logs raw vs filtered yaw/pitch/roll + angular speed for movement/calibration testing")
+            if coordinator.debugLogging || coordinator.rawIMULogging {
                 HStack {
                     Button("Reveal log") { coordinator.revealDebugLog() }
                     Button("Clear log") { coordinator.clearDebugLog() }

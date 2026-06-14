@@ -109,6 +109,16 @@ public final class IMUService: @unchecked Sendable {
         velFiltered += (instAngVel - velFiltered) * velocityAlpha
 
         poseStore.update(Pose(orientation: qSmooth, angularVelocity: velFiltered, timestamp: now))
+
+        // Raw/filtered diagnostics for head-movement testing (throttled to ~60 Hz).
+        if rawLoggingEnabled, let rawLog, now - lastRawLog >= 0.016 {
+            lastRawLog = now
+            let r = Self.eulerDeg(raw), f = Self.eulerDeg(qSmooth)
+            let speed = simd_length(instAngVel) * 180 / .pi
+            rawLog(String(format:
+                "imu raw[y%+7.2f p%+7.2f r%+7.2f] filt[y%+7.2f p%+7.2f r%+7.2f] w=%6.1f°/s dt=%4.1fms",
+                r.y, r.p, r.r, f.y, f.p, f.r, speed, dt * 1000))
+        }
     }
 
     /// One-Euro parameters (set from the UI). Lower minCutoff = calmer at rest;
@@ -117,6 +127,22 @@ public final class IMUService: @unchecked Sendable {
     public var beta: Float = 0.5
     /// Low-pass time constant (s) for the prediction velocity estimate.
     public var velocityTimeConstant: Float = 0.084
+
+    /// Live raw-vs-filtered logging (for diagnosing jitter/calibration). Set the sink to route
+    /// lines to the debug log; enable the flag to start.
+    public var rawLoggingEnabled = false
+    public var rawLog: ((String) -> Void)?
+    private var lastRawLog: TimeInterval = 0
+
+    private static func eulerDeg(_ q: simd_quatf) -> (y: Float, p: Float, r: Float) {
+        let toDeg: Float = 180 / .pi
+        let yaw = atan2f(2 * (q.real * q.imag.y + q.imag.x * q.imag.z),
+                         1 - 2 * (q.imag.y * q.imag.y + q.imag.x * q.imag.x)) * toDeg
+        let pitch = asinf(max(-1, min(1, 2 * (q.real * q.imag.x - q.imag.y * q.imag.z)))) * toDeg
+        let roll = atan2f(2 * (q.real * q.imag.z + q.imag.x * q.imag.y),
+                          1 - 2 * (q.imag.x * q.imag.x + q.imag.z * q.imag.z)) * toDeg
+        return (yaw, pitch, roll)
+    }
 
     private var lastSample: (q: simd_quatf, t: TimeInterval)?
     private var orientationFilter = OneEuroOrientation()

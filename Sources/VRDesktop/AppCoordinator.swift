@@ -88,6 +88,17 @@ final class AppCoordinator: ObservableObject {
         didSet { LaunchAtLogin.set(launchAtLogin) }
     }
 
+    /// Live raw-vs-filtered IMU logging (~60 Hz) for head-movement / calibration testing.
+    @Published var rawIMULogging = false {
+        didSet {
+            if rawIMULogging { DebugLog.shared.setEnabled(true) }
+            IMUService.shared.rawLog = { DebugLog.shared.log($0) }
+            IMUService.shared.rawLoggingEnabled = rawIMULogging
+            let msg = rawIMULogging ? "=== raw IMU logging on ===" : "=== raw IMU logging off ==="
+            DebugLog.shared.log(msg)
+        }
+    }
+
     var debugLogURL: URL { DebugLog.shared.fileURL }
     func revealDebugLog() { NSWorkspace.shared.activateFileViewerSelecting([DebugLog.shared.fileURL]) }
     func clearDebugLog() { DebugLog.shared.clear() }
