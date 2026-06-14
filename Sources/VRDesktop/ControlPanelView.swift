@@ -582,15 +582,15 @@ struct PlacementMapView: View {
             .buttonStyle(.borderless).controlSize(.small)
             GeometryReader { geo in
                 // Equal pixels-per-degree both axes (no squish). At zoom 1 the full yaw range
-                // fits the width; content is scrollable (two-finger) for the rest / when zoomed.
+                // fits the width; content scrolls (two-finger) for the rest / when zoomed.
                 let ppd = geo.size.width * CGFloat(zoom.wrappedValue) / CGFloat(2 * baseYaw)
                 let contentW = CGFloat(2 * baseYaw) * ppd
                 let contentH = CGFloat(2 * basePitch) * ppd
-                ScrollView([.horizontal, .vertical], showsIndicators: false) {
+                // NSScrollView-backed so scrolling doesn't chain to the outer panel at limits.
+                NonChainingScrollView(contentSize: CGSize(width: contentW, height: contentH)) {
                     ZStack(alignment: .topLeading) {
                         Rectangle().fill(Color.gray.opacity(0.12))
-                        // Limit boundary (edges of the placeable range).
-                        Rectangle().strokeBorder(.white.opacity(0.35), lineWidth: 1.5)
+                        Rectangle().strokeBorder(.white.opacity(0.35), lineWidth: 1.5) // limit boundary
                         Rectangle().fill(.white.opacity(0.08)).frame(width: 1)
                             .position(x: contentW / 2, y: contentH / 2)
                         Rectangle().fill(.white.opacity(0.08)).frame(height: 1)
@@ -690,5 +690,55 @@ private struct ScreenBox: View {
                     .onChanged { apply(location: $0.location) }
             )
             .onChange(of: initial) { newValue in if newValue != cfg { cfg = newValue } }
+    }
+}
+
+/// An NSScrollView hosting SwiftUI content. Unlike a nested SwiftUI ScrollView, it consumes
+/// scroll events and does not chain them to the outer panel when it can't scroll further.
+struct NonChainingScrollView<Content: View>: NSViewRepresentable {
+    let contentSize: CGSize
+    let content: Content
+
+    init(contentSize: CGSize, @ViewBuilder content: () -> Content) {
+        self.contentSize = contentSize
+        self.content = content()
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NoChainScrollView()
+        scroll.drawsBackground = false
+        scroll.hasHorizontalScroller = false
+        scroll.hasVerticalScroller = false
+        scroll.horizontalScrollElasticity = .allowed
+        scroll.verticalScrollElasticity = .allowed
+        scroll.automaticallyAdjustsContentInsets = false
+        let hosting = NSHostingView(rootView: content)
+        hosting.frame = CGRect(origin: .zero, size: contentSize)
+        scroll.documentView = hosting
+        context.coordinator.centered = false
+        return scroll
+    }
+
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
+        guard let hosting = scroll.documentView as? NSHostingView<Content> else { return }
+        hosting.rootView = content
+        hosting.frame = CGRect(origin: .zero, size: contentSize)
+        // Centre the content the first time we know the clip size.
+        let clip = scroll.contentView.bounds.size
+        if !context.coordinator.centered, clip.width > 0 {
+            let x = max(0, (contentSize.width - clip.width) / 2)
+            let y = max(0, (contentSize.height - clip.height) / 2)
+            scroll.contentView.scroll(to: NSPoint(x: x, y: y))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            context.coordinator.centered = true
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    final class Coordinator { var centered = false }
+
+    final class NoChainScrollView: NSScrollView {
+        // Always handle the scroll here; never forward to the enclosing scroll view.
+        override func scrollWheel(with event: NSEvent) { super.scrollWheel(with: event) }
     }
 }
