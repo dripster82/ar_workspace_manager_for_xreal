@@ -337,15 +337,28 @@ final class AppCoordinator: ObservableObject {
 
     /// Rebuild the AR output (and its display link) on the glasses once the display mode
     /// has settled after an SBS switch.
-    private func restartOutputOnGlasses(after delay: Double) {
+    private func restartOutputOnGlasses(after delay: Double, attempt: Int = 0) {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            guard let self, self.arActive, let renderer = self.renderer,
-                  let screen = NSScreen.screens.first(where: {
-                      Self.screenDisplayID($0) == self.glassesDisplayID
-                  }) else { self?.switchingDisplayMode = false; return }
+            guard let self, self.arActive, let renderer = self.renderer else {
+                self?.switchingDisplayMode = false; return
+            }
+            // After a display-mode switch the screen list can stay stale for a while; retry
+            // until the glasses reappear at the new mode instead of dropping the AR window.
+            guard let screen = NSScreen.screens.first(where: {
+                Self.screenDisplayID($0) == self.glassesDisplayID
+            }) else {
+                if attempt < 12 {
+                    self.restartOutputOnGlasses(after: 0.3, attempt: attempt + 1)
+                } else {
+                    DebugLog.shared.log("restartOutput: glasses screen not found after retries")
+                    self.switchingDisplayMode = false
+                }
+                return
+            }
             renderer.startOutput(on: screen)
             self.applyConfiguredMirrors()
             self.updateCursorConfinement()
+            DebugLog.shared.log("restartOutput: started on '\(screen.localizedName)' \(NSStringFromRect(screen.frame))")
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.switchingDisplayMode = false }
         }
     }

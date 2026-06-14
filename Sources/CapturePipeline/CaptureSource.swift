@@ -11,7 +11,9 @@ public final class CaptureSource: NSObject, @unchecked Sendable {
     private let device: MTLDevice
     private var textureCache: CVMetalTextureCache!
     private var stream: SCStream?
-    private let outputQueue = DispatchQueue(label: "capture.output", qos: .userInteractive)
+    // Below the render/display-link priority band so capture yields to rendering rather
+    // than competing for cores (which was delaying frame delivery → head-tracking stalls).
+    private let outputQueue = DispatchQueue(label: "capture.output", qos: .userInitiated)
 
     private let lock = NSLock()
     // Keep the CVMetalTexture alive while its MTLTexture may be in flight.
@@ -47,7 +49,10 @@ public final class CaptureSource: NSObject, @unchecked Sendable {
             config.height = display.height
         }
         config.pixelFormat = kCVPixelFormatType_32BGRA
-        config.minimumFrameInterval = CMTime(value: 1, timescale: 60)
+        // 30fps capture: ample for desktop content and halves the system capture load
+        // (4 displays × 60fps was contending with rendering). Head-tracked reprojection
+        // still runs at full display rate, so this doesn't affect tracking smoothness.
+        config.minimumFrameInterval = CMTime(value: 1, timescale: 30)
         config.queueDepth = 3
         config.showsCursor = true
 
