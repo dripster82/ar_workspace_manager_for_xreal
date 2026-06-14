@@ -738,7 +738,18 @@ struct NonChainingScrollView<Content: View>: NSViewRepresentable {
     final class Coordinator { var centered = false }
 
     final class NoChainScrollView: NSScrollView {
-        // Always handle the scroll here; never forward to the enclosing scroll view.
-        override func scrollWheel(with event: NSEvent) { super.scrollWheel(with: event) }
+        // Scroll the content ourselves and consume the event — never call super, so the
+        // scroll is not forwarded to the enclosing panel when we're at (or can't reach) a bound.
+        override func scrollWheel(with event: NSEvent) {
+            guard let doc = documentView else { return }
+            let visible = contentView.bounds.size
+            let maxX = max(0, doc.frame.width - visible.width)
+            let maxY = max(0, doc.frame.height - visible.height)
+            var o = contentView.bounds.origin
+            o.x = min(maxX, max(0, o.x - event.scrollingDeltaX))
+            o.y = min(maxY, max(0, o.y - event.scrollingDeltaY))
+            contentView.scroll(to: o)
+            reflectScrolledClipView(contentView)
+        }
     }
 }
