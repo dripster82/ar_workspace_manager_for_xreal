@@ -15,7 +15,6 @@ public final class GlassesRenderer: NSObject {
     // crashes the WindowServer notification path (notifyDisplayAdded).
     private var metalLayer = CAMetalLayer()
     private var displayLink: CAMetalDisplayLink?
-    private var displayLinkThread: Thread?
     private var window: NSWindow?
     private var targetDisplayID: CGDirectDisplayID = 0
     private var screenObserver: NSObjectProtocol?
@@ -391,25 +390,13 @@ public final class GlassesRenderer: NSObject {
 
         // Run the display link on a dedicated thread so heavy main-thread UI work (e.g. the
         // control-panel SwiftUI updates) can't stall rendering and cause head-tracking jumps.
+        // Drive rendering from the main run loop. (A dedicated render thread was tried but a
+        // manually-run run loop serviced the display link with ~50ms stalls — dropped frames
+        // that read as a head-tracking "snap". GPU time is <1ms, so main-loop pacing is fine.)
         let link = CAMetalDisplayLink(metalLayer: metalLayer)
         link.delegate = self
+        link.add(to: .main, forMode: .common)
         displayLink = link
-        // The render thread owns the link's run-loop lifecycle: it adds the link, runs the
-        // loop until cancelled, then invalidates the link on this same thread (invalidate
-        // also removes it). Tearing the link down from the main thread races and crashes.
-        let thread = Thread {
-            // Use a concrete run-loop mode (.default), not the .common pseudo-mode, or the
-            // display link is never serviced on a manually-run thread (nothing renders).
-            link.add(to: .current, forMode: .default)
-            while !Thread.current.isCancelled {
-                RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.2))
-            }
-            link.invalidate()
-        }
-        thread.name = "VRDesktop Render"
-        thread.qualityOfService = .userInteractive
-        displayLinkThread = thread
-        thread.start()
     }
 
     @MainActor
@@ -417,11 +404,10 @@ public final class GlassesRenderer: NSObject {
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         screenObserver = nil
         targetDisplayID = 0
-        // Stop callbacks, then let the render thread invalidate the link itself and exit.
         displayLink?.isPaused = true
+        displayLink?.remove(from: .main, forMode: .common)
+        displayLink?.invalidate()
         displayLink = nil
-        displayLinkThread?.cancel()
-        displayLinkThread = nil
         window?.contentView = nil
         window?.orderOut(nil)
         window = nil
