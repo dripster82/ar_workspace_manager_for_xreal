@@ -391,9 +391,11 @@ public final class GlassesRenderer: NSObject {
         // loop until cancelled, then invalidates the link on this same thread (invalidate
         // also removes it). Tearing the link down from the main thread races and crashes.
         let thread = Thread {
-            link.add(to: .current, forMode: .common)
+            // Use a concrete run-loop mode (.default), not the .common pseudo-mode, or the
+            // display link is never serviced on a manually-run thread (nothing renders).
+            link.add(to: .current, forMode: .default)
             while !Thread.current.isCancelled {
-                RunLoop.current.run(mode: .common, before: Date(timeIntervalSinceNow: 0.2))
+                RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.2))
             }
             link.invalidate()
         }
