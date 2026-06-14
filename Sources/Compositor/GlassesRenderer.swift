@@ -357,11 +357,7 @@ public final class GlassesRenderer: NSObject {
         metalLayer.device = device
         metalLayer.pixelFormat = .bgra8Unorm
         metalLayer.framebufferOnly = true
-        // EXPERIMENT: vsync off. Frame logs showed a clean ~50ms present stall with an idle
-        // GPU that survived every other change — the signature of vsync/present back-pressure
-        // on the glasses display. Presenting without waiting for the display's vsync should
-        // remove it (possible mild tearing as the trade-off).
-        metalLayer.displaySyncEnabled = false
+        metalLayer.displaySyncEnabled = true   // vsync off was tested and made jumping worse
         metalLayer.maximumDrawableCount = 3
         let scale = screen.backingScaleFactor
         metalLayer.contentsScale = scale
