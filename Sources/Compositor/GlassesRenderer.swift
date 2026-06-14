@@ -76,6 +76,13 @@ public final class GlassesRenderer: NSObject {
     private var frameCount = 0
     private var lastFPSUpdate = CACurrentMediaTime()
 
+    /// Frame-timing diagnostics: logs frames that overran the refresh interval (dropped
+    /// frames) and their GPU time, to distinguish render stalls from tracking issues.
+    public var frameLoggingEnabled = false
+    public var frameLog: ((String) -> Void)?
+    private var lastFrameStart: TimeInterval = 0
+    private var droppedFrames = 0
+
     public init?(poseStore: PoseStore) {
         guard let device = MTLCreateSystemDefaultDevice(),
               let queue = device.makeCommandQueue() else { return nil }
@@ -473,6 +480,22 @@ public final class GlassesRenderer: NSObject {
 
     func renderFrame(drawable: CAMetalDrawable) {
         guard let commandBuffer = commandQueue.makeCommandBuffer() else { return }
+
+        // Frame-pacing diagnostics: a CPU interval well over the refresh period means a
+        // dropped frame (the head-tracking "snap"); GPU time over budget is the usual cause.
+        let frameStart = CACurrentMediaTime()
+        if frameLoggingEnabled, lastFrameStart > 0 {
+            let interval = (frameStart - lastFrameStart) * 1000
+            if interval > 12 {
+                droppedFrames += 1
+                commandBuffer.addCompletedHandler { [weak self] cb in
+                    let gpuMs = (cb.gpuEndTime - cb.gpuStartTime) * 1000
+                    self?.frameLog?(String(format: "frame gap=%.1fms gpu=%.1fms drops=%d",
+                                           interval, gpuMs, self?.droppedFrames ?? 0))
+                }
+            }
+        }
+        lastFrameStart = frameStart
 
         lock.lock()
         let currentScreens = screens

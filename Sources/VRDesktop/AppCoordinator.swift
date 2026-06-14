@@ -94,6 +94,8 @@ final class AppCoordinator: ObservableObject {
             if rawIMULogging { DebugLog.shared.setEnabled(true) }
             IMUService.shared.rawLog = { DebugLog.shared.log($0) }
             IMUService.shared.rawLoggingEnabled = rawIMULogging
+            renderer?.frameLog = { DebugLog.shared.log($0) }
+            renderer?.frameLoggingEnabled = rawIMULogging
             let msg = rawIMULogging ? "=== raw IMU logging on ===" : "=== raw IMU logging off ==="
             DebugLog.shared.log(msg)
         }
