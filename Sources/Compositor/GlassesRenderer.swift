@@ -387,12 +387,15 @@ public final class GlassesRenderer: NSObject {
         let link = CAMetalDisplayLink(metalLayer: metalLayer)
         link.delegate = self
         displayLink = link
-        let thread = Thread { [weak self] in
+        // The render thread owns the link's run-loop lifecycle: it adds the link, runs the
+        // loop until cancelled, then invalidates the link on this same thread (invalidate
+        // also removes it). Tearing the link down from the main thread races and crashes.
+        let thread = Thread {
             link.add(to: .current, forMode: .common)
-            while let self, !Thread.current.isCancelled, self.displayLink === link {
-                RunLoop.current.run(mode: .common, before: Date(timeIntervalSinceNow: 0.25))
+            while !Thread.current.isCancelled {
+                RunLoop.current.run(mode: .common, before: Date(timeIntervalSinceNow: 0.2))
             }
-            link.remove(from: .current, forMode: .common)
+            link.invalidate()
         }
         thread.name = "VRDesktop Render"
         thread.qualityOfService = .userInteractive
@@ -405,8 +408,8 @@ public final class GlassesRenderer: NSObject {
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         screenObserver = nil
         targetDisplayID = 0
+        // Stop callbacks, then let the render thread invalidate the link itself and exit.
         displayLink?.isPaused = true
-        displayLink?.invalidate()
         displayLink = nil
         displayLinkThread?.cancel()
         displayLinkThread = nil
