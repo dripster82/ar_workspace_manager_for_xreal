@@ -544,7 +544,8 @@ struct PlacementMapView: View {
     @State private var zoomFloating = 1.0
     @State private var panAnchored = CGSize.zero
     @State private var panFloating = CGSize.zero
-    @State private var tool = MapTool.select
+    @State private var toolAnchored = MapTool.select
+    @State private var toolFloating = MapTool.select
 
     // Base half-ranges (degrees). Anchored covers the full sphere; floating only the FOV + margin.
     private static let anchoredYaw = 180.0, anchoredPitch = 90.0
@@ -559,13 +560,11 @@ struct PlacementMapView: View {
         VStack(alignment: .leading, spacing: 10) {
             zone(title: "Around you (anchored)", placement: .anchored, accent: .blue,
                  baseYaw: Self.anchoredYaw, basePitch: Self.anchoredPitch,
-                 zoom: $zoomAnchored, pan: $panAnchored)
+                 zoom: $zoomAnchored, pan: $panAnchored, tool: $toolAnchored)
             zone(title: "In view (floating)", placement: .floating, accent: .accentColor,
                  baseYaw: Self.floatYaw, basePitch: Self.floatPitch,
-                 zoom: $zoomFloating, pan: $panFloating)
-            Text(tool == .pan
-                 ? "Pan tool: drag to move the view. Switch to the arrow to move screens."
-                 : "Drag a screen to position it. Use the hand tool to pan, +/− to zoom.")
+                 zoom: $zoomFloating, pan: $panFloating, tool: $toolFloating)
+            Text("Arrow tool: drag screens. Hand tool: drag to pan. +/− to zoom.")
                 .font(.caption2).foregroundStyle(.secondary)
         }
     }
@@ -584,16 +583,16 @@ struct PlacementMapView: View {
 
     private func zone(title: String, placement: ScreenPlacement, accent: Color,
                       baseYaw: Double, basePitch: Double,
-                      zoom: Binding<Double>, pan: Binding<CGSize>) -> some View {
+                      zoom: Binding<Double>, pan: Binding<CGSize>, tool: Binding<MapTool>) -> some View {
         let spaceName = "zone-\(placement.rawValue)"
         return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
                 Text(title).font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                Button { tool = .select } label: { Image(systemName: "cursorarrow") }
-                    .background(tool == .select ? Color.accentColor.opacity(0.25) : .clear, in: RoundedRectangle(cornerRadius: 4))
-                Button { tool = .pan } label: { Image(systemName: "hand.draw") }
-                    .background(tool == .pan ? Color.accentColor.opacity(0.25) : .clear, in: RoundedRectangle(cornerRadius: 4))
+                Button { tool.wrappedValue = .select } label: { Image(systemName: "cursorarrow") }
+                    .background(tool.wrappedValue == .select ? Color.accentColor.opacity(0.25) : .clear, in: RoundedRectangle(cornerRadius: 4))
+                Button { tool.wrappedValue = .pan } label: { Image(systemName: "hand.draw") }
+                    .background(tool.wrappedValue == .pan ? Color.accentColor.opacity(0.25) : .clear, in: RoundedRectangle(cornerRadius: 4))
                 Button { zoom.wrappedValue = max(1, zoom.wrappedValue / 1.25) } label: {
                     Image(systemName: "minus.magnifyingglass")
                 }.disabled(zoom.wrappedValue <= 1.0001)
@@ -610,8 +609,11 @@ struct PlacementMapView: View {
                 let contentH = CGFloat(2 * basePitch) * ppd
                 let live = CGSize(width: pan.wrappedValue.width + dragPan.width,
                                   height: pan.wrappedValue.height + dragPan.height)
-                let offset = clampPan(live, contentW: contentW, contentH: contentH, viewport: geo.size)
-                ZStack {
+                let clamped = clampPan(live, contentW: contentW, contentH: contentH, viewport: geo.size)
+                // Centre the content in the viewport, then apply the (clamped) pan deviation.
+                let offset = CGSize(width: (geo.size.width - contentW) / 2 + clamped.width,
+                                    height: (geo.size.height - contentH) / 2 + clamped.height)
+                ZStack(alignment: .topLeading) {
                     Color.gray.opacity(0.12)
                     content(placement: placement, accent: accent, spaceName: spaceName,
                             ppd: ppd, contentW: contentW, contentH: contentH, baseYaw: baseYaw,
@@ -619,11 +621,11 @@ struct PlacementMapView: View {
                         .frame(width: contentW, height: contentH)
                         .coordinateSpace(name: spaceName)
                         .offset(offset)
-                        .allowsHitTesting(tool == .select)
+                        .allowsHitTesting(tool.wrappedValue == .select)
                 }
                 .frame(width: geo.size.width, height: geo.size.height)
                 .contentShape(Rectangle())
-                .gesture(tool == .pan
+                .gesture(tool.wrappedValue == .pan
                     ? DragGesture()
                         .updating($dragPan) { v, s, _ in s = v.translation }
                         .onEnded { v in
