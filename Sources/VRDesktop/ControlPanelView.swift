@@ -587,7 +587,12 @@ struct PlacementMapView: View {
                 let contentW = CGFloat(2 * baseYaw) * ppd
                 let contentH = CGFloat(2 * basePitch) * ppd
                 // NSScrollView-backed so scrolling doesn't chain to the outer panel at limits.
-                NonChainingScrollView(contentSize: CGSize(width: contentW, height: contentH)) {
+                NonChainingScrollView(
+                    contentSize: CGSize(width: contentW, height: contentH),
+                    onMagnify: { delta in
+                        zoom.wrappedValue = min(6, max(1, zoom.wrappedValue * (1 + Double(delta))))
+                    }
+                ) {
                     ZStack(alignment: .topLeading) {
                         Rectangle().fill(Color.gray.opacity(0.12))
                         Rectangle().strokeBorder(.white.opacity(0.35), lineWidth: 1.5) // limit boundary
@@ -697,10 +702,13 @@ private struct ScreenBox: View {
 /// scroll events and does not chain them to the outer panel when it can't scroll further.
 struct NonChainingScrollView<Content: View>: NSViewRepresentable {
     let contentSize: CGSize
+    var onMagnify: (CGFloat) -> Void
     let content: Content
 
-    init(contentSize: CGSize, @ViewBuilder content: () -> Content) {
+    init(contentSize: CGSize, onMagnify: @escaping (CGFloat) -> Void,
+         @ViewBuilder content: () -> Content) {
         self.contentSize = contentSize
+        self.onMagnify = onMagnify
         self.content = content()
     }
 
@@ -709,35 +717,47 @@ struct NonChainingScrollView<Content: View>: NSViewRepresentable {
         scroll.drawsBackground = false
         scroll.hasHorizontalScroller = false
         scroll.hasVerticalScroller = false
-        scroll.horizontalScrollElasticity = .allowed
-        scroll.verticalScrollElasticity = .allowed
         scroll.automaticallyAdjustsContentInsets = false
+        scroll.onMagnify = onMagnify
         let hosting = NSHostingView(rootView: content)
         hosting.frame = CGRect(origin: .zero, size: contentSize)
         scroll.documentView = hosting
-        context.coordinator.centered = false
         return scroll
     }
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let hosting = scroll.documentView as? NSHostingView<Content> else { return }
+        (scroll as? NoChainScrollView)?.onMagnify = onMagnify
         hosting.rootView = content
         hosting.frame = CGRect(origin: .zero, size: contentSize)
-        // Centre the content the first time we know the clip size.
         let clip = scroll.contentView.bounds.size
-        if !context.coordinator.centered, clip.width > 0 {
-            let x = max(0, (contentSize.width - clip.width) / 2)
-            let y = max(0, (contentSize.height - clip.height) / 2)
-            scroll.contentView.scroll(to: NSPoint(x: x, y: y))
+        guard clip.width > 0 else { return }
+        let coord = context.coordinator
+        if !coord.centered {
+            scroll.contentView.scroll(to: NSPoint(x: max(0, (contentSize.width - clip.width) / 2),
+                                                  y: max(0, (contentSize.height - clip.height) / 2)))
             scroll.reflectScrolledClipView(scroll.contentView)
-            context.coordinator.centered = true
+            coord.centered = true
+        } else if let last = coord.lastContentSize, last != contentSize {
+            // Zoom changed: keep the point under the viewport centre fixed (centre-anchored).
+            let rx = contentSize.width / last.width, ry = contentSize.height / last.height
+            var o = scroll.contentView.bounds.origin
+            o.x = (o.x + clip.width / 2) * rx - clip.width / 2
+            o.y = (o.y + clip.height / 2) * ry - clip.height / 2
+            o.x = min(max(0, o.x), max(0, contentSize.width - clip.width))
+            o.y = min(max(0, o.y), max(0, contentSize.height - clip.height))
+            scroll.contentView.scroll(to: o)
+            scroll.reflectScrolledClipView(scroll.contentView)
         }
+        coord.lastContentSize = contentSize
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
-    final class Coordinator { var centered = false }
+    final class Coordinator { var centered = false; var lastContentSize: CGSize? }
 
     final class NoChainScrollView: NSScrollView {
+        var onMagnify: ((CGFloat) -> Void)?
+
         // Scroll the content ourselves and consume the event — never call super, so the
         // scroll is not forwarded to the enclosing panel when we're at (or can't reach) a bound.
         override func scrollWheel(with event: NSEvent) {
@@ -751,5 +771,8 @@ struct NonChainingScrollView<Content: View>: NSViewRepresentable {
             contentView.scroll(to: o)
             reflectScrolledClipView(contentView)
         }
+
+        // Trackpad pinch → zoom (handled by the SwiftUI binding via the closure).
+        override func magnify(with event: NSEvent) { onMagnify?(event.magnification) }
     }
 }
