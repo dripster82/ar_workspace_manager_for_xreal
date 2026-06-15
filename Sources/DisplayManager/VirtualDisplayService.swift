@@ -27,6 +27,9 @@ public struct VirtualScreenConfig: Codable, Identifiable, Hashable, Sendable {
     public var showInAR: Bool
     /// Persistent UUID of a physical display this (virtual) screen is mirrored onto, if any.
     public var mirrorToPhysical: String?
+    /// Id of another virtual screen this one mirrors (shows the same content as), if any. The
+    /// source must not itself be a mirror (no chains).
+    public var mirrorOfVirtual: UUID?
     /// Anchored (world-fixed) or floating (head-locked).
     public var placement: ScreenPlacement
 
@@ -34,7 +37,8 @@ public struct VirtualScreenConfig: Codable, Identifiable, Hashable, Sendable {
                 yawDegrees: Double = 0, pitchDegrees: Double = 0, distanceMeters: Double = 2.0,
                 scale: Double = 1.0, curvatureRadius: Double = 0,
                 autoCurveH: Bool = false, showInAR: Bool = true,
-                mirrorToPhysical: String? = nil, placement: ScreenPlacement = .anchored) {
+                mirrorToPhysical: String? = nil, mirrorOfVirtual: UUID? = nil,
+                placement: ScreenPlacement = .anchored) {
         self.id = id
         self.name = name
         self.width = width
@@ -48,6 +52,7 @@ public struct VirtualScreenConfig: Codable, Identifiable, Hashable, Sendable {
         self.autoCurveH = autoCurveH
         self.showInAR = showInAR
         self.mirrorToPhysical = mirrorToPhysical
+        self.mirrorOfVirtual = mirrorOfVirtual
         self.placement = placement
     }
 
@@ -69,6 +74,7 @@ public struct VirtualScreenConfig: Codable, Identifiable, Hashable, Sendable {
         autoCurveH = try c.decodeIfPresent(Bool.self, forKey: .autoCurveH) ?? legacyAuto
         showInAR = try c.decodeIfPresent(Bool.self, forKey: .showInAR) ?? true
         mirrorToPhysical = try c.decodeIfPresent(String.self, forKey: .mirrorToPhysical)
+        mirrorOfVirtual = try c.decodeIfPresent(UUID.self, forKey: .mirrorOfVirtual)
         placement = try c.decodeIfPresent(ScreenPlacement.self, forKey: .placement) ?? .anchored
     }
 
@@ -87,12 +93,14 @@ public struct VirtualScreenConfig: Codable, Identifiable, Hashable, Sendable {
         try c.encode(autoCurveH, forKey: .autoCurveH)
         try c.encode(showInAR, forKey: .showInAR)
         try c.encodeIfPresent(mirrorToPhysical, forKey: .mirrorToPhysical)
+        try c.encodeIfPresent(mirrorOfVirtual, forKey: .mirrorOfVirtual)
         try c.encode(placement, forKey: .placement)
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, width, height, hiDPI, yawDegrees, pitchDegrees, distanceMeters
-        case scale, curvatureRadius, autoCurve, autoCurveH, showInAR, mirrorToPhysical, placement
+        case scale, curvatureRadius, autoCurve, autoCurveH, showInAR, mirrorToPhysical
+        case mirrorOfVirtual, placement
     }
 
     /// Default placement values (position/size/curve), independent of identity & resolution.

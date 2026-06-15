@@ -36,6 +36,10 @@ public final class GlassesRenderer: NSObject {
     private var linearSampler: MTLSamplerState!
     private var sharpSampler: MTLSamplerState!
     private var mipTargets: [UUID: MTLTexture] = [:]
+    // Identity of the capture texture last blitted+mipped per screen, so we skip
+    // regenerating mipmaps for frames whose source pixels haven't changed (capture
+    // runs at 30fps; rendering up to the glasses' full refresh).
+    private var mipSourceVersion: [UUID: ObjectIdentifier] = [:]
 
     /// Supersample factor: 1.0 = off; renders the scene at scale× the display then
     /// downsamples, smoothing interior edges/lines while keeping text crisp.
@@ -54,6 +58,10 @@ public final class GlassesRenderer: NSObject {
     private let lock = NSLock()
     private var screens: [SceneScreen] = []
     private var cachedVertexBuffers: [UUID: (buffer: MTLBuffer, count: Int)] = [:]
+    // Wide-canvas atlas textures, keyed by canvas screen id (recreated when the pixel size
+    // changes). Each frame the member tiles are composited into the atlas, then the canvas
+    // mesh samples it — so the merged image curves as one surface.
+    private var canvasAtlases: [UUID: MTLTexture] = [:]
 
     /// When non-nil, overrides the IMU pose (UI fake-pose slider for glasses-free testing).
     public var fakePose: simd_quatf? {
@@ -70,6 +78,14 @@ public final class GlassesRenderer: NSObject {
     public var stereoEnabled = false
     /// Interpupillary distance in metres (eye separation).
     public var ipd: Float = 0.063
+
+    /// When set, the next rendered frame writes stage2 (merged atlas) and stage3 (final curved
+    /// frame) JPEGs into this directory, then clears itself. See `dumpTexture`.
+    public var debugDumpDir: URL?
+    /// Crosshair markers (atlas pixel coords, top-left origin) drawn onto the stage2 dump.
+    public var debugStage2Markers: [(x: Int, y: Int, color: CGColor)] = []
+    /// Called (off the main thread) after a debug dump, with the list of files written.
+    public var onDebugDumpComplete: (([String]) -> Void)?
 
     public private(set) var framesPerSecond: Double = 0
     private var frameCount = 0
@@ -156,6 +172,55 @@ public final class GlassesRenderer: NSObject {
 
     public func clearHelp() { showHelp = false }
 
+    /// Copy a (possibly GPU-private) texture's level 0 into a readable buffer and write it as a
+    /// JPEG. Used by the debug stage-capture to inspect the pipeline (raw → merged → curved).
+    /// `markers` (atlas pixel coords, top-left origin) are drawn as coloured crosshairs.
+    @discardableResult
+    public func dumpTexture(_ src: MTLTexture, to url: URL,
+                            markers: [(x: Int, y: Int, color: CGColor)] = []) -> Bool {
+        let w = src.width, h = src.height
+        guard w > 0, h > 0 else { return false }
+        let desc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm, width: w, height: h, mipmapped: false)
+        desc.usage = .shaderRead
+        desc.storageMode = .shared
+        guard let dst = device.makeTexture(descriptor: desc),
+              let cb = commandQueue.makeCommandBuffer(),
+              let blit = cb.makeBlitCommandEncoder() else { return false }
+        blit.copy(from: src, sourceSlice: 0, sourceLevel: 0,
+                  sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                  sourceSize: MTLSize(width: w, height: h, depth: 1),
+                  to: dst, destinationSlice: 0, destinationLevel: 0,
+                  destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
+        blit.endEncoding()
+        cb.commit()
+        cb.waitUntilCompleted()
+
+        let bytesPerRow = w * 4
+        var data = [UInt8](repeating: 0, count: bytesPerRow * h)
+        dst.getBytes(&data, bytesPerRow: bytesPerRow,
+                     from: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0)
+        // bgra8 bytes read as little-endian 32-bit words are 0xAARRGGBB → ARGB / skip-first.
+        let bitmapInfo = CGImageAlphaInfo.noneSkipFirst.rawValue
+            | CGBitmapInfo.byteOrder32Little.rawValue
+        guard let ctx = CGContext(data: &data, width: w, height: h, bitsPerComponent: 8,
+                                  bytesPerRow: bytesPerRow, space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: bitmapInfo) else { return false }
+        // Draw crosshair markers. CGContext origin is bottom-left, but the buffer is top-down,
+        // so flip y. Sizes scale with the image so they're visible on a multi-thousand-px atlas.
+        let arm = max(8, h / 80), thick = max(3, h / 300)
+        for m in markers {
+            ctx.setFillColor(m.color)
+            let cy = h - m.y
+            ctx.fill(CGRect(x: m.x - arm, y: cy - thick / 2, width: 2 * arm, height: thick))
+            ctx.fill(CGRect(x: m.x - thick / 2, y: cy - arm, width: thick, height: 2 * arm))
+        }
+        guard let cg = ctx.makeImage() else { return false }
+        let rep = NSBitmapImageRep(cgImage: cg)
+        guard let jpeg = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.9]) else { return false }
+        do { try jpeg.write(to: url); return true } catch { return false }
+    }
+
     /// Set supersample factor (1.0 off, up to 2.0).
     public func setRenderScale(_ scale: Double) {
         let valid = min(2.0, max(1.0, scale))
@@ -188,7 +253,7 @@ public final class GlassesRenderer: NSObject {
         guard valid != sharpenAnisotropy else { return }
         sharpenAnisotropy = valid
         rebuildSharpSampler()
-        if valid == 1 { mipTargets.removeAll() }
+        if valid == 1 { mipTargets.removeAll(); mipSourceVersion.removeAll() }
     }
 
     /// MSAA levels this GPU actually supports (1 = off is always allowed).
@@ -267,20 +332,29 @@ public final class GlassesRenderer: NSObject {
     /// mips so anisotropic sampling can smooth minified/angled content (e.g. small text).
     private func prepareSharpTextures(_ screens: [SceneScreen],
                                       commandBuffer: MTLCommandBuffer) -> [UUID: MTLTexture] {
-        guard sharpenAnisotropy > 1, let blit = commandBuffer.makeBlitCommandEncoder() else { return [:] }
+        guard sharpenAnisotropy > 1 else { return [:] }
         var result: [UUID: MTLTexture] = [:]
+        var blit: MTLBlitCommandEncoder?
         for s in screens {
             guard let src = s.textureProvider(), src.width > 0, src.height > 0 else { continue }
             guard let target = mipTarget(for: s.id, width: src.width, height: src.height) else { continue }
+            result[s.id] = target
+            // Skip the blit + mipmap regeneration when this screen's capture texture is the
+            // same object we last mipped (no new 30fps frame since): the mips are still valid.
+            let version = ObjectIdentifier(src)
+            if mipSourceVersion[s.id] == version { continue }
+
+            if blit == nil { blit = commandBuffer.makeBlitCommandEncoder() }
+            guard let blit else { continue }
             blit.copy(from: src, sourceSlice: 0, sourceLevel: 0,
                       sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
                       sourceSize: MTLSize(width: src.width, height: src.height, depth: 1),
                       to: target, destinationSlice: 0, destinationLevel: 0,
                       destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
             blit.generateMipmaps(for: target)
-            result[s.id] = target
+            mipSourceVersion[s.id] = version
         }
-        blit.endEncoding()
+        blit?.endEncoding()
         return result
     }
 
@@ -292,6 +366,7 @@ public final class GlassesRenderer: NSObject {
         desc.storageMode = .private
         let t = device.makeTexture(descriptor: desc)
         mipTargets[id] = t
+        mipSourceVersion[id] = nil // fresh target: force a re-blit next frame
         return t
     }
 
@@ -303,6 +378,54 @@ public final class GlassesRenderer: NSObject {
         cachedVertexBuffers.removeAll()
         lock.unlock()
         mipTargets.removeAll()
+        mipSourceVersion.removeAll()
+        canvasAtlases.removeAll()
+    }
+
+    /// Atlas render target for a wide-canvas screen (recreated on size change). Mipmapped so
+    /// anisotropic sharpening has lower levels to sample; storage is private (GPU-only).
+    private func canvasAtlas(for id: UUID, width: Int, height: Int) -> MTLTexture? {
+        let w = max(1, width), h = max(1, height)
+        if let t = canvasAtlases[id], t.width == w, t.height == h { return t }
+        let desc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm, width: w, height: h, mipmapped: true)
+        desc.usage = [.renderTarget, .shaderRead]
+        desc.storageMode = .private
+        let t = device.makeTexture(descriptor: desc)
+        canvasAtlases[id] = t
+        return t
+    }
+
+    /// Composite each wide-canvas screen's live tiles into its atlas: one render pass per
+    /// canvas, drawing every tile's source into its destination sub-rect (scaled to match the
+    /// FOV-derived canvas density). Runs before the scene pass so the atlas is ready to sample.
+    private func compositeCanvases(_ screens: [SceneScreen], commandBuffer: MTLCommandBuffer) {
+        guard let pipe = downscalePipeline else { return }
+        for s in screens where s.isCanvas {
+            guard let atlas = canvasAtlas(for: s.id, width: s.canvasPixelWidth,
+                                          height: s.canvasPixelHeight) else { continue }
+            let pass = MTLRenderPassDescriptor()
+            pass.colorAttachments[0].texture = atlas
+            pass.colorAttachments[0].loadAction = .clear      // gaps between screens stay black
+            pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+            pass.colorAttachments[0].storeAction = .store
+            guard let enc = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { continue }
+            enc.setRenderPipelineState(pipe)
+            enc.setFragmentSamplerState(linearSampler, index: 0)
+            for tile in s.canvasTiles {
+                guard let src = tile.sourceProvider(), src.width > 0, src.height > 0 else { continue }
+                enc.setViewport(MTLViewport(originX: Double(tile.destX), originY: Double(tile.destY),
+                                            width: Double(tile.destWidth), height: Double(tile.destHeight),
+                                            znear: 0, zfar: 1))
+                enc.setFragmentTexture(src, index: 0)
+                enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+            }
+            enc.endEncoding()
+            if sharpenAnisotropy > 1, let blit = commandBuffer.makeBlitCommandEncoder() {
+                blit.generateMipmaps(for: atlas)
+                blit.endEncoding()
+            }
+        }
     }
 
     // MARK: Output window lifecycle
@@ -487,7 +610,8 @@ public final class GlassesRenderer: NSObject {
         let currentScreens = screens
         lock.unlock()
 
-        // Mipmap blits (if sharpening) must run before the render pass on the same buffer.
+        // Wide-canvas atlases and mipmap blits (if sharpening) must run before the scene pass.
+        compositeCanvases(currentScreens, commandBuffer: commandBuffer)
         let sharpTextures = prepareSharpTextures(currentScreens, commandBuffer: commandBuffer)
 
         let outW = drawable.texture.width, outH = drawable.texture.height
@@ -504,9 +628,12 @@ public final class GlassesRenderer: NSObject {
         pass.depthAttachment.clearDepth = 1.0
 
         // Where the (single-sample) scene ends up: the drawable directly, or an offscreen
-        // supersample buffer we then downscale into the drawable.
+        // buffer we then blit into the drawable. We force the offscreen path when supersampling
+        // OR when a debug dump is pending (the drawable is framebufferOnly and can't be read).
+        let dumpDir = debugDumpDir
+        let offscreen = supersample || dumpDir != nil
         let sceneTarget: MTLTexture
-        if supersample {
+        if offscreen {
             guard let ss = ssColor(width: rw, height: rh) else { return }
             sceneTarget = ss
         } else {
@@ -531,8 +658,8 @@ public final class GlassesRenderer: NSObject {
                     screens: currentScreens, sharp: sharpTextures)
         encoder.endEncoding()
 
-        // Downsample the supersampled scene into the drawable.
-        if supersample, let dp = downscalePipeline {
+        // Blit the offscreen scene into the drawable (supersample downscale, or debug-dump path).
+        if offscreen, let dp = downscalePipeline {
             let dpass = MTLRenderPassDescriptor()
             dpass.colorAttachments[0].texture = drawable.texture
             dpass.colorAttachments[0].loadAction = .dontCare
@@ -550,6 +677,27 @@ public final class GlassesRenderer: NSObject {
 
         commandBuffer.present(drawable)
         commandBuffer.commit()
+
+        // Debug dump: wait for the frame to finish, then write the merged atlas (stage2) and the
+        // final curved scene (stage3) to disk. Cleared so it only fires once per request.
+        if let dumpDir {
+            commandBuffer.waitUntilCompleted()
+            var written: [String] = []
+            for s in currentScreens where s.isCanvas {
+                if let atlas = canvasAtlases[s.id],
+                   dumpTexture(atlas, to: dumpDir.appendingPathComponent("stage2.jpg"),
+                               markers: debugStage2Markers) {
+                    written.append("stage2.jpg (\(atlas.width)×\(atlas.height) merged flat canvas; "
+                        + "red=wrap centre green=FOV centre blue=glasses centre)")
+                }
+            }
+            if dumpTexture(sceneTarget, to: dumpDir.appendingPathComponent("stage3.jpg")) {
+                written.append("stage3.jpg (\(sceneTarget.width)×\(sceneTarget.height) final curved frame)")
+            }
+            debugDumpDir = nil
+            debugStage2Markers = []
+            onDebugDumpComplete?(written)
+        }
 
         frameCount += 1
         let now = CACurrentMediaTime()
@@ -636,6 +784,18 @@ public final class GlassesRenderer: NSObject {
             let geometry = vertexBuffer(for: screen)
             encoder.setVertexBuffer(geometry.buffer, offset: 0, index: 0)
             encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.size, index: 1)
+            if screen.isCanvas {
+                // Wide canvas: sample the pre-composited atlas (mipmapped when sharpening).
+                if let atlas = canvasAtlases[screen.id] {
+                    encoder.setRenderPipelineState(screenPipeline)
+                    encoder.setFragmentTexture(atlas, index: 0)
+                    encoder.setFragmentSamplerState(sharpenAnisotropy > 1 ? sharpSampler : linearSampler, index: 0)
+                } else {
+                    encoder.setRenderPipelineState(placeholderPipeline)
+                }
+                encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: geometry.count)
+                continue
+            }
             if let mipped = sharp[screen.id] {
                 encoder.setRenderPipelineState(screenPipeline)
                 encoder.setFragmentTexture(mipped, index: 0)

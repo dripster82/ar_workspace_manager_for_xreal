@@ -211,7 +211,32 @@ struct ControlPanelView: View {
                     if !coordinator.stereoEnabled {
                         Toggle("Wide curved canvas", isOn: $coordinator.wideCanvas)
                             .font(.caption)
-                            .help("Wrap all anchored screens onto one continuous auto-curved surface at a single shared distance/scale (tune via the first screen's distance & scale)")
+                            .help("Wrap all anchored screens onto one continuous auto-curved surface with shared distance and canvas scale")
+                        if coordinator.wideCanvas {
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack {
+                                    Text("Canvas distance").frame(width: 110, alignment: .leading).font(.caption)
+                                    Slider(value: $coordinator.wideCanvasDistanceMeters, in: 0.5...6)
+                                    Text(String(format: "%.1fm", coordinator.wideCanvasDistanceMeters))
+                                        .frame(width: 44).font(.caption).monospacedDigit()
+                                }
+                                HStack {
+                                    Text("Canvas scale").frame(width: 110, alignment: .leading).font(.caption)
+                                    Slider(value: $coordinator.wideCanvasScale, in: 0.3...3)
+                                    Text(String(format: "%.2fx", coordinator.wideCanvasScale))
+                                        .frame(width: 44).font(.caption).monospacedDigit()
+                                }
+                                Text("Screen scale still sets each screen's size before stitching. Canvas scale then resizes the merged wide canvas.")
+                                    .font(.caption2).foregroundStyle(.secondary)
+                                Button("Capture debug stages") {
+                                    coordinator.captureDebugStages()
+                                }
+                                .font(.caption)
+                                .disabled(!coordinator.arActive)
+                                .help("Write stage1_*.jpg (raw screens), stage2.jpg (merged flat canvas), stage3.jpg (final curved frame) to ~/Desktop/VRDesktop-debug")
+                            }
+                            .padding(.top, 2)
+                        }
                     }
                 }
             }
@@ -290,12 +315,16 @@ struct ControlPanelView: View {
             ForEach(coordinator.editableScreens()) { screen in
                 ScreenRow(initial: screen,
                           isPhysical: isPhysical(screen.id),
+                          wideCanvasMode: coordinator.wideCanvas,
                           lookedAt: coordinator.lookedAtScreenID == screen.id,
                           onChange: { coordinator.updateScreen($0) },
                           onRemove: { coordinator.removeScreen(id: screen.id) })
                     .id(screen.id)
                 if !isPhysical(screen.id) {
-                    mirrorMenu(for: screen)
+                    virtualMirrorMenu(for: screen)
+                    if screen.mirrorOfVirtual == nil {
+                        mirrorMenu(for: screen)
+                    }
                 }
             }
 
@@ -311,20 +340,9 @@ struct ControlPanelView: View {
                         VirtualScreenConfig(name: "Ultrawide \(n)", width: 5120, height: 1080,
                                             curvatureRadius: 1.5))
                 }
-                let physicals = coordinator.availablePhysicalDisplays()
-                Menu("Add monitor") {
-                    if physicals.isEmpty {
-                        Text("No available monitors").disabled(true)
-                    }
-                    ForEach(physicals, id: \.uuid) { display in
-                        Button(display.name) {
-                            coordinator.addPhysicalScreen(uuidString: display.uuid, name: display.name)
-                        }
-                    }
-                }
-                .frame(width: 130)
             }
-            Text("Monitors appear in AR while still showing on the physical screen.")
+            Text("Your real monitors appear automatically (green) for positioning. "
+                 + "Toggle one on to mirror it into the glasses (orange).")
                 .font(.caption2).foregroundStyle(.secondary)
         }
     }
@@ -342,6 +360,17 @@ struct ControlPanelView: View {
                 .font(.caption)
             Toggle("Keep cursor off the AR screen", isOn: $coordinator.confineCursor)
                 .font(.caption)
+            HStack {
+                Text("Restore windows on start").font(.caption)
+                Spacer()
+                Picker("", selection: $coordinator.windowRestoreMode) {
+                    ForEach(WindowRestoreMode.allCases) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                .labelsHidden().fixedSize()
+            }
+            .help("When AR starts, put each app back on the screen/position it had when AR last stopped (needs Accessibility).")
             Divider()
             Toggle("Write debug log", isOn: $coordinator.debugLogging)
                 .font(.caption)
@@ -357,6 +386,28 @@ struct ControlPanelView: View {
                 .controlSize(.small)
             }
         }
+    }
+
+    private func virtualMirrorMenu(for screen: VirtualScreenConfig) -> some View {
+        let targets = coordinator.virtualMirrorTargets(for: screen.id)
+        let currentName = targets.first { $0.id == screen.mirrorOfVirtual }?.name
+        return HStack(spacing: 6) {
+            Image(systemName: "rectangle.on.rectangle.angled.fill").foregroundStyle(.secondary)
+            Menu(currentName.map { "Mirroring screen: \($0)" } ?? "Mirror another screen: off") {
+                Button("Off") { coordinator.setVirtualMirror(screenID: screen.id, sourceID: nil) }
+                if targets.isEmpty {
+                    Text("No eligible screens").disabled(true)
+                }
+                ForEach(targets, id: \.id) { target in
+                    Button(target.name) {
+                        coordinator.setVirtualMirror(screenID: screen.id, sourceID: target.id)
+                    }
+                }
+            }
+            .frame(width: 220)
+        }
+        .font(.caption)
+        .padding(.leading, 24)
     }
 
     private func mirrorMenu(for screen: VirtualScreenConfig) -> some View {
@@ -461,6 +512,7 @@ struct ControlPanelView: View {
 struct ScreenRow: View {
     let initial: VirtualScreenConfig
     var isPhysical: Bool = false
+    var wideCanvasMode: Bool = false
     var lookedAt: Bool = false
     var onChange: (VirtualScreenConfig) -> Void = { _ in }
     var onRemove: () -> Void = {}
@@ -470,11 +522,13 @@ struct ScreenRow: View {
     @State private var cfg: VirtualScreenConfig
     @State private var expanded = false
 
-    init(initial: VirtualScreenConfig, isPhysical: Bool = false, lookedAt: Bool = false,
+    init(initial: VirtualScreenConfig, isPhysical: Bool = false, wideCanvasMode: Bool = false,
+         lookedAt: Bool = false,
          onChange: @escaping (VirtualScreenConfig) -> Void = { _ in },
          onRemove: @escaping () -> Void = {}) {
         self.initial = initial
         self.isPhysical = isPhysical
+        self.wideCanvasMode = wideCanvasMode
         self.lookedAt = lookedAt
         self.onChange = onChange
         self.onRemove = onRemove
@@ -484,20 +538,59 @@ struct ScreenRow: View {
     var body: some View {
         DisclosureGroup(isExpanded: $expanded) {
             VStack(alignment: .leading, spacing: 6) {
+                if isPhysical {
+                    Toggle("Mirror into glasses", isOn: $cfg.showInAR)
+                        .font(.caption)
+                        .help("On: capture this monitor and show it in the glasses (orange). "
+                              + "Off: keep it as a positioning reference only (green).")
+                }
                 Picker("Placement", selection: $cfg.placement) {
                     Text("Anchored").tag(ScreenPlacement.anchored)
                     Text("Floating").tag(ScreenPlacement.floating)
                 }
                 .pickerStyle(.segmented)
                 .help("Anchored: fixed in space. Floating: stays in view (yaw/pitch/distance are the offset).")
+                if isPhysical {
+                    Text("Resolution: \(cfg.width)×\(cfg.height)")
+                        .font(.caption2).foregroundStyle(.secondary)
+                } else {
+                    Menu("Resolution: \(cfg.width)×\(cfg.height)") {
+                        Section("1080p (native)") {
+                            Button("1440×1080 (4:3)") { setResolution(width: 1440, height: 1080) }
+                            Button("1600×1080 (3:2)") { setResolution(width: 1600, height: 1080) }
+                            Button("1920×1080 (16:9)") { setResolution(width: 1920, height: 1080) }
+                            Button("2560×1080 (21:9)") { setResolution(width: 2560, height: 1080) }
+                            Button("3840×1080 (32:9)") { setResolution(width: 3840, height: 1080) }
+                        }
+                        Section("1440p") {
+                            Button("2560×1440") { setResolution(width: 2560, height: 1440) }
+                            Button("3440×1440") { setResolution(width: 3440, height: 1440) }
+                            Button("5120×1440") { setResolution(width: 5120, height: 1440) }
+                        }
+                        Section("2160p") {
+                            Button("3840×2160") { setResolution(width: 3840, height: 2160) }
+                        }
+                    }
+                    .font(.caption)
+                }
                 slider("Yaw", $cfg.yawDegrees, -180...180, "°")
                 slider("Pitch", $cfg.pitchDegrees, -90...90, "°")
+                if wideCanvasMode && cfg.placement != .floating {
+                    Text("Wide canvas controls shared distance and canvas scale. Screen scale still controls the image size.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
                 slider("Distance", $cfg.distanceMeters, 0.5...6, "m")
+                    .disabled(wideCanvasMode && cfg.placement != .floating)
                 slider("Scale", $cfg.scale, 0.3...3, "×")
                 curveSlider("Curve", $cfg.curvatureRadius, auto: $cfg.autoCurveH)
+                    .disabled(wideCanvasMode && cfg.placement != .floating)
                 HStack {
                     Button("Reset placement") { cfg.resetPlacement() }
-                    Button("Remove", role: .destructive) { onRemove() }
+                    // Physical monitors are discovered automatically, so removing one is
+                    // meaningless (it'd reappear) — only virtual screens can be removed.
+                    if !isPhysical {
+                        Button("Remove", role: .destructive) { onRemove() }
+                    }
                 }
                 .controlSize(.small)
             }
@@ -505,8 +598,12 @@ struct ScreenRow: View {
         } label: {
             HStack {
                 Toggle("", isOn: $cfg.showInAR).labelsHidden()
+                    .help(isPhysical
+                          ? "On: mirror this monitor into the glasses (orange). Off: positioning reference only (green)."
+                          : "Show this virtual screen in the glasses.")
                 Image(systemName: isPhysical ? "display" : "rectangle.on.rectangle")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(cfg.showInAR && isPhysical ? .orange
+                                     : isPhysical ? .green : .secondary)
                 Text(cfg.name)
                 if lookedAt {
                     Image(systemName: "eye.fill").foregroundStyle(.tint).font(.caption)
@@ -540,6 +637,12 @@ struct ScreenRow: View {
                 .foregroundStyle(auto.wrappedValue ? .secondary : .primary)
         }
     }
+
+    private func setResolution(width: Int, height: Int) {
+        guard !isPhysical else { return }
+        cfg.width = width
+        cfg.height = height
+    }
 }
 
 /// Drag-to-place layout: two zones (anchored "around you" and floating "in view"); each
@@ -564,13 +667,18 @@ struct PlacementMapView: View {
                  baseYaw: Self.anchoredYaw, basePitch: Self.anchoredPitch, zoom: $zoomAnchored)
             zone(title: "In view (floating)", placement: .floating, accent: .accentColor,
                  baseYaw: Self.floatYaw, basePitch: Self.floatPitch, zoom: $zoomFloating)
-            Text("Drag a screen to position it. Two-finger scroll to pan, +/− to zoom.")
+            Text("Drag a screen to position it. Two-finger scroll to pan, +/− to zoom. "
+                 + "Green = real monitor (positioning only), orange = real monitor shown in the glasses.")
                 .font(.caption2).foregroundStyle(.secondary)
         }
     }
 
     private func screens(_ placement: ScreenPlacement) -> [VirtualScreenConfig] {
-        coordinator.editableScreens().filter { $0.showInAR && $0.placement == placement }
+        // Physical monitors always appear (as positioning references) even when not shown in the
+        // glasses; virtual screens appear only when shown in AR.
+        coordinator.editableScreens().filter {
+            $0.placement == placement && ($0.showInAR || coordinator.isPhysicalScreen($0.id))
+        }
     }
 
     private func zone(title: String, placement: ScreenPlacement, accent: Color,
@@ -616,8 +724,12 @@ struct PlacementMapView: View {
                             .frame(width: CGFloat(Self.fovHDeg) * ppd, height: CGFloat(Self.fovVDeg) * ppd)
                             .position(x: contentW / 2, y: contentH / 2)
                         ForEach(screens(placement)) { cfg in
+                            // Colour code: orange = real monitor mirrored into the glasses,
+                            // green = real monitor shown for positioning only, accent = virtual.
+                            let boxAccent: Color = coordinator.isPhysicalScreen(cfg.id)
+                                ? (cfg.showInAR ? .orange : .green) : accent
                             ScreenBox(initial: cfg, area: CGSize(width: contentW, height: contentH),
-                                      coordinateSpace: spaceName, accent: accent, pxPerDeg: ppd,
+                                      coordinateSpace: spaceName, accent: boxAccent, pxPerDeg: ppd,
                                       yawRange: baseYaw, pitchRange: basePitch,
                                       lookedAt: coordinator.lookedAtScreenID == cfg.id,
                                       onChange: { coordinator.updateScreen($0) })

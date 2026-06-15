@@ -1,6 +1,7 @@
 import AppKit
 import CapturePipeline
 import Compositor
+import CoreGraphics
 import DisplayManager
 import GlassesDriver
 import SwiftUI
@@ -61,6 +62,14 @@ final class AppCoordinator: ObservableObject {
 
     let workspaceStore = WorkspaceStore()
     let virtualDisplays = VirtualDisplayService()
+    private let windowLayout = WindowLayoutStore()
+    private let windowRestorePrompt = WindowRestorePromptController()
+
+    /// What to do with a saved window layout when AR starts (ask / always / never).
+    @Published var windowRestoreMode: WindowRestoreMode =
+        WindowRestoreMode(rawValue: UserDefaults.standard.string(forKey: "windowRestoreMode") ?? "") ?? .ask {
+        didSet { UserDefaults.standard.set(windowRestoreMode.rawValue, forKey: "windowRestoreMode") }
+    }
     private(set) var renderer: GlassesRenderer?
     private var captures: [UUID: CaptureSource] = [:]
     private var statsTimer: Timer?
@@ -75,6 +84,23 @@ final class AppCoordinator: ObservableObject {
     @Published var wideCanvas: Bool = UserDefaults.standard.bool(forKey: "wideCanvas") {
         didSet {
             UserDefaults.standard.set(wideCanvas, forKey: "wideCanvas")
+            liveUpdateScreens()
+        }
+    }
+
+    /// Wide-canvas-only shared placement controls. Distance affects the composed anchored
+    /// canvas as a whole; scale acts as a post-stitch multiplier on the merged canvas.
+    @Published var wideCanvasDistanceMeters: Double = UserDefaults.standard.object(forKey: "wideCanvasDistanceMeters") == nil
+        ? 2.0 : UserDefaults.standard.double(forKey: "wideCanvasDistanceMeters") {
+        didSet {
+            UserDefaults.standard.set(wideCanvasDistanceMeters, forKey: "wideCanvasDistanceMeters")
+            liveUpdateScreens()
+        }
+    }
+    @Published var wideCanvasScale: Double = UserDefaults.standard.object(forKey: "wideCanvasScale") == nil
+        ? 1.0 : UserDefaults.standard.double(forKey: "wideCanvasScale") {
+        didSet {
+            UserDefaults.standard.set(wideCanvasScale, forKey: "wideCanvasScale")
             liveUpdateScreens()
         }
     }
@@ -117,6 +143,9 @@ final class AppCoordinator: ObservableObject {
     func revealDebugLog() { NSWorkspace.shared.activateFileViewerSelecting([DebugLog.shared.fileURL]) }
     func clearDebugLog() { DebugLog.shared.clear() }
     private var lastLogSnapshot: TimeInterval = 0
+    /// Last time we persisted the window layout while AR runs (every ~10s), so positions survive
+    /// a quit/crash without an explicit Stop.
+    private var lastWindowSnapshot: TimeInterval = 0
 
     /// The screen the user is currently looking at (gaze nearest its centre), if any.
     @Published var lookedAtScreenID: UUID?
@@ -174,6 +203,7 @@ final class AppCoordinator: ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor in
                 self?.refreshMirroringState()
+                self?.syncPhysicalMonitors() // pick up newly connected monitors for the layout
                 self?.handleScreenChange()
             }
         }
@@ -188,6 +218,8 @@ final class AppCoordinator: ObservableObject {
         statsTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.updateStats() }
         }
+        // Populate the layout with the currently-connected monitors (positioning-only/green).
+        syncPhysicalMonitors()
     }
 
     private func updateStats() {
@@ -220,8 +252,15 @@ final class AppCoordinator: ObservableObject {
             }
         }
 
-        // Periodic snapshot (~every 2s) for drift/perf troubleshooting.
+        // Keep the saved window layout fresh while AR runs (every ~10s), so quitting without an
+        // explicit Stop still preserves where the apps were.
         let now = CACurrentMediaTime()
+        if arActive, now - lastWindowSnapshot >= 10.0 {
+            lastWindowSnapshot = now
+            snapshotWindowLayout()
+        }
+
+        // Periodic snapshot (~every 2s) for drift/perf troubleshooting.
         if debugLogging, now - lastLogSnapshot >= 2.0 {
             lastLogSnapshot = now
             let snapshot = String(
@@ -303,6 +342,13 @@ final class AppCoordinator: ObservableObject {
     }
     private var glassesDisplayID: CGDirectDisplayID = 0
     private var lastOutputScreenID: CGDirectDisplayID = 0
+    /// Display id order from the last OS-arrangement sync, to skip re-applying when unchanged.
+    private var lastArrangementSignature: [CGDirectDisplayID] = []
+    /// Atlas mapping from the last wide-canvas build, used to place debug marker crosshairs.
+    private var lastCanvasMapping: (aMin: Double, bMin: Double, pxH: Double, pxV: Double, w: Int, h: Int)?
+    /// The user's OS display origins captured at AR start, restored on Stop so arranging the
+    /// desktops to match the GUI doesn't permanently rearrange their physical setup.
+    private var savedDisplayOrigins: [CGDirectDisplayID: CGPoint] = [:]
 
     var sbsModeAvailable: Bool {
         glassesDisplayID != 0 &&
@@ -415,6 +461,62 @@ final class AppCoordinator: ObservableObject {
         mirroringActive = ids.prefix(Int(count)).contains {
             CGDisplayMirrorsDisplay($0) != kCGNullDirectDisplay && !intentionalMirrors.contains($0)
         }
+    }
+
+    // MARK: Virtual → virtual mirroring (AR-only: a screen shows another screen's content)
+
+    /// The capture a screen should render: its mirror source's capture if it mirrors another
+    /// virtual screen, otherwise its own.
+    private func captureForConfig(_ config: VirtualScreenConfig) -> CaptureSource? {
+        captures[config.mirrorOfVirtual ?? config.id]
+    }
+
+    /// Virtual screens `screenID` may mirror: other virtual screens that aren't themselves
+    /// mirrors (no chains) and aren't this screen.
+    func virtualMirrorTargets(for screenID: UUID) -> [(id: UUID, name: String)] {
+        guard let ws = workspaceStore.activeWorkspace else { return [] }
+        return ws.virtualScreens
+            .filter { $0.id != screenID && $0.mirrorOfVirtual == nil }
+            .map { ($0.id, $0.name) }
+    }
+
+    /// Set (or clear) which virtual screen this one mirrors. Applies live without a full restart:
+    /// turning mirroring on drops the screen's own virtual display; turning it off recreates one.
+    func setVirtualMirror(screenID: UUID, sourceID: UUID?) {
+        guard var ws = workspaceStore.activeWorkspace,
+              let i = ws.virtualScreens.firstIndex(where: { $0.id == screenID }) else { return }
+        // Guard against chains: only non-mirror screens are valid sources.
+        if let sourceID, ws.virtualScreens.first(where: { $0.id == sourceID })?.mirrorOfVirtual != nil {
+            return
+        }
+        ws.virtualScreens[i].mirrorOfVirtual = sourceID
+        if sourceID != nil {
+            ws.virtualScreens[i].mirrorToPhysical = nil      // a mirror has no display to mirror out
+            // Clear any screens that were mirroring this one — it can no longer be a source.
+            for j in ws.virtualScreens.indices where ws.virtualScreens[j].mirrorOfVirtual == screenID {
+                ws.virtualScreens[j].mirrorOfVirtual = nil
+            }
+        }
+        workspaceStore.activeWorkspace = ws
+        workspaceStore.save()
+        objectWillChange.send()
+
+        guard arActive else { return }
+        let cfg = ws.virtualScreens[i]
+        if sourceID != nil {
+            // Became a mirror: tear down its own display + capture.
+            if let cap = captures[cfg.id] {
+                captures.removeValue(forKey: cfg.id)
+                Task { await cap.stop() }
+            }
+            virtualDisplays.destroy(cfg.id)
+        } else if captures[cfg.id] == nil {
+            // Became a normal screen: give it back its own display + capture.
+            if let displayID = virtualDisplays.create(cfg) ?? nil, displayID != glassesDisplayID {
+                _ = makeCapture(config: cfg, captureDisplayID: displayID)
+            }
+        }
+        liveUpdateScreens()
     }
 
     // MARK: Virtual → physical mirroring
@@ -611,33 +713,45 @@ final class AppCoordinator: ObservableObject {
 
     private func beginAR(on screen: NSScreen) {
         guard let renderer, !arActive else { return }
-        guard let workspace = workspaceStore.activeWorkspace else { return }
 
         let outputDisplayID = Self.screenDisplayID(screen)
         glassesDisplayID = outputDisplayID
         lastOutputScreenID = outputDisplayID
+        // Snapshot the user's current OS display arrangement so we can restore it on Stop —
+        // we're about to move real monitors to match the GUI ("move everything").
+        snapshotDisplayArrangement()
+        // Make sure every connected monitor is in the layout (the main display anchors the OS
+        // arrangement). (Re-reads the workspace below in case this adds entries.)
+        syncPhysicalMonitors()
+        guard let workspace = workspaceStore.activeWorkspace else { return }
         DebugLog.shared.log("beginAR on '\(screen.localizedName)' id=\(outputDisplayID) frame=\(NSStringFromRect(screen.frame))")
 
-        // 1. Create virtual displays for the workspace.
-        var sceneScreens: [SceneScreen] = []
-        for config in workspace.virtualScreens where config.showInAR {
+        // 1. Create virtual displays for the workspace. Mirror screens get no display of their
+        //    own — they reuse their source screen's capture (added after sources exist).
+        var pairs: [(config: VirtualScreenConfig, capture: CaptureSource)] = []
+        for config in workspace.virtualScreens where config.showInAR && config.mirrorOfVirtual == nil {
             guard let displayID = virtualDisplays.create(config) ?? nil else {
                 statusMessage = "CGVirtualDisplay unavailable — \(config.name) skipped"
                 continue
             }
             guard displayID != outputDisplayID else { continue } // never capture the glasses display
-            sceneScreens.append(makeSceneScreen(config: config, captureDisplayID: displayID))
+            pairs.append((config, makeCapture(config: config, captureDisplayID: displayID)))
+        }
+        for config in workspace.virtualScreens where config.showInAR && config.mirrorOfVirtual != nil {
+            if let capture = captureForConfig(config) { pairs.append((config, capture)) }
         }
 
         // 2. Physical displays mirrored into AR.
         for (uuidString, config) in workspace.physicalInAR where config.showInAR {
             guard let displayID = Self.resolvePhysicalDisplay(uuidString: uuidString),
                   displayID != outputDisplayID else { continue }
-            sceneScreens.append(makeSceneScreen(config: config, captureDisplayID: displayID))
+            pairs.append((config, makeCapture(config: config, captureDisplayID: displayID)))
         }
 
-        renderer.setScreens(sceneScreens)
+        renderer.setScreens(assembleScene(pairs))
         arActive = true
+        lastWindowSnapshot = CACurrentMediaTime() // defer the first periodic snapshot ~10s
+
         // Keep macOS from throttling our scheduling while head-tracking (App Nap / timer
         // coalescing causes the irregular ~50ms render-delivery stalls).
         if arActivity == nil {
@@ -650,62 +764,155 @@ final class AppCoordinator: ObservableObject {
         // Adding the virtual displays just re-arranged the global screen layout
         // (they get inserted into the arrangement, shifting the glasses' origin).
         // Re-resolve the output screen by ID once things settle, then open the window.
-        let screenCount = sceneScreens.count
+        let screenCount = pairs.count
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             guard let self, self.arActive else { return }
+            // Lay the OS displays out to match the GUI before opening the output window.
+            self.arrangeDisplaysToMatchGUI(force: true)
             let target = NSScreen.screens.first { Self.screenDisplayID($0) == outputDisplayID } ?? screen
             renderer.startOutput(on: target)
             self.outputScreenName = target.localizedName
             self.applyConfiguredMirrors() // restore any virtual→physical mirrors
             self.updateCursorConfinement()
             self.statusMessage = "AR active on \(target.localizedName) \(Int(target.frame.width))×\(Int(target.frame.height)) at (\(Int(target.frame.origin.x)),\(Int(target.frame.origin.y))) with \(screenCount) screen(s)"
+            // Let the OS arrangement settle, then offer to put windows back on their screens.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                guard let self, self.arActive else { return }
+                self.maybeRestoreWindowLayout()
+            }
         }
     }
 
-    private func makeSceneScreen(config: VirtualScreenConfig, captureDisplayID: CGDirectDisplayID) -> SceneScreen {
+    /// Create and start a capture for a screen, registering it in `captures`.
+    private func makeCapture(config: VirtualScreenConfig, captureDisplayID: CGDirectDisplayID) -> CaptureSource {
         let capture = CaptureSource(displayID: captureDisplayID, device: renderer!.device)
         captures[config.id] = capture
         Task {
             do { try await capture.start() }
             catch { await MainActor.run { self.statusMessage = "Capture failed for \(config.name): \(error.localizedDescription)" } }
         }
-        return sceneScreen(config: config, capture: capture)
+        return capture
     }
 
-    /// Build the placement geometry for a screen, reusing an existing capture.
+    /// Build the placement geometry for a single screen (its own distance/scale/curve), reusing
+    /// an existing capture. Wide-canvas merging is handled separately in `makeCanvasSceneScreen`.
     private func sceneScreen(config: VirtualScreenConfig, capture: CaptureSource) -> SceneScreen {
-        var distance = Float(config.distanceMeters)
-        var scale = Float(config.scale)
-        var autoCurve = config.autoCurveH
-        var cylindrical = false
-        // Wide curved canvas: anchored screens share one distance + scale and sit on one
-        // shared cylinder centred on the eye, each at its picked yaw AND pitch — so they keep
-        // the Layout positioning (side-by-side and above/below) but read as one continuous
-        // curved surface instead of separate panels. Shared distance/scale come from the first
-        // anchored screen (tune it by adjusting that screen). Mono only.
-        if wideCanvas, !stereoEnabled, config.placement != .floating,
-           let ref = workspaceStore.activeWorkspace?.virtualScreens
-               .first(where: { $0.showInAR && $0.placement != .floating }) {
-            distance = Float(ref.distanceMeters)
-            scale = Float(ref.scale)
-            autoCurve = true
-            cylindrical = true
-        }
         // Apparent width: ~1.6m per 1920px at scale 1, 2m away.
-        let baseWidth = Float(config.width) / 1920.0 * 1.6 * scale
+        let baseWidth = Float(config.width) / 1920.0 * 1.6 * Float(config.scale)
         return SceneScreen(
             id: config.id,
             yaw: Float(config.yawDegrees * .pi / 180),
             pitch: Float(config.pitchDegrees * .pi / 180),
-            distance: distance,
+            distance: Float(config.distanceMeters),
             widthMeters: baseWidth,
             aspect: Float(config.width) / Float(config.height),
             curveH: Float(config.curvatureRadius),
-            autoCurveH: autoCurve,
+            autoCurveH: config.autoCurveH,
             headLocked: config.placement == .floating,
-            cylindrical: cylindrical,
             textureProvider: { [weak capture] in capture?.latestTexture }
         )
+    }
+
+    /// Stable id for the single merged wide-canvas surface (so its atlas/vertex caches persist
+    /// across live rebuilds).
+    private static let wideCanvasID = UUID(uuidString: "CA9A5000-0000-0000-0000-000000000001")!
+
+    /// Build one merged wide-canvas surface from the anchored screens. Each screen is placed on
+    /// a single flat atlas at its **true GUI position** (yaw → horizontal, pitch → vertical) and
+    /// its true angular size — reproducing the Layout map exactly — then the whole atlas, cropped
+    /// to the screens' bounding box, is wrapped onto one horizontally-curved mesh. The atlas is
+    /// sized to the glasses' native density (≈48 px/°) so a FOV-sized patch maps ~1:1. The shared
+    /// canvas distance only sets how far the merged surface floats; canvas scale resizes the whole
+    /// surface. Both leave the relative layout untouched. Returns nil if no screens.
+    private func makeCanvasSceneScreen(_ anchored: [(config: VirtualScreenConfig, capture: CaptureSource)]) -> SceneScreen? {
+        guard !anchored.isEmpty else { return nil }
+
+        // FOV-matched density (pixels per degree), matching the renderer's projection: each eye
+        // is 1920×1080 over a 23° vertical FOV at 16:9.
+        let fovYDeg = 23.0
+        let fovXDeg = 2.0 * atan(tan(fovYDeg / 2.0 * .pi / 180.0) * (16.0 / 9.0)) * 180.0 / .pi
+        var pxPerDegH = 1920.0 / fovXDeg
+        var pxPerDegV = 1080.0 / fovYDeg
+
+        // Per-screen placement on the flat atlas. Atlas axes are screen-space: a = −yaw grows to
+        // the right, b = −pitch grows downward (matching the Layout editor's mapping). Size uses
+        // each screen's own scale + distance, exactly like the Layout box, so the atlas mirrors
+        // the GUI (including any gaps the user left).
+        struct Tile { let provider: () -> MTLTexture?
+                      let aLeft: Double; let bTop: Double; let wDeg: Double; let hDeg: Double }
+        let tiles: [Tile] = anchored.map { (config, capture) in
+            let widthMeters = Double(config.width) / 1920.0 * 1.6 * config.scale
+            let aspect = Double(config.width) / Double(config.height)
+            let heightMeters = widthMeters / aspect
+            let dist = max(0.1, config.distanceMeters)
+            let wDeg = 2.0 * atan((widthMeters / 2.0) / dist) * 180.0 / .pi
+            let hDeg = 2.0 * atan((heightMeters / 2.0) / dist) * 180.0 / .pi
+            return Tile(provider: { [weak capture] in capture?.latestTexture },
+                        aLeft: -config.yawDegrees - wDeg / 2.0,
+                        bTop: -config.pitchDegrees - hDeg / 2.0,
+                        wDeg: wDeg, hDeg: hDeg)
+        }
+
+        // Bounding box of all screens (degrees), cropping away the surrounding blank space.
+        let aMin = tiles.map(\.aLeft).min()!
+        let aMax = tiles.map { $0.aLeft + $0.wDeg }.max()!
+        let bMin = tiles.map(\.bTop).min()!
+        let bMax = tiles.map { $0.bTop + $0.hDeg }.max()!
+        let arcWDeg = max(0.001, aMax - aMin)
+        let arcHDeg = max(0.001, bMax - bMin)
+
+        // Clamp density so the atlas stays within Metal's 16384px limit.
+        let maxDim = max(arcWDeg * pxPerDegH, arcHDeg * pxPerDegV)
+        if maxDim > 16384 {
+            let k = 16384.0 / maxDim
+            pxPerDegH *= k; pxPerDegV *= k
+            DebugLog.shared.log("wide canvas: clamped density ×\(String(format: "%.2f", k))")
+        }
+
+        let canvasW = max(1, Int((arcWDeg * pxPerDegH).rounded()))
+        let canvasH = max(1, Int((arcHDeg * pxPerDegV).rounded()))
+        // Remember the atlas mapping so the debug capture can place its marker crosshairs.
+        lastCanvasMapping = (aMin: aMin, bMin: bMin, pxH: pxPerDegH, pxV: pxPerDegV, w: canvasW, h: canvasH)
+        let canvasTiles: [CanvasTile] = tiles.map { t in
+            CanvasTile(sourceProvider: t.provider,
+                       destX: Int(((t.aLeft - aMin) * pxPerDegH).rounded()),
+                       destY: Int(((t.bTop - bMin) * pxPerDegV).rounded()),
+                       destWidth: max(1, Int((t.wDeg * pxPerDegH).rounded())),
+                       destHeight: max(1, Int((t.hDeg * pxPerDegV).rounded())))
+        }
+
+        // Curve the whole canvas as one surface, positioned at the GUI layout's centre (the
+        // middle of the bounding box) — not snapped to straight ahead. Atlas axes are a = −yaw,
+        // b = −pitch, so the centre direction is yaw = −centreA, pitch = −centreB. Canvas scale
+        // resizes it; the shared distance sets how far it floats.
+        let centreA = (aMin + aMax) / 2.0
+        let centreB = (bMin + bMax) / 2.0
+        let distance = Float(wideCanvasDistanceMeters)
+        let arcWRad = arcWDeg * .pi / 180.0
+        return SceneScreen(
+            canvasID: Self.wideCanvasID,
+            yaw: Float(-centreA * .pi / 180.0),
+            pitch: Float(-centreB * .pi / 180.0),
+            distance: distance,
+            widthMeters: Float(arcWRad) * distance * Float(wideCanvasScale),
+            aspect: Float(arcWDeg / arcHDeg),
+            canvasPixelWidth: canvasW, canvasPixelHeight: canvasH,
+            tiles: canvasTiles
+        )
+    }
+
+    /// Assemble the renderer's scene from (config, capture) pairs. In wide-canvas mono mode the
+    /// anchored screens are merged into one curved canvas; floating screens stay separate.
+    private func assembleScene(_ pairs: [(config: VirtualScreenConfig, capture: CaptureSource)]) -> [SceneScreen] {
+        guard wideCanvas, !stereoEnabled else {
+            return pairs.map { sceneScreen(config: $0.config, capture: $0.capture) }
+        }
+        let anchored = pairs.filter { $0.config.placement != .floating }
+        let floating = pairs.filter { $0.config.placement == .floating }
+        var result: [SceneScreen] = []
+        if let canvas = makeCanvasSceneScreen(anchored) { result.append(canvas) }
+        result += floating.map { sceneScreen(config: $0.config, capture: $0.capture) }
+        return result
     }
 
     /// Rebuild the live scene from the active workspace's current placement values,
@@ -714,18 +921,297 @@ final class AppCoordinator: ObservableObject {
     func liveUpdateScreens() {
         guard let renderer, arActive,
               let workspace = workspaceStore.activeWorkspace else { return }
-        var sceneScreens: [SceneScreen] = []
+        var pairs: [(config: VirtualScreenConfig, capture: CaptureSource)] = []
         for config in workspace.virtualScreens where config.showInAR {
-            if let capture = captures[config.id] {
-                sceneScreens.append(sceneScreen(config: config, capture: capture))
-            }
+            if let capture = captureForConfig(config) { pairs.append((config, capture)) }
         }
         for (_, config) in workspace.physicalInAR where config.showInAR {
-            if let capture = captures[config.id] {
-                sceneScreens.append(sceneScreen(config: config, capture: capture))
+            if let capture = captures[config.id] { pairs.append((config, capture)) }
+        }
+        renderer.setScreens(assembleScene(pairs))
+        // Re-sync the OS arrangement if the screens' left→right / row order changed.
+        arrangeDisplaysToMatchGUI(force: false)
+    }
+
+    // MARK: OS display arrangement
+
+    /// The glasses display id, whether or not AR is running (falls back to the name heuristic
+    /// when there's no active session so we never treat the glasses as a desktop monitor).
+    private var effectiveGlassesID: CGDirectDisplayID {
+        glassesDisplayID != 0 ? glassesDisplayID : (glassesScreenID() ?? 0)
+    }
+
+    /// Physical display UUIDs currently used as a mirror target of a virtual screen. These are
+    /// represented in the layout by the virtual screen mirrored onto them, so we don't show a
+    /// separate box for them (and they're excluded from the OS arrangement).
+    private func physicalMirrorTargetUUIDs() -> Set<String> {
+        guard let ws = workspaceStore.activeWorkspace else { return [] }
+        return Set(ws.virtualScreens.compactMap { $0.mirrorToPhysical })
+    }
+
+    /// True if the display behind `uuid` is connected and isn't a virtual display or a mirror
+    /// target — i.e. it should appear in the Layout map as a real monitor.
+    func isLayoutPhysical(uuid: String) -> Bool {
+        guard let id = Self.resolvePhysicalDisplay(uuidString: uuid), id != effectiveGlassesID else { return false }
+        let virtualIDs = Set(virtualDisplays.active.values.map { $0.displayID })
+        return !virtualIDs.contains(id) && !physicalMirrorTargetUUIDs().contains(uuid)
+    }
+
+    /// Ensure every connected physical display (except the glasses output, our own virtual
+    /// displays, and mirror targets) has a placement config in the active workspace, so it
+    /// appears in the Layout map as a positioning reference. New monitors default to
+    /// positioning-only (`showInAR = false`, green) — visible in the GUI and the OS arrangement
+    /// but never captured or rendered into the glasses. The Mac's main display anchors the
+    /// arrangement. No-op when nothing new is found.
+    func syncPhysicalMonitors() {
+        guard var ws = workspaceStore.activeWorkspace else { return }
+        let glasses = effectiveGlassesID
+        let virtualIDs = Set(virtualDisplays.active.values.map { $0.displayID })
+        let mirrorTargets = physicalMirrorTargetUUIDs()
+        var changed = false
+        for screen in NSScreen.screens {
+            let id = Self.screenDisplayID(screen)
+            guard id != glasses, id != 0, !virtualIDs.contains(id),
+                  let uuid = Self.displayUUIDString(id), !mirrorTargets.contains(uuid),
+                  ws.physicalInAR[uuid] == nil else { continue }
+            let size = screen.frame.size
+            ws.physicalInAR[uuid] = VirtualScreenConfig(
+                name: screen.localizedName,
+                width: Int(size.width), height: Int(size.height),
+                showInAR: false) // positioning-only (green) until the user opts it into AR
+            changed = true
+            DebugLog.shared.log("layout: added physical monitor '\(screen.localizedName)' (positioning-only)")
+        }
+        if changed {
+            workspaceStore.activeWorkspace = ws
+            workspaceStore.save()
+            objectWillChange.send()
+        }
+    }
+
+    private struct ArrangedDisplay { let id: CGDirectDisplayID; let w: Int; let h: Int }
+
+    /// Displays grouped into rows as they should tile in the OS arrangement: rows top→bottom by
+    /// pitch, left→right by yaw within a row (+yaw is to the left). Excludes the glasses output.
+    private func arrangementRows() -> [[ArrangedDisplay]] {
+        guard let ws = workspaceStore.activeWorkspace else { return [] }
+        struct E { let pitch: Double; let yaw: Double; let d: ArrangedDisplay }
+        var entries: [E] = []
+        func add(_ cfg: VirtualScreenConfig, _ id: CGDirectDisplayID) {
+            guard id != glassesDisplayID else { return }
+            let b = CGDisplayBounds(id)
+            entries.append(E(pitch: cfg.pitchDegrees, yaw: cfg.yawDegrees,
+                             d: ArrangedDisplay(id: id, w: Int(b.width), h: Int(b.height))))
+        }
+        for cfg in ws.virtualScreens where cfg.showInAR && cfg.placement == .anchored {
+            if let id = virtualDisplays.displayID(for: cfg.id) { add(cfg, id) }
+        }
+        // Physical monitors anchor the layout whether or not they're shown in the glasses:
+        // positioning-only (green) monitors still define where the virtual screens sit relative
+        // to the main display. Mirror targets are excluded (represented by their virtual screen).
+        let mirrorTargets = physicalMirrorTargetUUIDs()
+        for (uuid, cfg) in ws.physicalInAR where !mirrorTargets.contains(uuid) {
+            if let id = Self.resolvePhysicalDisplay(uuidString: uuid) { add(cfg, id) }
+        }
+        let rows = Dictionary(grouping: entries) { Int($0.pitch.rounded()) }
+        return rows.keys.sorted(by: >).map { key in
+            rows[key]!.sorted { $0.yaw > $1.yaw }.map(\.d)
+        }
+    }
+
+    /// Lay the OS displays out edge-to-edge to match the GUI order, anchored so the Mac's main
+    /// display stays at the origin. Parks the glasses output beyond the right edge so it doesn't
+    /// overlap. When `force` is false, skips the (heavy, flicker-prone) reconfigure unless the
+    /// left→right / row order actually changed since the last sync.
+    private func arrangeDisplaysToMatchGUI(force: Bool) {
+        guard arActive else { return }
+        let rows = arrangementRows()
+        let all = rows.flatMap { $0 }
+        guard !all.isEmpty else { return }
+        let signature = all.map(\.id)
+        if !force && signature == lastArrangementSignature { return }
+
+        // Pack edge-to-edge: advance x within each row, y between rows.
+        var positions: [CGDirectDisplayID: (x: Int, y: Int)] = [:]
+        var y = 0
+        for row in rows {
+            var x = 0, rowH = 0
+            for d in row { positions[d.id] = (x, y); x += d.w; rowH = max(rowH, d.h) }
+            y += rowH
+        }
+
+        // Anchor the arrangement on the Mac's main display (kept at the origin by macOS).
+        let origin = positions[CGMainDisplayID()] ?? (x: 0, y: 0)
+        var ref: CGDisplayConfigRef?
+        guard CGBeginDisplayConfiguration(&ref) == .success, let ref else { return }
+        for d in all {
+            let p = positions[d.id] ?? (0, 0)
+            CGConfigureDisplayOrigin(ref, d.id, Int32(p.x - origin.x), Int32(p.y - origin.y))
+        }
+        // Park the glasses display just past the right edge so it doesn't overlap the desktops.
+        if glassesDisplayID != 0 {
+            let rightEdge = (all.map { (positions[$0.id]?.x ?? 0) + $0.w }.max() ?? 0) - origin.x
+            CGConfigureDisplayOrigin(ref, glassesDisplayID, Int32(rightEdge), 0)
+        }
+        if CGCompleteDisplayConfiguration(ref, .forSession) == .success {
+            lastArrangementSignature = signature
+            DebugLog.shared.log("arrange: applied OS layout for \(all.count) display(s)")
+        } else {
+            CGCancelDisplayConfiguration(ref)
+            DebugLog.shared.log("arrange: CGCompleteDisplayConfiguration failed")
+        }
+    }
+
+    // MARK: Window layout persistence
+
+    /// Live display id → stable screen key for every screen whose windows we track: virtual
+    /// screens shown in AR, plus all connected physical monitors (green or orange). Excludes the
+    /// glasses output. Used to snapshot/restore which screen each app window sits on.
+    private func trackedDisplays() -> [(id: CGDirectDisplayID, key: String)] {
+        guard let ws = workspaceStore.activeWorkspace else { return [] }
+        var out: [(CGDirectDisplayID, String)] = []
+        for cfg in ws.virtualScreens where cfg.showInAR {
+            if let id = virtualDisplays.displayID(for: cfg.id) {
+                out.append((id, "v:\(cfg.id.uuidString)"))
             }
         }
-        renderer.setScreens(sceneScreens)
+        for (uuid, _) in ws.physicalInAR {
+            if let id = Self.resolvePhysicalDisplay(uuidString: uuid),
+               id != effectiveGlassesID {
+                out.append((id, "p:\(uuid)"))
+            }
+        }
+        return out
+    }
+
+    /// Turn a stored screen key back into the current display id (nil if absent this session).
+    private func resolveScreenKey(_ key: String) -> CGDirectDisplayID? {
+        if key.hasPrefix("v:"), let uuid = UUID(uuidString: String(key.dropFirst(2))) {
+            return virtualDisplays.displayID(for: uuid)
+        } else if key.hasPrefix("p:") {
+            return Self.resolvePhysicalDisplay(uuidString: String(key.dropFirst(2)))
+        }
+        return nil
+    }
+
+    /// Record where each app's windows currently sit. Call at the top of `stopAR`, before the
+    /// virtual displays are destroyed (which would scatter their windows).
+    private func snapshotWindowLayout() {
+        guard let id = workspaceStore.activeWorkspaceID else { return }
+        windowLayout.snapshot(workspaceID: id, displays: trackedDisplays())
+    }
+
+    /// After AR starts and the displays settle, restore the saved window layout per the user's
+    /// preference (ask / always / never). Needs Accessibility permission to move other apps' windows.
+    private func maybeRestoreWindowLayout() {
+        guard let id = workspaceStore.activeWorkspaceID, windowLayout.hasLayout(for: id),
+              windowRestoreMode != .never else { return }
+        guard hasAccessibilityPermission else {
+            statusMessage = "Grant Accessibility to restore window layouts (Permissions)"
+            return
+        }
+        switch windowRestoreMode {
+        case .always:
+            restoreWindowLayoutNow()
+        case .ask:
+            windowRestorePrompt.present(count: windowLayout.count(for: id),
+                                        excluding: arOutputDisplayID) { [weak self] restore in
+                if restore { self?.restoreWindowLayoutNow() }
+            }
+        case .never:
+            break
+        }
+    }
+
+    private func restoreWindowLayoutNow() {
+        guard let id = workspaceStore.activeWorkspaceID else { return }
+        let n = windowLayout.restore(workspaceID: id) { [weak self] key in
+            self?.resolveScreenKey(key)
+        }
+        statusMessage = "Restored \(n) window\(n == 1 ? "" : "s") to their screens"
+        DebugLog.shared.log("window layout: restored \(n) window(s)")
+    }
+
+    /// Record every online display's current global origin, so Stop can put the user's real
+    /// desktop arrangement back the way they had it before AR rearranged things.
+    private func snapshotDisplayArrangement() {
+        var origins: [CGDirectDisplayID: CGPoint] = [:]
+        for id in Self.onlineDisplayIDs() {
+            origins[id] = CGDisplayBounds(id).origin
+        }
+        savedDisplayOrigins = origins
+    }
+
+    /// Restore the display origins captured at AR start (for displays still connected). Called
+    /// on Stop. No-op if nothing was captured.
+    private func restoreDisplayArrangement() {
+        guard !savedDisplayOrigins.isEmpty else { return }
+        let online = Set(Self.onlineDisplayIDs())
+        var ref: CGDisplayConfigRef?
+        guard CGBeginDisplayConfiguration(&ref) == .success, let ref else { return }
+        for (id, origin) in savedDisplayOrigins where online.contains(id) {
+            CGConfigureDisplayOrigin(ref, id, Int32(origin.x), Int32(origin.y))
+        }
+        if CGCompleteDisplayConfiguration(ref, .permanently) == .success {
+            DebugLog.shared.log("arrange: restored pre-AR display layout")
+        } else {
+            CGCancelDisplayConfiguration(ref)
+        }
+        savedDisplayOrigins = [:]
+    }
+
+    /// Debug: write the wide-canvas pipeline stages to ~/Desktop/VRDesktop-debug so the merge can
+    /// be inspected — stage1_*.jpg = each raw screen capture (pre-merge), stage2.jpg = the single
+    /// merged flat atlas (before curve), stage3.jpg = the final curved frame sent to the glasses.
+    func captureDebugStages() {
+        guard let renderer, arActive else {
+            statusMessage = "Start AR first to capture debug stages"; return
+        }
+        let dir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Desktop/VRDesktop-debug")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        // Stage 1: each raw source capture (the flat images, before any merge/curve).
+        var stage1: [String] = []
+        if let ws = workspaceStore.activeWorkspace {
+            let anchored = ws.virtualScreens.filter { $0.showInAR && $0.placement != .floating }
+            for (i, cfg) in anchored.enumerated() {
+                guard let tex = captures[cfg.id]?.latestTexture else { continue }
+                let safe = cfg.name.replacingOccurrences(of: "/", with: "-")
+                let url = dir.appendingPathComponent("stage1_\(i)_\(safe).jpg")
+                if renderer.dumpTexture(tex, to: url) { stage1.append(url.lastPathComponent) }
+            }
+        }
+
+        // Stage 2 marker crosshairs (atlas pixels, top-left origin):
+        //   red  = sphere wrap centre (the atlas/bounding-box centre the canvas curves around)
+        //   green = GUI FOV centre (yaw 0, pitch 0 — straight ahead)
+        //   blue = current glasses centre (where the head is pointing right now)
+        var markers: [(x: Int, y: Int, color: CGColor)] = []
+        if wideCanvas, let m = lastCanvasMapping {
+            func clamp(_ v: Double, _ hi: Int) -> Int { Int(min(Double(hi - 1), max(0, v))) }
+            // Atlas axes: x = (azimuth − aMin)·pxH, y = (−elevation − bMin)·pxV.
+            markers.append((clamp((0 - m.aMin) * m.pxH, m.w), clamp((0 - m.bMin) * m.pxV, m.h),
+                           NSColor.systemGreen.cgColor))
+            markers.append((m.w / 2, m.h / 2, NSColor.systemRed.cgColor))
+            let f = simd_normalize(IMUService.shared.poseStore.latest().orientation.act(SIMD3<Float>(0, 0, -1)))
+            let azDeg = Double(atan2(f.x, -f.z)) * 180 / .pi
+            let elDeg = Double(asin(max(-1, min(1, f.y)))) * 180 / .pi
+            markers.append((clamp((azDeg - m.aMin) * m.pxH, m.w), clamp((-elDeg - m.bMin) * m.pxV, m.h),
+                           NSColor.systemBlue.cgColor))
+        }
+        renderer.debugStage2Markers = markers
+
+        // Stages 2 & 3 are captured by the renderer on its next frame (needs the GPU).
+        renderer.onDebugDumpComplete = { [weak self] later in
+            DispatchQueue.main.async {
+                let all = stage1 + later
+                self?.statusMessage = "Debug stages → ~/Desktop/VRDesktop-debug: " + all.joined(separator: ", ")
+                DebugLog.shared.log("debug stages written: \(all.joined(separator: ", "))")
+            }
+        }
+        renderer.debugDumpDir = dir
+        statusMessage = "Capturing debug stages…"
     }
 
     static func resolvePhysicalDisplay(uuidString: String) -> CGDirectDisplayID? {
@@ -750,6 +1236,7 @@ final class AppCoordinator: ObservableObject {
         guard id != workspaceStore.activeWorkspaceID else { return }
         workspaceStore.activeWorkspaceID = id
         workspaceStore.save()
+        syncPhysicalMonitors() // the new workspace may not have this machine's monitors yet
         objectWillChange.send()
         restartARIfActive()
     }
@@ -759,6 +1246,7 @@ final class AppCoordinator: ObservableObject {
         workspaceStore.append(ws)
         workspaceStore.activeWorkspaceID = ws.id
         workspaceStore.save()
+        syncPhysicalMonitors() // seed the fresh workspace with this machine's monitors
         objectWillChange.send()
         restartARIfActive()
     }
@@ -844,39 +1332,7 @@ final class AppCoordinator: ObservableObject {
         guard arActive, config.showInAR,
               let displayID = virtualDisplays.create(config) ?? nil,
               displayID != glassesDisplayID else { return }
-        _ = makeSceneScreen(config: config, captureDisplayID: displayID)
-        liveUpdateScreens()
-    }
-
-    /// Physical displays available to add as AR panels (excludes the glasses output,
-    /// our own virtual displays, and ones already added).
-    func availablePhysicalDisplays() -> [(uuid: String, name: String)] {
-        let virtualIDs = Set(virtualDisplays.active.values.map { $0.displayID })
-        let alreadyAdded = Set(workspaceStore.activeWorkspace?.physicalInAR.keys ?? [:].keys)
-        var result: [(String, String)] = []
-        for screen in NSScreen.screens {
-            let id = Self.screenDisplayID(screen)
-            guard id != glassesDisplayID, !virtualIDs.contains(id),
-                  let uuid = Self.displayUUIDString(id), !alreadyAdded.contains(uuid) else { continue }
-            result.append((uuid, screen.localizedName))
-        }
-        return result
-    }
-
-    func addPhysicalScreen(uuidString: String, name: String) {
-        guard var ws = workspaceStore.activeWorkspace else { return }
-        let displayID = Self.resolvePhysicalDisplay(uuidString: uuidString)
-        let size = displayID.flatMap { id in NSScreen.screens.first { Self.screenDisplayID($0) == id } }?.frame.size
-        let config = VirtualScreenConfig(
-            name: name,
-            width: Int(size?.width ?? 1920),
-            height: Int(size?.height ?? 1080))
-        ws.physicalInAR[uuidString] = config
-        workspaceStore.activeWorkspace = ws
-        workspaceStore.save()
-        objectWillChange.send()
-        guard arActive, let displayID, displayID != glassesDisplayID else { return }
-        _ = makeSceneScreen(config: config, captureDisplayID: displayID)
+        _ = makeCapture(config: config, captureDisplayID: displayID)
         liveUpdateScreens()
     }
 
@@ -900,10 +1356,20 @@ final class AppCoordinator: ObservableObject {
         liveUpdateScreens()
     }
 
-    /// All editable screens in the active workspace (virtual + physical), for the UI list.
+    /// All editable screens in the active workspace, for the UI list and Layout map: virtual
+    /// screens plus connected physical monitors (excluding mirror targets, which are shown via
+    /// the virtual screen mirrored onto them).
     func editableScreens() -> [VirtualScreenConfig] {
         guard let ws = workspaceStore.activeWorkspace else { return [] }
-        return ws.virtualScreens + ws.physicalInAR.values.sorted { $0.name < $1.name }
+        let physical = ws.physicalInAR
+            .filter { isLayoutPhysical(uuid: $0.key) }
+            .values.sorted { $0.name < $1.name }
+        return ws.virtualScreens + physical
+    }
+
+    /// True if the screen is a real (physical) monitor mirrored into AR rather than a virtual one.
+    func isPhysicalScreen(_ id: UUID) -> Bool {
+        workspaceStore.activeWorkspace?.physicalInAR.values.contains { $0.id == id } ?? false
     }
 
     func bindingForScreen(id: UUID) -> VirtualScreenConfig? {
@@ -914,21 +1380,56 @@ final class AppCoordinator: ObservableObject {
 
     func updateScreen(_ config: VirtualScreenConfig) {
         guard var ws = workspaceStore.activeWorkspace else { return }
+        let existing = ws.virtualScreens.first(where: { $0.id == config.id })
+        var physicalKey: String?
+        let priorShowInAR: Bool?
         if let i = ws.virtualScreens.firstIndex(where: { $0.id == config.id }) {
+            priorShowInAR = existing?.showInAR
             ws.virtualScreens[i] = config
-        } else if let key = ws.physicalInAR.first(where: { $0.value.id == config.id })?.key {
-            ws.physicalInAR[key] = config
+        } else if let entry = ws.physicalInAR.first(where: { $0.value.id == config.id }) {
+            physicalKey = entry.key
+            priorShowInAR = entry.value.showInAR
+            ws.physicalInAR[entry.key] = config
         } else {
             return
         }
         workspaceStore.activeWorkspace = ws
         workspaceStore.save()
+
+        let resolutionChanged = existing.map { $0.width != config.width || $0.height != config.height || $0.hiDPI != config.hiDPI } ?? false
+        if resolutionChanged {
+            if let capture = captures.removeValue(forKey: config.id) {
+                Task { await capture.stop() }
+            }
+            virtualDisplays.destroy(config.id)
+            if arActive, config.showInAR,
+               let displayID = virtualDisplays.create(config),
+               displayID != glassesDisplayID {
+                _ = makeCapture(config: config, captureDisplayID: displayID)
+            }
+        }
+
+        // Physical monitor toggled between positioning-only (green) and mirrored-into-AR
+        // (orange) live: start or stop its capture so the change takes effect without a restart.
+        if arActive, let uuid = physicalKey, priorShowInAR != config.showInAR {
+            if config.showInAR, captures[config.id] == nil,
+               let displayID = Self.resolvePhysicalDisplay(uuidString: uuid),
+               displayID != glassesDisplayID {
+                _ = makeCapture(config: config, captureDisplayID: displayID)
+            } else if !config.showInAR, let capture = captures.removeValue(forKey: config.id) {
+                Task { await capture.stop() }
+            }
+        }
+
         liveUpdateScreens()
     }
 
     func stopAR() {
         guard arActive else { return }
         DebugLog.shared.log("stopAR")
+        // Record which apps are on which screen BEFORE the virtual displays are destroyed
+        // (destroying them makes macOS scatter their windows onto other displays).
+        snapshotWindowLayout()
         if let arActivity { ProcessInfo.processInfo.endActivity(arActivity); self.arActivity = nil }
         let wasStereo = stereoEnabled
         cursorConfiner.stop()
@@ -949,8 +1450,11 @@ final class AppCoordinator: ObservableObject {
         Task { for c in activeCaptures { await c.stop() } }
         virtualDisplays.destroyAll() // destroying virtual displays auto-breaks their mirrors
         intentionalMirrors.removeAll()
+        // Put the user's real desktop arrangement back the way it was before AR moved things.
+        restoreDisplayArrangement()
         glassesDisplayID = 0
         arActive = false
+        lastArrangementSignature = []
         outputScreenName = nil
         statusMessage = "AR stopped"
     }

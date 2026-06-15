@@ -2,6 +2,24 @@ import Foundation
 import Metal
 import simd
 
+/// One source image composited into a region of a wide-canvas atlas texture.
+/// Destination coordinates are in atlas pixels from the top-left.
+public struct CanvasTile {
+    public let sourceProvider: () -> MTLTexture?
+    public let destX: Int
+    public let destY: Int
+    public let destWidth: Int
+    public let destHeight: Int
+    public init(sourceProvider: @escaping () -> MTLTexture?,
+                destX: Int, destY: Int, destWidth: Int, destHeight: Int) {
+        self.sourceProvider = sourceProvider
+        self.destX = destX
+        self.destY = destY
+        self.destWidth = destWidth
+        self.destHeight = destHeight
+    }
+}
+
 /// One screen placed in the AR scene, centred at (yaw, pitch) and bent onto a
 /// (optionally doubly-)curved surface in front of the viewer.
 public struct SceneScreen: Identifiable {
@@ -23,6 +41,15 @@ public struct SceneScreen: Identifiable {
     public var cylindrical: Bool
     public var textureProvider: () -> MTLTexture?
 
+    /// Wide-canvas atlas: when `canvasTiles` is non-empty this screen is a single merged
+    /// surface. The renderer composites each tile's live source into one atlas texture of
+    /// `canvasPixelWidth × canvasPixelHeight`, then samples that atlas across this one
+    /// curved mesh — so the whole canvas bends as a single image with no per-screen gaps.
+    public var canvasPixelWidth: Int = 0
+    public var canvasPixelHeight: Int = 0
+    public var canvasTiles: [CanvasTile] = []
+    public var isCanvas: Bool { !canvasTiles.isEmpty }
+
     public init(id: UUID, yaw: Float, pitch: Float, distance: Float, widthMeters: Float,
                 aspect: Float, curveH: Float, autoCurveH: Bool, headLocked: Bool = false,
                 cylindrical: Bool = false,
@@ -38,6 +65,26 @@ public struct SceneScreen: Identifiable {
         self.headLocked = headLocked
         self.cylindrical = cylindrical
         self.textureProvider = textureProvider
+    }
+
+    /// Build a wide-canvas merged surface: one horizontally-curved, vertically-flat mesh
+    /// centred at (yaw, pitch) that samples a composited atlas of the given pixel size.
+    public init(canvasID: UUID, yaw: Float, pitch: Float, distance: Float, widthMeters: Float,
+                aspect: Float, canvasPixelWidth: Int, canvasPixelHeight: Int, tiles: [CanvasTile]) {
+        self.id = canvasID
+        self.yaw = yaw
+        self.pitch = pitch
+        self.distance = distance
+        self.widthMeters = widthMeters
+        self.aspect = aspect
+        self.curveH = 0
+        self.autoCurveH = true       // follow the natural sphere arc horizontally
+        self.headLocked = false
+        self.cylindrical = false
+        self.canvasPixelWidth = canvasPixelWidth
+        self.canvasPixelHeight = canvasPixelHeight
+        self.canvasTiles = tiles
+        self.textureProvider = { nil }   // the renderer supplies the atlas instead
     }
 
     struct Vertex {
@@ -62,7 +109,9 @@ public struct SceneScreen: Identifiable {
     func vertices() -> [Vertex] {
         let (thetaX, thetaY) = angles
         let segX = thetaX > 0.001 ? max(8, Int(widthMeters * 16)) : 1
-        let segY = thetaY > 0.001 ? max(6, Int(height * 16)) : 1
+        // The wide canvas keeps a flat vertical surface but places each row at its true elevation
+        // angle (see `point`), so it needs several vertical segments to follow that tan spacing.
+        let segY = thetaY > 0.001 ? max(6, Int(height * 16)) : (isCanvas ? max(8, Int(height * 8)) : 1)
 
         var verts: [Vertex] = []
         verts.reserveCapacity(segX * segY * 6)
@@ -90,6 +139,24 @@ public struct SceneScreen: Identifiable {
     /// resizes the screen); the two bends compose into a doubly-curved patch that,
     /// when thetaX == thetaY, approximates the natural sphere around the eye.
     private func point(u: Float, v: Float, thetaX: Float, thetaY: Float) -> SIMD3<Float> {
+        // Wide canvas: a section of a sphere of radius `distance` centred on the eye. Each pixel
+        // maps to its ABSOLUTE azimuth/elevation (φ = 0, θ = 0 is straight ahead — the FOV
+        // centre), so the whole canvas curves around the viewer's forward direction rather than
+        // around its own image centre. `yaw`/`pitch` carry the canvas centre direction, and
+        // width/height ÷ distance are the total azimuth/elevation arcs.
+        if isCanvas {
+            let R = distance
+            let arcX = widthMeters / distance
+            let arcY = height / distance
+            let phi = -yaw + (u - 0.5) * arcX        // absolute azimuth, 0 = FOV forward
+            let theta = pitch + (0.5 - v) * arcY     // absolute elevation, 0 = FOV forward
+            // Horizontal wraps on an eye-centred cylinder (vertical axis through the eye), so the
+            // curve is referenced to the FOV centre. Vertical stays a straight column with natural
+            // perspective: y = R·tan(elevation) keeps each row at its true angle while letting
+            // top/bottom recede — so the vertical curve is actually visible in the mono render.
+            return SIMD3(R * sinf(phi), R * tanf(theta), -R * cosf(phi))
+        }
+
         // Unified cylinder: every screen lies on one cylinder of radius `distance` centred at
         // the eye, with yaw baked into the absolute arc angle, so adjacent screens form a
         // single continuous curve. Vertical stays flat; pitch tilts the segment.
