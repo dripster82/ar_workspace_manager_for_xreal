@@ -439,30 +439,6 @@ final class AppCoordinator: ObservableObject {
     @Published var glassesRefreshRate: Double =
         UserDefaults.standard.object(forKey: "glassesRefreshRate") as? Double ?? 90
 
-    /// Colour profile applied to the glasses display. The factory "Air 2" profile makes colorsync
-    /// convert every frame (starving the present → judder); sRGB makes it ~passthrough. Persisted;
-    /// applied on change and at AR start. `.auto` leaves whatever profile is currently set.
-    @Published var glassesColorProfile: DisplayColorProfile =
-        DisplayColorProfile(rawValue: UserDefaults.standard.string(forKey: "glassesColorProfile") ?? "")
-        ?? .auto {
-        didSet {
-            UserDefaults.standard.set(glassesColorProfile.rawValue, forKey: "glassesColorProfile")
-            let id = resolvedGlassesDisplayID
-            if id != 0 {
-                let label = glassesColorProfile.label
-                glassesColorProfile.apply(to: id)
-                DebugLog.shared.log("glassesColorProfile = \(label) on \(id)")
-            }
-        }
-    }
-
-    /// Re-apply the chosen colour profile to the glasses display (called at AR start).
-    func applyGlassesColorProfile() {
-        let id = resolvedGlassesDisplayID
-        guard id != 0, glassesColorProfile != .auto else { return }
-        glassesColorProfile.apply(to: id)
-    }
-
     /// Render on a dedicated high-QoS thread (vs the main run loop) so rendering keeps scheduler
     /// priority over background processes on a busy machine. Persisted; rebuilds output on change.
     @Published var useDedicatedRenderThread: Bool =
@@ -890,7 +866,6 @@ final class AppCoordinator: ObservableObject {
         let outputDisplayID = Self.screenDisplayID(screen)
         glassesDisplayID = outputDisplayID
         lastOutputScreenID = outputDisplayID
-        applyGlassesColorProfile()   // sRGB etc. — keep colorsync off the per-frame display path
         // Snapshot the user's current OS display arrangement so we can restore it on Stop —
         // we're about to move real monitors to match the GUI ("move everything").
         snapshotDisplayArrangement()
@@ -1634,7 +1609,6 @@ final class AppCoordinator: ObservableObject {
             textureProvider: { tex })
         renderer.setScreens([imageScreen])
         glassesDisplayID = Self.screenDisplayID(screen)
-        applyGlassesColorProfile()
         // Apply the chosen output rate before opening the window (no live link yet → safe).
         if glassesRefreshRate > 0 {
             DisplayModeSwitcher.switchTo(displayID: glassesDisplayID, width: 1920, height: 1080,
