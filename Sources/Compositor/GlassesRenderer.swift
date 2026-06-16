@@ -509,6 +509,13 @@ public final class GlassesRenderer: NSObject {
         metalLayer.framebufferOnly = true
         metalLayer.displaySyncEnabled = true   // vsync off was tested and made jumping worse
         metalLayer.maximumDrawableCount = 3
+        // Tag the layer with the output display's colour space so WindowServer passes frames
+        // through instead of colour-matching every one (colorsync.displayservices was burning
+        // 60–86% CPU on the display path, starving the present). This fix was lost in an earlier
+        // branch reshuffle and never reached main.
+        if let cs = screen.colorSpace?.cgColorSpace {
+            metalLayer.colorspace = cs
+        }
         let scale = screen.backingScaleFactor
         metalLayer.contentsScale = scale
         metalLayer.drawableSize = CGSize(width: screen.frame.width * scale,
