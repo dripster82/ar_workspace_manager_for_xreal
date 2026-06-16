@@ -225,6 +225,13 @@ struct ControlPanelView: View {
                     + "rendering to it. Lower, steady rates can feel smoother than a jittery 120.")
             }
 
+            Label("If AR stutters, set the glasses to the **sRGB** colour profile in "
+                + "System Settings → Displays → Colour Profile. The factory “Air 2” profile makes "
+                + "macOS colour-convert every frame, which causes the jumping.",
+                  systemImage: "lightbulb")
+                .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
             Toggle("Dedicated render thread (high priority)", isOn: $coordinator.useDedicatedRenderThread)
                 .help("Runs the display link on a dedicated .userInteractive thread instead of the main "
                     + "run loop, so rendering keeps scheduler priority over background apps "
