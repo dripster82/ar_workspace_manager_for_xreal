@@ -245,6 +245,18 @@ final class AppCoordinator: ObservableObject {
             }
         }
 
+        // Capture a fresh window-layout snapshot just before sleep, while everything is still on
+        // its display — so the post-wake restore has accurate positions to put windows back to.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.willSleepNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.arActive else { return }
+                self.snapshotWindowLayout()
+                DebugLog.shared.log("Will sleep — snapshotted window layout")
+            }
+        }
+
         // Recover the AR session across sleep/wake (captures and displays drop out).
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
@@ -422,8 +434,10 @@ final class AppCoordinator: ObservableObject {
     }
 
     /// Chosen glasses output refresh rate in Hz; 0 = Auto (the display's native max). Persisted.
+    /// Defaults to 90: a sustainable rate under load (11.1ms budget vs 8.3ms at 120) so fewer
+    /// frames miss their deadline, and the target the reprojection present loop is built around.
     @Published var glassesRefreshRate: Double =
-        UserDefaults.standard.double(forKey: "glassesRefreshRate")
+        UserDefaults.standard.object(forKey: "glassesRefreshRate") as? Double ?? 90
 
     /// Render on a dedicated high-QoS thread (vs the main run loop) so rendering keeps scheduler
     /// priority over background processes on a busy machine. Persisted; rebuilds output on change.
@@ -1435,14 +1449,18 @@ final class AppCoordinator: ObservableObject {
         guard arActive else { return }
         DebugLog.shared.log("System woke — restarting AR")
         statusMessage = "Woke from sleep — restarting AR…"
-        restartARIfActive()
+        // Preserve the layout snapshot captured before sleep; the windows are currently scattered
+        // onto whatever displays survived, so re-snapshotting now would record the wrong layout.
+        restartARIfActive(preserveLayout: true)
     }
 
     /// Restart AR on the same output so a workspace change rebuilds its virtual displays.
-    private func restartARIfActive() {
+    /// `preserveLayout` keeps the last good window snapshot instead of re-capturing — used on
+    /// wake, where the windows have already scattered onto the wrong displays.
+    private func restartARIfActive(preserveLayout: Bool = false) {
         guard arActive, lastOutputScreenID != 0 else { return }
         let id = lastOutputScreenID
-        stopAR()
+        stopAR(snapshotLayout: !preserveLayout)
         // The display can take a few seconds to re-enumerate (after wake/replug); retry.
         retryStartAR(displayID: id, attemptsLeft: 6)
     }
@@ -1609,12 +1627,15 @@ final class AppCoordinator: ObservableObject {
         DebugLog.shared.log("startStaticImageAR on '\(screen.localizedName)' tex=\(tex.width)x\(tex.height)")
     }
 
-    func stopAR() {
+    /// Stop AR. `snapshotLayout` records where each app window currently sits so it can be
+    /// restored next time — pass false when the windows have ALREADY been scattered (e.g. the
+    /// displays dropped out during sleep), so we don't overwrite the good pre-sleep snapshot.
+    func stopAR(snapshotLayout: Bool = true) {
         guard arActive else { return }
-        DebugLog.shared.log("stopAR")
+        DebugLog.shared.log("stopAR(snapshotLayout: \(snapshotLayout))")
         // Record which apps are on which screen BEFORE the virtual displays are destroyed
         // (destroying them makes macOS scatter their windows onto other displays).
-        snapshotWindowLayout()
+        if snapshotLayout { snapshotWindowLayout() }
         if let arActivity { ProcessInfo.processInfo.endActivity(arActivity); self.arActivity = nil }
         let wasStereo = stereoEnabled
         cursorConfiner.stop()
