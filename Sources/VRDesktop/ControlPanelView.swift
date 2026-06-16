@@ -156,6 +156,23 @@ struct ControlPanelView: View {
         }
     }
 
+    private var colorProfileRow: some View {
+        HStack {
+            Text("Colour profile").font(.caption)
+            Spacer()
+            Picker("", selection: $coordinator.glassesColorProfile) {
+                ForEach(DisplayColorProfile.available) { p in
+                    Text(p.label).tag(p)
+                }
+            }
+            .labelsHidden().fixedSize()
+        }
+        .help("Sets the glasses display's colour profile. The factory 'Air 2' profile makes "
+            + "colorsync convert every frame (which starves the present and causes the jumping); "
+            + "sRGB makes it ~passthrough and largely fixes it. 'Auto' leaves the current profile. "
+            + "Restore the native profile via System Settings → Displays if needed.")
+    }
+
     private var outputSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             if coordinator.mirroringActive {
@@ -224,6 +241,8 @@ struct ControlPanelView: View {
                 .help("Sets the glasses' macOS display mode to this refresh rate and paces "
                     + "rendering to it. Lower, steady rates can feel smoother than a jittery 120.")
             }
+
+            colorProfileRow
 
             Toggle("Dedicated render thread (high priority)", isOn: $coordinator.useDedicatedRenderThread)
                 .help("Runs the display link on a dedicated .userInteractive thread instead of the main "
