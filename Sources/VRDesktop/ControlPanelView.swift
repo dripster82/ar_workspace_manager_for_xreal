@@ -190,6 +190,46 @@ struct ControlPanelView: View {
                 }
             }
 
+            // EXPERIMENT: render a single static image (no capture / virtual displays) to isolate
+            // the frame-pacing jitter. Same display link + output window + head tracking as real AR.
+            if !coordinator.arActive {
+                Button("Static-image AR (debug)") {
+                    if let id = selectedScreenID,
+                       let screen = NSScreen.screens.first(where: { AppCoordinator.screenDisplayID($0) == id }) {
+                        coordinator.startStaticImageAR(on: screen)
+                    }
+                }
+                .controlSize(.small)
+                .disabled(selectedScreenID == nil)
+                .help("Renders ~/Desktop/VRDesktop-debug/stage2.jpg to the spatial scene with no "
+                    + "screen capture or virtual displays. If this still jitters, the cause is the "
+                    + "AR presentation path itself.")
+            }
+
+            // Output refresh rate: switches the actual macOS display mode for the glasses so the
+            // panel genuinely runs at the chosen rate (a steady 90 can read smoother than a
+            // jittery 120). Live-switchable while AR runs.
+            let rates = coordinator.availableGlassesRefreshRates()
+            if !rates.isEmpty {
+                Picker("Refresh rate", selection: Binding(
+                    get: { coordinator.glassesRefreshRate },
+                    set: { coordinator.setGlassesRefreshRate($0) }
+                )) {
+                    Text("Auto (\(Int(rates.first ?? 0)) Hz)").tag(0.0)
+                    ForEach(rates, id: \.self) { r in
+                        Text("\(Int(r)) Hz").tag(r)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .help("Sets the glasses' macOS display mode to this refresh rate and paces "
+                    + "rendering to it. Lower, steady rates can feel smoother than a jittery 120.")
+            }
+
+            Toggle("Dedicated render thread (high priority)", isOn: $coordinator.useDedicatedRenderThread)
+                .help("Runs the display link on a dedicated .userInteractive thread instead of the main "
+                    + "run loop, so rendering keeps scheduler priority over background apps "
+                    + "(VS Code/Docker/etc.) on a busy machine.")
+
             if coordinator.arActive {
                 VStack(alignment: .leading, spacing: 4) {
                     Toggle("Stereo (SBS) — experimental", isOn: Binding(
@@ -378,7 +418,12 @@ struct ControlPanelView: View {
             Toggle("Log raw IMU data (~60 Hz)", isOn: $coordinator.rawIMULogging)
                 .font(.caption)
                 .help("Logs raw vs filtered yaw/pitch/roll + angular speed for movement/calibration testing")
-            if coordinator.debugLogging || coordinator.rawIMULogging {
+            Toggle("Log system load (~3 s)", isOn: $coordinator.systemLoadLogging)
+                .font(.caption)
+                .help("Logs load average, thermal state, and top CPU processes (incl. Sophos / "
+                    + "WindowServer / colorsync) every ~3s, so we can correlate render stalls with "
+                    + "machine load. Sampled off the render thread.")
+            if coordinator.debugLogging || coordinator.rawIMULogging || coordinator.systemLoadLogging {
                 HStack {
                     Button("Reveal log") { coordinator.revealDebugLog() }
                     Button("Clear log") { coordinator.clearDebugLog() }
@@ -446,6 +491,9 @@ struct ControlPanelView: View {
                          help: "higher = snappier on fast head turns (less lag)")
             tuningSlider("Prediction", $coordinator.predictionLeadMs, 0...50, unit: "ms", decimals: 0,
                          help: "higher = compensates lag, may overshoot")
+            Toggle("Anti-drift (hold yaw when still)", isOn: $coordinator.driftCorrection)
+                .font(.caption)
+                .help("Freezes heading while your head is still, cancelling the slow sideways slide. Safe; doesn't affect head turns.")
             Divider()
             HStack {
                 Text("Anti-alias").frame(width: 78, alignment: .leading).font(.caption)

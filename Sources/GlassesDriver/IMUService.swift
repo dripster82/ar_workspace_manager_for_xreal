@@ -110,7 +110,27 @@ public final class IMUService: @unchecked Sendable {
         let velocityAlpha = 1 - expf(-dt / velocityTimeConstant)
         velFiltered += (instAngVel - velFiltered) * velocityAlpha
 
-        poseStore.update(Pose(orientation: qSmooth, angularVelocity: velFiltered, timestamp: now))
+        // Stationary yaw-drift correction. Yaw has no absolute reference (no magnetometer in
+        // the default fusion), so a residual gyro bias slowly rotates the world sideways. When
+        // the head is essentially still, ANY change in yaw is drift — so we accumulate the
+        // opposite into `driftYaw` (a rotation about world-up) to freeze the heading. It only
+        // engages below the stillness threshold, so it never fights a real head turn, and it
+        // touches yaw only (pitch/roll are already gravity-locked).
+        let curYaw = Self.yaw(of: qSmooth)
+        if let prev = driftPrevYaw, driftCorrectionEnabled {
+            let speedDegS = simd_length(velFiltered) * 180 / .pi
+            if speedDegS < driftStillThresholdDegS {
+                var dYaw = curYaw - prev
+                dYaw = atan2f(sinf(dYaw), cosf(dYaw))   // shortest-path, handles ±π wrap
+                driftYaw -= dYaw
+            }
+        }
+        driftPrevYaw = curYaw
+        let corrected = driftCorrectionEnabled
+            ? simd_normalize(simd_quatf(angle: driftYaw, axis: SIMD3(0, 1, 0)) * qSmooth)
+            : qSmooth
+
+        poseStore.update(Pose(orientation: corrected, angularVelocity: velFiltered, timestamp: now))
 
         // Raw/filtered diagnostics for head-movement testing (throttled to ~60 Hz).
         if rawLoggingEnabled, let rawLog, now - lastRawLog >= 0.016 {
@@ -129,6 +149,11 @@ public final class IMUService: @unchecked Sendable {
     public var beta: Float = 0.5
     /// Low-pass time constant (s) for the prediction velocity estimate.
     public var velocityTimeConstant: Float = 0.084
+
+    /// Freeze yaw while the head is still to cancel heading drift (see `handleUpdate`).
+    public var driftCorrectionEnabled = true
+    /// Below this angular speed the head is treated as still and yaw is held.
+    public var driftStillThresholdDegS: Float = 1.5
 
     /// Live raw-vs-filtered logging (for diagnosing jitter/calibration). Set the sink to route
     /// lines to the debug log; enable the flag to start.
@@ -149,6 +174,16 @@ public final class IMUService: @unchecked Sendable {
     private var lastSample: (q: simd_quatf, t: TimeInterval)?
     private var orientationFilter = OneEuroOrientation()
     private var velFiltered: SIMD3<Float> = .zero
+
+    // Drift-corrector state.
+    private var driftYaw: Float = 0          // accumulated world-up correction (radians)
+    private var driftPrevYaw: Float?         // last smoothed yaw, for delta tracking
+
+    /// Yaw (rotation about world-up) of a quaternion, in radians.
+    private static func yaw(of q: simd_quatf) -> Float {
+        atan2f(2 * (q.real * q.imag.y + q.imag.x * q.imag.z),
+               1 - 2 * (q.imag.y * q.imag.y + q.imag.x * q.imag.x))
+    }
 }
 
 private func imuEventCallback(

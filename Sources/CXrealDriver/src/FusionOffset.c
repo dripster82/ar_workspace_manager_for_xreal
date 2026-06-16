@@ -16,13 +16,17 @@
 
 /**
  * @brief Cutoff frequency in Hz.
+ * Raised from the stock 0.02 Hz so the run-time gyro-offset estimate converges in
+ * ~1.6 s of stillness instead of ~8 s — this is the main lever against yaw drift.
  */
-#define CUTOFF_FREQUENCY (0.02f)
+#define CUTOFF_FREQUENCY (0.1f)
 
 /**
  * @brief Timeout in seconds.
+ * Lowered from the stock 5 s so bias estimation engages after a brief pause, not a
+ * long hold — in normal head use you rarely sit perfectly still for 5 s.
  */
-#define TIMEOUT (5)
+#define TIMEOUT (2)
 
 /**
  * @brief Threshold in degrees per second.

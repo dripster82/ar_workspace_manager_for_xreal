@@ -32,6 +32,12 @@ final class AppCoordinator: ObservableObject {
         didSet { renderer?.predictionLead = Float(predictionLeadMs / 1000)
                  UserDefaults.standard.set(predictionLeadMs, forKey: "predictionLeadMs") }
     }
+    /// Freeze yaw while the head is still to cancel heading drift (default on).
+    @Published var driftCorrection: Bool = UserDefaults.standard.object(forKey: "driftCorrection") == nil
+        ? true : UserDefaults.standard.bool(forKey: "driftCorrection") {
+        didSet { IMUService.shared.driftCorrectionEnabled = driftCorrection
+                 UserDefaults.standard.set(driftCorrection, forKey: "driftCorrection") }
+    }
 
     // Image quality.
     @Published var antialiasLevel: Int = 4 {   // 1 (off), 2, 4, 8
@@ -126,6 +132,29 @@ final class AppCoordinator: ObservableObject {
         didSet { LaunchAtLogin.set(launchAtLogin) }
     }
 
+    /// Periodically log system load (load avg, thermal, top CPU procs incl. Sophos) to correlate
+    /// render stalls with machine load. Samples off-main every ~3s. Writes to the debug log.
+    @Published var systemLoadLogging: Bool = UserDefaults.standard.bool(forKey: "systemLoadLogging") {
+        didSet {
+            UserDefaults.standard.set(systemLoadLogging, forKey: "systemLoadLogging")
+            if systemLoadLogging { DebugLog.shared.setEnabled(true) }
+            updateSystemLoadTimer()
+        }
+    }
+    private var systemLoadTimer: Timer?
+
+    private func updateSystemLoadTimer() {
+        systemLoadTimer?.invalidate()
+        systemLoadTimer = nil
+        guard systemLoadLogging else { return }
+        DebugLog.shared.log("=== system-load logging on ===")
+        systemLoadTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { _ in
+            DispatchQueue.global(qos: .utility).async {
+                DebugLog.shared.log("sysload \(SystemLoad.sample())")
+            }
+        }
+    }
+
     /// Live raw-vs-filtered IMU logging (~60 Hz) for head-movement / calibration testing.
     @Published var rawIMULogging = false {
         didSet {
@@ -146,6 +175,11 @@ final class AppCoordinator: ObservableObject {
     /// Last time we persisted the window layout while AR runs (every ~10s), so positions survive
     /// a quit/crash without an explicit Stop.
     private var lastWindowSnapshot: TimeInterval = 0
+    private var lastPermissionCheck: TimeInterval = 0
+    /// Cache of display localized names keyed by display ID. NSScreen.localizedName does an
+    /// IOKit/CoreDisplay lookup (tens of ms) — too expensive to call every 0.5s stats tick on
+    /// the main thread, where it starves the render display link. Invalidated on screen changes.
+    private var screenNameCache: [CGDirectDisplayID: String] = [:]
 
     /// The screen the user is currently looking at (gaze nearest its centre), if any.
     @Published var lookedAtScreenID: UUID?
@@ -155,6 +189,7 @@ final class AppCoordinator: ObservableObject {
         if UserDefaults.standard.bool(forKey: "debugLogging") { DebugLog.shared.setEnabled(true) }
         DebugLog.shared.log("App launched")
         renderer = GlassesRenderer(poseStore: IMUService.shared.poseStore)
+        renderer?.useDedicatedRenderThread = useDedicatedRenderThread
         IMUService.shared.stateChanged = { [weak self] state in
             Task { @MainActor in
                 self?.glassesState = state
@@ -182,6 +217,7 @@ final class AppCoordinator: ObservableObject {
         // Push initial values into the filter.
         IMUService.shared.minCutoff = Float(minCutoffHz)
         IMUService.shared.beta = Float(betaResponsiveness)
+        IMUService.shared.driftCorrectionEnabled = driftCorrection
 
         if defaults.object(forKey: "antialiasLevel") != nil {
             antialiasLevel = defaults.integer(forKey: "antialiasLevel")
@@ -202,6 +238,7 @@ final class AppCoordinator: ObservableObject {
             object: nil, queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
+                self?.screenNameCache.removeAll() // display set changed — names may differ
                 self?.refreshMirroringState()
                 self?.syncPhysicalMonitors() // pick up newly connected monitors for the layout
                 self?.handleScreenChange()
@@ -218,24 +255,75 @@ final class AppCoordinator: ObservableObject {
         statsTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.updateStats() }
         }
+        updateSystemLoadTimer() // resume if the toggle was persisted on
         // Populate the layout with the currently-connected monitors (positioning-only/green).
         syncPhysicalMonitors()
     }
 
-    private func updateStats() {
-        let count = IMUService.shared.poseStore.sampleCount
-        imuRate = Double(count &- lastSampleCount) * 2
-        lastSampleCount = count
-        renderFPS = renderer?.framesPerSecond ?? 0
+    /// Localized name for a display, cached (see `screenNameCache`) — only hits the expensive
+    /// IOKit lookup on a cache miss, so the 0.5s stats tick stays cheap on the main thread.
+    private func cachedScreenName(displayID: CGDirectDisplayID, screen: NSScreen?) -> String {
+        if displayID != 0, let cached = screenNameCache[displayID] { return cached }
+        let name = screen?.localizedName ?? "Display \(displayID)"
+        if displayID != 0 { screenNameCache[displayID] = name }
+        return name
+    }
 
-        refreshPermissions()
+    private func updateStats() {
+        let now = CACurrentMediaTime()
+        let count = IMUService.shared.poseStore.sampleCount
+        let rate = Double(count &- lastSampleCount) * 2
+        lastSampleCount = count
+        let fps = renderer?.framesPerSecond ?? 0
+
+        let q = IMUService.shared.poseStore.latest().orientation
+        let toDeg = 180.0 / Double.pi
+        let e = (
+            yaw: Double(atan2f(2 * (q.real * q.imag.y + q.imag.x * q.imag.z),
+                               1 - 2 * (q.imag.y * q.imag.y + q.imag.x * q.imag.x))) * toDeg,
+            pitch: Double(asinf(max(-1, min(1, 2 * (q.real * q.imag.x - q.imag.y * q.imag.z))))) * toDeg,
+            roll: Double(atan2f(2 * (q.real * q.imag.z + q.imag.x * q.imag.y),
+                                1 - 2 * (q.imag.x * q.imag.x + q.imag.z * q.imag.z))) * toDeg
+        )
+
+        // Keep the saved window layout fresh while AR runs (every ~10s).
+        if arActive, now - lastWindowSnapshot >= 10.0 {
+            lastWindowSnapshot = now
+            snapshotWindowLayout()
+        }
+
+        // Perf snapshot for diagnostics (reads locals, no @Published needed).
+        if debugLogging, now - lastLogSnapshot >= 2.0 {
+            lastLogSnapshot = now
+            let arState = arActive ? "on" : "off"
+            let stereoState = stereoEnabled ? "on" : "off"
+            let look = lookedAtScreenName ?? "-"
+            let disp = renderer?.displayRefreshHz ?? 0
+            let path = renderer?.presentPath ?? "—"
+            DebugLog.shared.log(String(
+                format: "snapshot imu=%.0fHz fps=%.0f disp=%.0fHz present=%@ yaw=%+.1f pitch=%+.1f roll=%+.1f ar=%@ stereo=%@ look=%@",
+                rate, fps, disp, path, e.yaw, e.pitch, e.roll, arState, stereoState, look))
+        }
+
+        // CRITICAL: while AR is active, do NOT write the live @Published UI readouts below. Each
+        // write re-evaluates the entire Control Panel (a persistent NSHostingView) on the main
+        // thread — ~45ms — which starves the render display link and produces the ~2Hz head-
+        // tracking judder. The panel is behind the glasses during AR; it resumes when AR stops.
+        guard !arActive else { return }
+
+        imuRate = rate
+        renderFPS = fps
+        euler = e
+
         if let info = renderer?.outputWindowInfo {
-            outputWindowInfo = "window \(Int(info.frame.width))×\(Int(info.frame.height)) at (\(Int(info.frame.origin.x)),\(Int(info.frame.origin.y))) on \(info.screenName)"
+            let name = info.displayID != 0 ? cachedScreenName(displayID: info.displayID, screen: nil) : "none"
+            outputWindowInfo = "window \(Int(info.frame.width))×\(Int(info.frame.height)) at (\(Int(info.frame.origin.x)),\(Int(info.frame.origin.y))) on \(name)"
         } else {
             outputWindowInfo = "—"
         }
-        screenList = NSScreen.screens.map {
-            "\($0.localizedName): \(Int($0.frame.width))×\(Int($0.frame.height)) at (\(Int($0.frame.origin.x)),\(Int($0.frame.origin.y))) scale \($0.backingScaleFactor)"
+        screenList = NSScreen.screens.map { screen in
+            let name = cachedScreenName(displayID: Self.screenDisplayID(screen), screen: screen)
+            return "\(name): \(Int(screen.frame.width))×\(Int(screen.frame.height)) at (\(Int(screen.frame.origin.x)),\(Int(screen.frame.origin.y))) scale \(screen.backingScaleFactor)"
         }
 
         updateLookedAtScreen()
@@ -252,34 +340,12 @@ final class AppCoordinator: ObservableObject {
             }
         }
 
-        // Keep the saved window layout fresh while AR runs (every ~10s), so quitting without an
-        // explicit Stop still preserves where the apps were.
-        let now = CACurrentMediaTime()
-        if arActive, now - lastWindowSnapshot >= 10.0 {
-            lastWindowSnapshot = now
-            snapshotWindowLayout()
+        // Permissions almost never change at runtime; the check is an expensive off-main
+        // round-trip, so refresh at most every ~5s (and only here, outside AR).
+        if now - lastPermissionCheck >= 5.0 {
+            lastPermissionCheck = now
+            refreshPermissions()
         }
-
-        // Periodic snapshot (~every 2s) for drift/perf troubleshooting.
-        if debugLogging, now - lastLogSnapshot >= 2.0 {
-            lastLogSnapshot = now
-            let snapshot = String(
-                format: "snapshot imu=%.0fHz fps=%.0f yaw=%+.1f pitch=%+.1f roll=%+.1f ar=%@ stereo=%@ look=%@",
-                imuRate, renderFPS, euler.yaw, euler.pitch, euler.roll,
-                arActive ? "on" : "off", stereoEnabled ? "on" : "off",
-                lookedAtScreenName ?? "-")
-            DebugLog.shared.log(snapshot)
-        }
-
-        let q = IMUService.shared.poseStore.latest().orientation
-        let toDeg = 180.0 / Double.pi
-        euler = (
-            yaw: Double(atan2f(2 * (q.real * q.imag.y + q.imag.x * q.imag.z),
-                               1 - 2 * (q.imag.y * q.imag.y + q.imag.x * q.imag.x))) * toDeg,
-            pitch: Double(asinf(max(-1, min(1, 2 * (q.real * q.imag.x - q.imag.y * q.imag.z))))) * toDeg,
-            roll: Double(atan2f(2 * (q.real * q.imag.z + q.imag.x * q.imag.y),
-                                1 - 2 * (q.imag.x * q.imag.x + q.imag.z * q.imag.z))) * toDeg
-        )
     }
 
     private func applyFakePose() {
@@ -353,6 +419,66 @@ final class AppCoordinator: ObservableObject {
     var sbsModeAvailable: Bool {
         glassesDisplayID != 0 &&
         DisplayModeSwitcher.hasMode(displayID: glassesDisplayID, width: 3840, height: 1080)
+    }
+
+    /// Chosen glasses output refresh rate in Hz; 0 = Auto (the display's native max). Persisted.
+    @Published var glassesRefreshRate: Double =
+        UserDefaults.standard.double(forKey: "glassesRefreshRate")
+
+    /// Render on a dedicated high-QoS thread (vs the main run loop) so rendering keeps scheduler
+    /// priority over background processes on a busy machine. Persisted; rebuilds output on change.
+    @Published var useDedicatedRenderThread: Bool =
+        UserDefaults.standard.object(forKey: "useDedicatedRenderThread") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(useDedicatedRenderThread, forKey: "useDedicatedRenderThread")
+            renderer?.useDedicatedRenderThread = useDedicatedRenderThread
+            rebuildOutputIfActive()
+        }
+    }
+
+    /// Tear down and rebuild the glasses output so a renderer flag change takes effect mid-AR.
+    private func rebuildOutputIfActive() {
+        guard arActive, let renderer else { return }
+        switchingDisplayMode = true
+        renderer.stopOutput()
+        restartOutputOnGlasses(after: 0.4)
+    }
+
+    /// Glasses display id, resolving via the connected screen if AR hasn't set it yet.
+    private var resolvedGlassesDisplayID: CGDirectDisplayID {
+        glassesDisplayID != 0 ? glassesDisplayID : (glassesScreenID() ?? 0)
+    }
+
+    /// Refresh rates the glasses advertise at 1920×1080 (descending) — for the picker.
+    func availableGlassesRefreshRates() -> [Double] {
+        let id = resolvedGlassesDisplayID
+        guard id != 0 else { return [] }
+        return DisplayModeSwitcher.availableRefreshRates(id, width: 1920, height: 1080)
+    }
+
+    /// Set the glasses output refresh rate. Switches the *actual* macOS display mode so the panel
+    /// genuinely runs at that rate (the render link then paces to it). 0 = Auto (native max). When
+    /// AR is live the display link is torn down before the switch (a live link across a mode change
+    /// crashes QuartzCore) and rebuilt after.
+    func setGlassesRefreshRate(_ rate: Double) {
+        glassesRefreshRate = rate
+        UserDefaults.standard.set(rate, forKey: "glassesRefreshRate")
+        let id = resolvedGlassesDisplayID
+        guard id != 0 else { return }
+        let target = rate > 0 ? rate : (availableGlassesRefreshRates().first ?? 120)
+        let arState = arActive
+        DebugLog.shared.log("setGlassesRefreshRate ask=\(rate) target=\(target)Hz id=\(id) ar=\(arState)")
+        if arActive, let renderer {
+            switchingDisplayMode = true
+            renderer.stopOutput()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                guard let self else { return }
+                DisplayModeSwitcher.switchTo(displayID: id, width: 1920, height: 1080, refresh: target)
+                self.restartOutputOnGlasses(after: 0.6)
+            }
+        } else {
+            DisplayModeSwitcher.switchTo(displayID: id, width: 1920, height: 1080, refresh: target)
+        }
     }
 
     func setStereo(_ on: Bool) {
@@ -429,9 +555,18 @@ final class AppCoordinator: ObservableObject {
     @Published var hasScreenRecordingPermission = CGPreflightScreenCaptureAccess()
     @Published var hasAccessibilityPermission = BrightnessHotKey.accessibilityTrusted(prompt: false)
 
+    /// Refresh cached permission flags off the main thread. CGPreflightScreenCaptureAccess does
+    /// synchronous XPC (tens of ms) — calling it inline on the 0.5s stats tick starved the render
+    /// display link. Runs the checks on a background queue and publishes the results back.
     func refreshPermissions() {
-        hasScreenRecordingPermission = CGPreflightScreenCaptureAccess()
-        hasAccessibilityPermission = BrightnessHotKey.accessibilityTrusted(prompt: false)
+        DispatchQueue.global(qos: .utility).async {
+            let screen = CGPreflightScreenCaptureAccess()
+            let ax = BrightnessHotKey.accessibilityTrusted(prompt: false)
+            Task { @MainActor [weak self] in
+                self?.hasScreenRecordingPermission = screen
+                self?.hasAccessibilityPermission = ax
+            }
+        }
     }
 
     /// Trigger the Screen Recording system prompt (allow/deny). The OS dialog itself offers
@@ -1031,11 +1166,15 @@ final class AppCoordinator: ObservableObject {
         let signature = all.map(\.id)
         if !force && signature == lastArrangementSignature { return }
 
-        // Pack edge-to-edge: advance x within each row, y between rows.
+        // Pack edge-to-edge within each row, advancing y between rows. Each row is centred on a
+        // shared centre line (x = 0) rather than packed from the left, so rows of different widths
+        // stay aligned by their middle — e.g. a centred laptop display sits directly below the
+        // middle of a wider AR strip, matching the GUI, instead of flush-left under it.
         var positions: [CGDirectDisplayID: (x: Int, y: Int)] = [:]
         var y = 0
         for row in rows {
-            var x = 0, rowH = 0
+            let rowW = row.reduce(0) { $0 + $1.w }
+            var x = -rowW / 2, rowH = 0
             for d in row { positions[d.id] = (x, y); x += d.w; rowH = max(rowH, d.h) }
             y += rowH
         }
@@ -1422,6 +1561,52 @@ final class AppCoordinator: ObservableObject {
         }
 
         liveUpdateScreens()
+    }
+
+    /// Path of the static test image rendered by the dumb-AR experiment.
+    static let staticImageURL = URL(fileURLWithPath:
+        "/Users/paulketelle/Desktop/VRDesktop-debug/stage2.jpg")
+
+    /// EXPERIMENT (branch: static-image-ar): render ONE static image to the spatial scene with
+    /// no capture and no virtual displays. Everything else (display link, output window, head
+    /// tracking) is identical to real AR — so if this still jitters, the cause is the AR
+    /// presentation path itself, not the capture / virtual-display machinery.
+    func startStaticImageAR(on screen: NSScreen) {
+        guard let renderer, !arActive else { return }
+        guard let tex = renderer.loadTexture(contentsOf: Self.staticImageURL) else {
+            statusMessage = "Static AR: couldn't load \(Self.staticImageURL.lastPathComponent)"
+            return
+        }
+        let aspect = Float(tex.width) / Float(max(1, tex.height))
+        // A single anchored, auto-curved screen filling the view — mirrors how the real merged
+        // canvas is placed, minus all the live machinery.
+        let imageScreen = SceneScreen(
+            id: UUID(),
+            yaw: 0, pitch: 0,
+            distance: 2.0,
+            widthMeters: 3.2,
+            aspect: aspect,
+            curveH: 0, autoCurveH: true,
+            headLocked: false,
+            textureProvider: { tex })
+        renderer.setScreens([imageScreen])
+        glassesDisplayID = Self.screenDisplayID(screen)
+        // Apply the chosen output rate before opening the window (no live link yet → safe).
+        if glassesRefreshRate > 0 {
+            DisplayModeSwitcher.switchTo(displayID: glassesDisplayID, width: 1920, height: 1080,
+                                         refresh: glassesRefreshRate)
+        }
+        arActive = true
+        lastWindowSnapshot = CACurrentMediaTime()
+        if arActivity == nil {
+            arActivity = ProcessInfo.processInfo.beginActivity(
+                options: [.latencyCritical, .userInitiated, .idleSystemSleepDisabled],
+                reason: "static image AR experiment")
+        }
+        renderer.startOutput(on: screen)
+        outputScreenName = screen.localizedName
+        statusMessage = "Static-image AR on \(screen.localizedName) (\(tex.width)×\(tex.height)) — no capture/virtual displays"
+        DebugLog.shared.log("startStaticImageAR on '\(screen.localizedName)' tex=\(tex.width)x\(tex.height)")
     }
 
     func stopAR() {

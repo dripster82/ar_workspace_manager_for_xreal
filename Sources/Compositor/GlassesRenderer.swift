@@ -18,6 +18,14 @@ public final class GlassesRenderer: NSObject {
     private var window: NSWindow?
     private var targetDisplayID: CGDirectDisplayID = 0
     private var screenObserver: NSObjectProtocol?
+    /// Run the display link on a dedicated .userInteractive thread instead of the main run loop,
+    /// so the OS scheduler prioritises rendering above background work (VS Code/Docker/etc.) on a
+    /// busy machine, and main-thread work can't stall it. Read at startOutput.
+    public var useDedicatedRenderThread = true
+    private var renderThread: Thread?
+    private var renderRunLoop: CFRunLoop?
+    /// Which present path is live, for diagnostics: "dedicated" or "main".
+    public private(set) var presentPath = "—"
 
     private var screenPipeline: MTLRenderPipelineState!
     private var placeholderPipeline: MTLRenderPipelineState!
@@ -93,6 +101,9 @@ public final class GlassesRenderer: NSObject {
 
     /// Frame-timing diagnostics: logs frames that overran the refresh interval (dropped
     /// frames) and their GPU time, to distinguish render stalls from tracking issues.
+    /// The output display's current refresh rate (Hz), captured at startOutput so the dropped-
+    /// frame threshold and budget are correct at whatever mode the glasses are running (60/90/120).
+    public private(set) var displayRefreshHz: Double = 0
     public var frameLoggingEnabled = false
     public var frameLog: ((String) -> Void)?
     private var lastFrameStart: TimeInterval = 0
@@ -139,6 +150,17 @@ public final class GlassesRenderer: NSObject {
         oDesc.colorAttachments[0].sourceAlphaBlendFactor = .one
         oDesc.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
         overlayPipeline = try? device.makeRenderPipelineState(descriptor: oDesc)
+    }
+
+    /// Load an image file into a static GPU texture. Used by the static-image AR experiment to
+    /// render a fixed frame (no capture, no virtual displays) and isolate frame-pacing causes.
+    public func loadTexture(contentsOf url: URL) -> MTLTexture? {
+        let loader = MTKTextureLoader(device: device)
+        return try? loader.newTexture(URL: url, options: [
+            .textureUsage: NSNumber(value: MTLTextureUsage.shaderRead.rawValue),
+            .textureStorageMode: NSNumber(value: MTLStorageMode.private.rawValue),
+            .SRGB: false,
+        ])
     }
 
     /// Provide the help HUD image (from rasterized SwiftUI) and show it. Rasterizes the
@@ -458,6 +480,11 @@ public final class GlassesRenderer: NSObject {
     public func startOutput(on screen: NSScreen) {
         stopOutput()
         targetDisplayID = Self.displayID(of: screen)
+        // Current mode's refresh rate (not the panel max) so frame-pacing logging is correct at
+        // whatever rate the glasses are running — reflects live refresh-rate switches.
+        displayRefreshHz = CGDisplayCopyDisplayMode(targetDisplayID)?.refreshRate
+            ?? Double(screen.maximumFramesPerSecond)
+
         screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
             object: nil, queue: .main
@@ -511,15 +538,44 @@ public final class GlassesRenderer: NSObject {
             }
         }
 
-        // Run the display link on a dedicated thread so heavy main-thread UI work (e.g. the
-        // control-panel SwiftUI updates) can't stall rendering and cause head-tracking jumps.
-        // Drive rendering from the main run loop. (A dedicated render thread was tried but a
-        // manually-run run loop serviced the display link with ~50ms stalls — dropped frames
-        // that read as a head-tracking "snap". GPU time is <1ms, so main-loop pacing is fine.)
-        let link = CAMetalDisplayLink(metalLayer: metalLayer)
-        link.delegate = self
-        link.add(to: .main, forMode: .common)
-        displayLink = link
+        if useDedicatedRenderThread {
+            startLinkOnDedicatedThread()
+            presentPath = "dedicated"
+        } else {
+            // Main run loop: simplest, but competes with all other main-thread work and gets no
+            // scheduling priority over background processes on a busy machine.
+            let link = CAMetalDisplayLink(metalLayer: metalLayer)
+            link.delegate = self
+            link.add(to: .main, forMode: .common)
+            displayLink = link
+            presentPath = "main"
+        }
+        NSLog("GlassesRenderer: present path = %@", presentPath)
+    }
+
+    /// Service the CAMetalDisplayLink on a dedicated high-QoS thread with a blocking CFRunLoop.
+    /// (The earlier failed attempt hand-pumped RunLoop.run(before:) which returns between sources
+    /// and stalls; CFRunLoopRun() blocks until CFRunLoopStop, so the link is serviced cleanly.)
+    @MainActor
+    private func startLinkOnDedicatedThread() {
+        let layer = metalLayer
+        let thread = Thread { [weak self] in
+            guard let self else { return }
+            let link = CAMetalDisplayLink(metalLayer: layer)
+            link.delegate = self
+            link.add(to: .current, forMode: .common)
+            self.displayLink = link
+            self.renderRunLoop = CFRunLoopGetCurrent()
+            // A persistent port keeps the run loop from exiting if the link source churns.
+            RunLoop.current.add(NSMachPort(), forMode: .common)
+            CFRunLoopRun()                       // blocks until stopOutput calls CFRunLoopStop
+            link.remove(from: .current, forMode: .common)
+            link.invalidate()                    // tear down on the link's own thread
+        }
+        thread.name = "GlassesRenderLink"
+        thread.qualityOfService = .userInteractive
+        renderThread = thread
+        thread.start()
     }
 
     @MainActor
@@ -527,10 +583,21 @@ public final class GlassesRenderer: NSObject {
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         screenObserver = nil
         targetDisplayID = 0
+        displayRefreshHz = 0
+        presentPath = "—"
         displayLink?.isPaused = true
-        displayLink?.remove(from: .main, forMode: .common)
-        displayLink?.invalidate()
-        displayLink = nil
+        if let renderRunLoop {
+            // Dedicated-thread path: stop its run loop; the thread removes/invalidates the link
+            // and exits. (Don't touch the link from here — it belongs to that thread.)
+            CFRunLoopStop(renderRunLoop)
+            self.renderRunLoop = nil
+            renderThread = nil
+            displayLink = nil
+        } else {
+            displayLink?.remove(from: .main, forMode: .common)
+            displayLink?.invalidate()
+            displayLink = nil
+        }
         window?.contentView = nil
         window?.orderOut(nil)
         window = nil
@@ -538,11 +605,13 @@ public final class GlassesRenderer: NSObject {
 
     public var isRunning: Bool { displayLink != nil }
 
-    /// Diagnostics: the output window's current frame and the screen AppKit thinks it's on.
+    /// Diagnostics: the output window's current frame and the display ID it's on. Returns the
+    /// display ID (cheap) rather than localizedName (an expensive IOKit lookup) so the caller can
+    /// resolve the name from a cache and poll this every tick without stalling the render thread.
     @MainActor
-    public var outputWindowInfo: (frame: CGRect, screenName: String)? {
+    public var outputWindowInfo: (frame: CGRect, displayID: CGDirectDisplayID)? {
         guard let window else { return nil }
-        return (window.frame, window.screen?.localizedName ?? "none")
+        return (window.frame, window.screen.map(Self.displayID(of:)) ?? 0)
     }
 
     /// Move the output window to an absolute global position (debug positioning).
@@ -595,12 +664,15 @@ public final class GlassesRenderer: NSObject {
         let frameStart = CACurrentMediaTime()
         if frameLoggingEnabled, lastFrameStart > 0 {
             let interval = (frameStart - lastFrameStart) * 1000
-            if interval > 12 {
+            // Rate-aware: a "drop" is past 1.5× the current panel budget (8.3ms@120, 11.1@90,
+            // 16.7@60) so 60/90Hz modes aren't flagged for their normal, healthy frame times.
+            let frameBudget = displayRefreshHz > 0 ? 1000.0 / displayRefreshHz : 16.67
+            if interval > frameBudget * 1.5 {
                 droppedFrames += 1
                 commandBuffer.addCompletedHandler { [weak self] cb in
                     let gpuMs = (cb.gpuEndTime - cb.gpuStartTime) * 1000
-                    self?.frameLog?(String(format: "frame gap=%.1fms gpu=%.1fms drops=%d",
-                                           interval, gpuMs, self?.droppedFrames ?? 0))
+                    self?.frameLog?(String(format: "frame gap=%.1fms (budget %.1fms) gpu=%.1fms drops=%d",
+                                           interval, frameBudget, gpuMs, self?.droppedFrames ?? 0))
                 }
             }
         }

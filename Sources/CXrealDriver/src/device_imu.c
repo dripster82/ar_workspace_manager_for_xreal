@@ -1016,16 +1016,10 @@ device_imu_error_type device_imu_read(device_imu_type *device, int timeout)
 
 	if (device->ahrs)
 	{
-		if (isnan(magnetometer.axis.x) || isnan(magnetometer.axis.x) || isnan(magnetometer.axis.x))
-		{
-			FusionAhrsUpdateNoMagnetometer((FusionAhrs *)device->ahrs, gyroscope, accelerometer, deltaTime);
-		}
-		else
-		{
-			/* The magnetometer seems to make results of sensor fusion generally worse. So it is not used currently. */
-			// FusionAhrsUpdate((FusionAhrs*) device->ahrs, gyroscope, accelerometer, magnetometer, deltaTime);
-			FusionAhrsUpdateNoMagnetometer((FusionAhrs *)device->ahrs, gyroscope, accelerometer, deltaTime);
-		}
+		/* The magnetometer makes sensor fusion generally worse (indoor magnetic interference
+		   causes random large heading jumps), so it is not used. Yaw drift is handled in the
+		   Swift layer instead (stationary yaw-hold). */
+		FusionAhrsUpdateNoMagnetometer((FusionAhrs *)device->ahrs, gyroscope, accelerometer, deltaTime);
 
 		const device_imu_quat_type orientation = device_imu_get_orientation(device->ahrs);
 
