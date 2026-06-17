@@ -57,6 +57,42 @@ struct ClockWidgetView: View {
     }
 }
 
+struct SlackWidgetView: View {
+    let style: WidgetStyle
+    let connected: Bool
+    let unreads: [SlackUnread]
+
+    private func countLabel(_ n: Int) -> String { n > 9 ? "9+" : "\(n)" }
+
+    var body: some View {
+        WidgetPill(style: style) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Image(systemName: "message.badge.fill").font(.system(size: 16))
+                    Text("Slack").font(.system(size: 16, weight: .semibold, design: .rounded))
+                }
+                if !connected {
+                    Text("Not connected").font(.system(size: 14)).opacity(0.7)
+                } else if unreads.isEmpty {
+                    Text("All caught up").font(.system(size: 14)).opacity(0.7)
+                } else {
+                    ForEach(unreads.prefix(8)) { item in
+                        HStack(spacing: 8) {
+                            Image(systemName: item.isChannel ? "number" : "person.fill")
+                                .font(.system(size: 12)).opacity(0.7).frame(width: 14)
+                            Text(item.name).font(.system(size: 16, weight: .medium)).lineLimit(1)
+                            Spacer(minLength: 8)
+                            Text(countLabel(item.count))
+                                .font(.system(size: 15, weight: .bold, design: .rounded).monospacedDigit())
+                        }
+                    }
+                }
+            }
+            .frame(minWidth: 150, alignment: .leading)
+        }
+    }
+}
+
 struct PowerWidgetView: View {
     let style: WidgetStyle
     let power: PowerStatus

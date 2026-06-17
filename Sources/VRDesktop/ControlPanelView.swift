@@ -438,6 +438,10 @@ struct ControlPanelView: View {
                               onRemove: { coordinator.removeWidget(id: widget.id) })
                 }
             }
+            if coordinator.widgets.contains(where: { $0.kind == .slack }) {
+                Divider()
+                SlackSettingsView(slack: coordinator.slack)
+            }
             if !coordinator.arActive {
                 Text("Widgets appear once AR is running.")
                     .font(.caption2).foregroundStyle(.secondary)

@@ -41,6 +41,7 @@ enum PowerMonitor {
 @MainActor
 final class WidgetManager {
     private weak var renderer: GlassesRenderer?
+    weak var slack: SlackService?
     private var widgets: [HUDWidget] = []
     private var timer: Timer?
     /// Apparent width (metres) of a widget card at scale 1; height follows the rendered aspect.
@@ -94,6 +95,10 @@ final class WidgetManager {
         switch widget.kind {
         case .clock: content = AnyView(ClockWidgetView(style: widget.style, date: date))
         case .power: content = AnyView(PowerWidgetView(style: widget.style, power: power))
+        case .slack:
+            content = AnyView(SlackWidgetView(style: widget.style,
+                                              connected: slack?.isConnected ?? false,
+                                              unreads: slack?.unreads ?? []))
         }
         let renderer = ImageRenderer(content: content)
         renderer.scale = 2

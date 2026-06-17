@@ -83,6 +83,7 @@ final class AppCoordinator: ObservableObject {
         didSet { UserDefaults.standard.set(windowRestoreMode.rawValue, forKey: "windowRestoreMode") }
     }
     private(set) var renderer: GlassesRenderer?
+    let slack = SlackService()
     private var widgetManager: WidgetManager?
     private var captures: [UUID: CaptureSource] = [:]
     private var statsTimer: Timer?
@@ -198,6 +199,7 @@ final class AppCoordinator: ObservableObject {
         renderer = GlassesRenderer(poseStore: IMUService.shared.poseStore)
         renderer?.useDedicatedRenderThread = useDedicatedRenderThread
         widgetManager = WidgetManager(renderer: renderer)
+        widgetManager?.slack = slack
         IMUService.shared.stateChanged = { [weak self] state in
             Task { @MainActor in
                 self?.glassesState = state

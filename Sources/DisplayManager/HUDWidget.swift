@@ -2,18 +2,20 @@ import Foundation
 
 /// Kinds of HUD widget. v1: a clock and a power/battery indicator.
 public enum WidgetKind: String, Codable, CaseIterable, Sendable, Identifiable {
-    case clock, power
+    case clock, power, slack
     public var id: String { rawValue }
     public var displayName: String {
         switch self {
         case .clock: return "Clock"
         case .power: return "Power"
+        case .slack: return "Slack unreads"
         }
     }
     public var symbol: String {
         switch self {
         case .clock: return "clock"
         case .power: return "battery.100"
+        case .slack: return "message.badge"
         }
     }
 }
