@@ -20,12 +20,13 @@ final class CursorInfoOverlayController {
 
     func show() {
         let info = CursorInfo.current(arOutputDisplayID: coordinator.arOutputDisplayID)
+        let gaze = coordinator.currentGaze()
         visible = true
         if coordinator.arActive, let renderer = coordinator.renderer,
-           let image = info.renderCGImage(), renderer.setHelpImage(image) {
+           let image = info.renderCGImage(gaze: gaze), renderer.setHelpImage(image) {
             // Shown as the in-AR overlay (shares the help overlay slot).
         } else {
-            showPanel(info) // AR off, or overlay couldn't be built — use the macOS panel
+            showPanel(info, gaze: gaze) // AR off, or overlay couldn't be built — use the macOS panel
         }
     }
 
@@ -35,8 +36,8 @@ final class CursorInfoOverlayController {
         panel?.orderOut(nil)
     }
 
-    private func showPanel(_ info: CursorInfo) {
-        let hosting = NSHostingView(rootView: CursorInfoView(info: info))
+    private func showPanel(_ info: CursorInfo, gaze: GazeReadout?) {
+        let hosting = NSHostingView(rootView: CursorInfoView(info: info, gaze: gaze))
         hosting.frame = NSRect(origin: .zero, size: hosting.fittingSize)
         let panel = self.panel ?? makePanel()
         self.panel = panel

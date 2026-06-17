@@ -1,6 +1,15 @@
 import AppKit
 import SwiftUI
 
+/// Where the user's gaze (head-forward ray — no eye tracking) lands in the glasses: which
+/// AR screen and the pixel on it. Computed on demand when the popup opens.
+struct GazeReadout {
+    let screenName: String
+    let pixel: CGPoint
+    let screenSize: CGSize
+    let offScreen: Bool   // gaze hit the screen's plane but outside its bounds (clamped)
+}
+
 /// A snapshot of where the mouse cursor is right now: which screen it's on and its
 /// coordinates (both global desktop-space and local to that screen). Captured at the
 /// moment ⌃⌥C is pressed — handy for "where did my cursor go?" across many virtual screens.
@@ -43,8 +52,8 @@ struct CursorInfo {
 
     /// Render the popup card to a CGImage (transparent outside the card) for the in-AR overlay.
     @MainActor
-    func renderCGImage(scale: CGFloat = 2) -> CGImage? {
-        let renderer = ImageRenderer(content: CursorInfoView(info: self))
+    func renderCGImage(gaze: GazeReadout?, scale: CGFloat = 2) -> CGImage? {
+        let renderer = ImageRenderer(content: CursorInfoView(info: self, gaze: gaze))
         renderer.scale = scale
         renderer.isOpaque = false
         return renderer.cgImage
@@ -52,8 +61,10 @@ struct CursorInfo {
 }
 
 /// The cursor-info card, used both for the in-AR overlay rasterization and the macOS panel.
+/// Shows the mouse cursor's location plus, when AR is running, where the gaze lands in-glasses.
 struct CursorInfoView: View {
     let info: CursorInfo
+    let gaze: GazeReadout?
 
     private func fmt(_ p: CGPoint) -> String {
         String(format: "%.0f, %.0f", p.x, p.y)
@@ -70,6 +81,23 @@ struct CursorInfoView: View {
                 row("On screen", "\(fmt(info.local))  of  "
                     + String(format: "%.0f × %.0f", info.screenSize.width, info.screenSize.height))
             }
+
+            Divider().overlay(.white.opacity(0.15))
+
+            Label("Looking at", systemImage: "eye")
+                .font(.headline)
+            if let gaze {
+                VStack(alignment: .leading, spacing: 6) {
+                    row("Screen", gaze.screenName)
+                    row("Gaze", fmt(gaze.pixel) + (gaze.offScreen ? "  (edge)" : ""))
+                    row("On screen", String(format: "%.0f × %.0f",
+                                            gaze.screenSize.width, gaze.screenSize.height))
+                }
+            } else {
+                Text("Not looking at a screen (or AR is off).")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+
             Text("Press ⌃⌥C to refresh / close")
                 .font(.caption2).foregroundStyle(.secondary)
         }

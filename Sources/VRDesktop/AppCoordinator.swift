@@ -797,17 +797,21 @@ final class AppCoordinator: ObservableObject {
 
     /// Pick the screen whose centre is closest to the head's forward direction.
     private func updateLookedAtScreen() {
-        guard arActive, let ws = workspaceStore.activeWorkspace else {
-            if lookedAtScreenID != nil { lookedAtScreenID = nil; lookedAtScreenName = nil }
-            return
-        }
+        let best = lookedAtConfig()
+        let id = best?.id, name = best?.name
+        if id != lookedAtScreenID { lookedAtScreenID = id; lookedAtScreenName = name }
+    }
+
+    /// The screen config the gaze (head forward) is nearest the centre of, within ~30°.
+    /// Shared by the live "looking at" readout and the on-demand gaze-coordinate snapshot.
+    private func lookedAtConfig() -> VirtualScreenConfig? {
+        guard arActive, let ws = workspaceStore.activeWorkspace else { return nil }
         let head = IMUService.shared.poseStore.latest().orientation
         let worldForward = simd_normalize(head.act(SIMD3<Float>(0, 0, -1)))
         let viewForward = SIMD3<Float>(0, 0, -1) // floating screens live in view space
 
         let screens = ws.virtualScreens.filter { $0.showInAR } + ws.physicalInAR.values.filter { $0.showInAR }
-        var bestID: UUID?
-        var bestName: String?
+        var best: VirtualScreenConfig?
         var bestDot: Float = -1
         for s in screens {
             let qYaw = simd_quatf(angle: Float(s.yawDegrees * .pi / 180), axis: SIMD3(0, 1, 0))
@@ -815,11 +819,54 @@ final class AppCoordinator: ObservableObject {
             let dir = simd_normalize((qYaw * qPitch).act(SIMD3<Float>(0, 0, -1)))
             // Floating screens are fixed in view space; compare to the view forward instead.
             let d = simd_dot(s.placement == .floating ? viewForward : worldForward, dir)
-            if d > bestDot { bestDot = d; bestID = s.id; bestName = s.name }
+            if d > bestDot { bestDot = d; best = s }
         }
         // Only count it as "looking at" within ~30° of the screen centre.
-        if bestDot < cosf(30 * .pi / 180) { bestID = nil; bestName = nil }
-        if bestID != lookedAtScreenID { lookedAtScreenID = bestID; lookedAtScreenName = bestName }
+        return bestDot < cosf(30 * .pi / 180) ? nil : best
+    }
+
+    /// Where on the looked-at screen the gaze lands, computed on demand (e.g. when the cursor-info
+    /// popup opens). Intentionally NOT a live @Published value — writing one every IMU tick would
+    /// re-render the Control Panel each frame and bring back the head-tracking judder. The hit is
+    /// the head-forward ray (no eye tracking) intersected with the screen's surface, in pixels.
+    func currentGaze() -> GazeReadout? {
+        guard let s = lookedAtConfig() else { return nil }
+        let gaze: SIMD3<Float>
+        if s.placement == .floating {
+            gaze = SIMD3<Float>(0, 0, -1)
+        } else {
+            let head = IMUService.shared.poseStore.latest().orientation
+            gaze = simd_normalize(head.act(SIMD3<Float>(0, 0, -1)))
+        }
+        // Rotate the gaze into the screen's local frame (undo its yaw/pitch placement).
+        let qYaw = simd_quatf(angle: Float(s.yawDegrees * .pi / 180), axis: SIMD3(0, 1, 0))
+        let qPitch = simd_quatf(angle: Float(s.pitchDegrees * .pi / 180), axis: SIMD3(1, 0, 0))
+        let localDir = simd_normalize((qYaw * qPitch).inverse.act(gaze))
+        guard localDir.z < -1e-4 else { return nil } // gaze pointing away from the surface
+
+        // Geometry must match sceneScreen(config:capture:): ~1.6m per 1920px at scale 1.
+        let widthMeters = Float(s.width) / 1920.0 * 1.6 * Float(s.scale)
+        let aspect = Float(s.width) / Float(max(1, s.height))
+        let heightMeters = widthMeters / max(0.0001, aspect)
+        let distance = Float(s.distanceMeters)
+
+        // Horizontal: angular mapping when curved (matches the mesh's arc), exact flat-plane
+        // intersection otherwise. Vertical surface is always flat, so intersect the z=-distance plane.
+        let arcPerUnit: Float = 30 * .pi / 180
+        let thetaX = (s.autoCurveH ? widthMeters / distance : Float(s.curvatureRadius) * arcPerUnit)
+        let azimuth = atan2(localDir.x, -localDir.z)
+        let u: Float = thetaX > 0.001 ? (0.5 + azimuth / thetaX)
+                                      : (0.5 + distance * tanf(azimuth) / widthMeters)
+        let t = distance / (-localDir.z)
+        let v = 0.5 - (localDir.y * t) / heightMeters
+
+        let offScreen = u < 0 || u > 1 || v < 0 || v > 1
+        let px = CGFloat(min(1, max(0, u))) * CGFloat(s.width)
+        let py = CGFloat(min(1, max(0, v))) * CGFloat(s.height)
+        return GazeReadout(screenName: s.name,
+                           pixel: CGPoint(x: px.rounded(), y: py.rounded()),
+                           screenSize: CGSize(width: s.width, height: s.height),
+                           offScreen: offScreen)
     }
 
     /// The display that looks like the XREAL glasses, if currently connected.
