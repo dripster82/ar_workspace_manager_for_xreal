@@ -581,6 +581,9 @@ struct ScreenRow: View {
     // path to the renderer doesn't re-publish, which otherwise froze the UI numbers).
     @State private var cfg: VirtualScreenConfig
     @State private var expanded = false
+    // Name editing is buffered locally and committed on submit/blur, so we don't re-save the
+    // whole config (and rebuild the scene) on every keystroke.
+    @State private var nameField: String
 
     init(initial: VirtualScreenConfig, isPhysical: Bool = false, wideCanvasMode: Bool = false,
          lookedAt: Bool = false,
@@ -593,11 +596,30 @@ struct ScreenRow: View {
         self.onChange = onChange
         self.onRemove = onRemove
         _cfg = State(initialValue: initial)
+        _nameField = State(initialValue: initial.name)
+    }
+
+    private func commitName() {
+        let trimmed = nameField.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { nameField = cfg.name; return } // reject blank, restore
+        if trimmed != cfg.name { cfg.name = trimmed }               // persists via onChange(of: cfg)
+        else { nameField = cfg.name }
     }
 
     var body: some View {
         DisclosureGroup(isExpanded: $expanded) {
             VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Text("Name").font(.caption).foregroundStyle(.secondary)
+                    TextField("Screen name", text: $nameField)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.caption)
+                        .onSubmit { commitName() }
+                }
+                .help(isPhysical
+                      ? "Rename this monitor's in-app label (shown in the panel and the ⌃⌥C popup)."
+                      : "Rename this screen. The new name shows in the panel and the ⌃⌥C popup; the "
+                        + "macOS display name updates next time AR starts.")
                 if isPhysical {
                     Toggle("Mirror into glasses", isOn: $cfg.showInAR)
                         .font(.caption)
@@ -673,7 +695,10 @@ struct ScreenRow: View {
             }
         }
         .onChange(of: cfg) { newValue in onChange(newValue) }
-        .onChange(of: initial) { newValue in if newValue != cfg { cfg = newValue } }
+        .onChange(of: initial) { newValue in
+            if newValue != cfg { cfg = newValue }
+            if newValue.name != nameField { nameField = newValue.name }
+        }
     }
 
     private func slider(_ label: String, _ value: Binding<Double>,
