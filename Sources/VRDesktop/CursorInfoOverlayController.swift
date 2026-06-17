@@ -1,9 +1,11 @@
 import AppKit
 import SwiftUI
+import DisplayManager
 
 /// Toggles the cursor-info popup: an in-AR screen-space overlay while AR is running, or a
 /// floating macOS panel when it isn't. While visible it auto-refreshes ~every 0.5s so the
 /// screen names and direction arrow track head movement live; press ⌃⌥C again to close.
+/// While open it also enlarges the system cursor so it's easy to spot in the glasses.
 @MainActor
 final class CursorInfoOverlayController {
     private let coordinator: AppCoordinator
@@ -11,6 +13,10 @@ final class CursorInfoOverlayController {
     private var hosting: NSHostingView<CursorInfoView>?
     private var refreshTimer: Timer?
     private(set) var visible = false
+
+    /// How much to enlarge the cursor while searching, and the scale to restore on close.
+    private let searchCursorScale: Float = 2.5
+    private var savedCursorScale: Float?
 
     init(coordinator: AppCoordinator) {
         self.coordinator = coordinator
@@ -22,6 +28,10 @@ final class CursorInfoOverlayController {
 
     func show() {
         visible = true
+        // Enlarge the system cursor (captured into AR) so it's easy to find. Remember the user's
+        // current scale so we can restore it exactly on close.
+        if savedCursorScale == nil { savedCursorScale = CursorScale.current }
+        CursorScale.set(searchCursorScale)
         refresh()
         // Light 2 Hz refresh — a direct texture upload / rootView swap, not an @Published write,
         // so it doesn't re-render the Control Panel or disturb the render display link.
@@ -36,6 +46,8 @@ final class CursorInfoOverlayController {
         visible = false
         refreshTimer?.invalidate()
         refreshTimer = nil
+        // Restore the cursor to the size it was before searching.
+        if let saved = savedCursorScale { CursorScale.set(saved); savedCursorScale = nil }
         coordinator.renderer?.clearHelp()
         panel?.orderOut(nil)
     }

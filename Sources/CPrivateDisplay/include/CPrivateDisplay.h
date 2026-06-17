@@ -44,4 +44,10 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)applySettings:(CGVirtualDisplaySettings *)settings;
 @end
 
+// Live system-cursor scaling via the private SkyLight/CoreGraphics CGSSetCursorScale API
+// (resolved at runtime with dlsym). Scales the actual hardware cursor, so ScreenCaptureKit
+// captures the enlarged cursor straight into the glasses. 1.0 = normal; accessibility max ≈ 4.0.
+float VRDGetCursorScale(void);
+void VRDSetCursorScale(float scale);
+
 NS_ASSUME_NONNULL_END
