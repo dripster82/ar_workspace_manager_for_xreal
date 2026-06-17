@@ -83,6 +83,7 @@ final class AppCoordinator: ObservableObject {
         didSet { UserDefaults.standard.set(windowRestoreMode.rawValue, forKey: "windowRestoreMode") }
     }
     private(set) var renderer: GlassesRenderer?
+    private var widgetManager: WidgetManager?
     private var captures: [UUID: CaptureSource] = [:]
     private var statsTimer: Timer?
     private var lastSampleCount: UInt64 = 0
@@ -196,6 +197,7 @@ final class AppCoordinator: ObservableObject {
         DebugLog.shared.log("App launched — build \(BuildInfo.version)")
         renderer = GlassesRenderer(poseStore: IMUService.shared.poseStore)
         renderer?.useDedicatedRenderThread = useDedicatedRenderThread
+        widgetManager = WidgetManager(renderer: renderer)
         IMUService.shared.stateChanged = { [weak self] state in
             Task { @MainActor in
                 self?.glassesState = state
@@ -1107,6 +1109,8 @@ final class AppCoordinator: ObservableObject {
 
         renderer.setScreens(assembleScene(pairs))
         arActive = true
+        widgetManager?.setWidgets(workspace.widgets)
+        widgetManager?.start()
         refreshBrightness() // sync the slider to the glasses' actual brightness as AR starts
         lastWindowSnapshot = CACurrentMediaTime() // defer the first periodic snapshot ~10s
 
@@ -1722,6 +1726,41 @@ final class AppCoordinator: ObservableObject {
         liveUpdateScreens()
     }
 
+    // MARK: HUD widgets
+
+    var widgets: [HUDWidget] { workspaceStore.activeWorkspace?.widgets ?? [] }
+
+    func addWidget(kind: WidgetKind) {
+        guard var ws = workspaceStore.activeWorkspace else { return }
+        // Fan new widgets out a little so they don't stack exactly.
+        let n = ws.widgets.count
+        ws.widgets.append(HUDWidget(kind: kind,
+                                    yawDegrees: -14 + Double(n % 3) * 14,
+                                    pitchDegrees: 8 - Double(n / 3) * 10))
+        commitWidgets(ws)
+    }
+
+    func updateWidget(_ widget: HUDWidget) {
+        guard var ws = workspaceStore.activeWorkspace,
+              let i = ws.widgets.firstIndex(where: { $0.id == widget.id }) else { return }
+        ws.widgets[i] = widget
+        commitWidgets(ws)
+    }
+
+    func removeWidget(id: UUID) {
+        guard var ws = workspaceStore.activeWorkspace,
+              let i = ws.widgets.firstIndex(where: { $0.id == id }) else { return }
+        ws.widgets.remove(at: i)
+        commitWidgets(ws)
+    }
+
+    private func commitWidgets(_ ws: Workspace) {
+        workspaceStore.activeWorkspace = ws
+        workspaceStore.save()
+        objectWillChange.send()
+        if arActive { widgetManager?.setWidgets(ws.widgets) }
+    }
+
     /// All editable screens in the active workspace, for the UI list and Layout map: virtual
     /// screens plus connected physical monitors (excluding mirror targets, which are shown via
     /// the virtual screen mirrored onto them).
@@ -1867,6 +1906,7 @@ final class AppCoordinator: ObservableObject {
         intentionalMirrors.removeAll()
         // Put the user's real desktop arrangement back the way it was before AR moved things.
         restoreDisplayArrangement()
+        widgetManager?.stop()
         glassesDisplayID = 0
         arActive = false
         lastArrangementSignature = []

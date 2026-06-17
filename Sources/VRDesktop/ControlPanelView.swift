@@ -16,6 +16,7 @@ struct ControlPanelView: View {
                 statusCard
                 card("AR Output", "display") { outputSection }
                 card("Layout", "square.on.square.dashed") { PlacementMapView(coordinator: coordinator) }
+                card("HUD Widgets", "square.text.square") { widgetsSection }
                 card("Workspace", "square.grid.2x2") { workspaceSection }
                 card("Tracking & Testing", "gauge.with.dots.needle.33percent") { testSection }
                 card("Permissions", "lock.shield") { permissionsSection }
@@ -409,6 +410,41 @@ struct ControlPanelView: View {
         if selectedScreenID == nil { selectedScreenID = coordinator.glassesScreenID() }
     }
 
+    private var widgetsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Floating info cards in your view.").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Menu {
+                    ForEach(WidgetKind.allCases) { kind in
+                        Button {
+                            coordinator.addWidget(kind: kind)
+                        } label: { Label(kind.displayName, systemImage: kind.symbol) }
+                    }
+                } label: {
+                    Label("Add widget", systemImage: "plus")
+                }
+                .menuStyle(.borderlessButton).fixedSize()
+            }
+            if coordinator.widgets.isEmpty {
+                Text("No widgets yet. Add a Clock or Power widget, then drag it into place in the "
+                     + "Layout map's “In view (floating)” area.")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ForEach(coordinator.widgets) { widget in
+                    WidgetRow(initial: widget,
+                              onChange: { coordinator.updateWidget($0) },
+                              onRemove: { coordinator.removeWidget(id: widget.id) })
+                }
+            }
+            if !coordinator.arActive {
+                Text("Widgets appear once AR is running.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+    }
+
     private var generalSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             Toggle("Launch at login", isOn: $coordinator.launchAtLogin)
@@ -587,6 +623,64 @@ struct ControlPanelView: View {
                 .frame(width: 52).font(.caption).monospacedDigit()
         }
         .help(help)
+    }
+}
+
+/// A row to edit one HUD widget: scale, style (tint + clock options), and remove. Position is set
+/// by dragging the widget in the Layout map's floating zone.
+struct WidgetRow: View {
+    let initial: HUDWidget
+    var onChange: (HUDWidget) -> Void
+    var onRemove: () -> Void
+
+    @State private var cfg: HUDWidget
+    @State private var expanded = false
+
+    init(initial: HUDWidget, onChange: @escaping (HUDWidget) -> Void, onRemove: @escaping () -> Void) {
+        self.initial = initial
+        self.onChange = onChange
+        self.onRemove = onRemove
+        _cfg = State(initialValue: initial)
+    }
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $expanded) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Scale").font(.caption).frame(width: 70, alignment: .leading)
+                    Slider(value: $cfg.scale, in: 0.4...3, step: 0.05)
+                    Text(String(format: "%.0f%%", cfg.scale * 100)).font(.caption.monospacedDigit())
+                        .frame(width: 44)
+                }
+                HStack {
+                    Text("Colour").font(.caption).frame(width: 70, alignment: .leading)
+                    Picker("", selection: $cfg.style.tint) {
+                        ForEach(WidgetTint.allCases) { Text($0.displayName).tag($0) }
+                    }.labelsHidden().fixedSize()
+                    Spacer()
+                }
+                if cfg.kind == .clock {
+                    Toggle("24-hour", isOn: $cfg.style.clock24h).font(.caption)
+                    Toggle("Show seconds", isOn: $cfg.style.showSeconds).font(.caption)
+                }
+                HStack {
+                    Button("Remove", role: .destructive, action: onRemove)
+                    Spacer()
+                }
+                .controlSize(.small)
+            }
+            .padding(.leading, 8)
+        } label: {
+            HStack {
+                Image(systemName: cfg.kind.symbol).foregroundStyle(.secondary)
+                Text(cfg.kind.displayName)
+                Spacer()
+                Text(String(format: "yaw %.0f°  pitch %.0f°", cfg.yawDegrees, cfg.pitchDegrees))
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        .onChange(of: cfg) { newValue in onChange(newValue) }
+        .onChange(of: initial) { newValue in if newValue != cfg { cfg = newValue } }
     }
 }
 
@@ -840,6 +934,16 @@ struct PlacementMapView: View {
                                       lookedAt: coordinator.lookedAtScreenID == cfg.id,
                                       onChange: { coordinator.updateScreen($0) })
                         }
+                        // Head-locked HUD widgets live in the field of view → floating zone only.
+                        if placement == .floating {
+                            ForEach(coordinator.widgets) { widget in
+                                WidgetBox(initial: widget,
+                                          area: CGSize(width: contentW, height: contentH),
+                                          coordinateSpace: spaceName, pxPerDeg: ppd,
+                                          yawRange: baseYaw, pitchRange: basePitch,
+                                          onChange: { coordinator.updateWidget($0) })
+                            }
+                        }
                     }
                     .frame(width: contentW, height: contentH)
                     .coordinateSpace(name: spaceName)
@@ -914,6 +1018,67 @@ private struct ScreenBox: View {
                     .padding(.horizontal, 3).foregroundStyle(.white))
             .overlay(RoundedRectangle(cornerRadius: 4)
                 .strokeBorder(lookedAt ? Color.yellow : .white.opacity(0.5), lineWidth: lookedAt ? 2 : 1))
+            .frame(width: w, height: h)
+            .position(point())
+            .gesture(
+                DragGesture(coordinateSpace: .named(coordinateSpace))
+                    .onChanged { apply(location: $0.location) }
+            )
+            .onChange(of: initial) { newValue in if newValue != cfg { cfg = newValue } }
+    }
+}
+
+/// A draggable HUD-widget box in the floating zone of the layout map — drag to set its yaw/pitch.
+private struct WidgetBox: View {
+    let initial: HUDWidget
+    let area: CGSize
+    let coordinateSpace: String
+    let pxPerDeg: CGFloat
+    let yawRange: Double
+    let pitchRange: Double
+    var onChange: (HUDWidget) -> Void
+
+    @State private var cfg: HUDWidget
+
+    init(initial: HUDWidget, area: CGSize, coordinateSpace: String, pxPerDeg: CGFloat,
+         yawRange: Double, pitchRange: Double, onChange: @escaping (HUDWidget) -> Void) {
+        self.initial = initial
+        self.area = area
+        self.coordinateSpace = coordinateSpace
+        self.pxPerDeg = pxPerDeg
+        self.yawRange = yawRange
+        self.pitchRange = pitchRange
+        self.onChange = onChange
+        _cfg = State(initialValue: initial)
+    }
+
+    // Must match WidgetManager.baseWidthMeters; aspect is approximate per kind for the map box.
+    private static let baseWidthMeters = 0.45
+    private var displayAspect: Double { cfg.kind == .clock ? 3.0 : 2.6 }
+
+    private func point() -> CGPoint {
+        CGPoint(x: area.width / 2 - CGFloat(cfg.yawDegrees) * pxPerDeg,
+                y: area.height / 2 - CGFloat(cfg.pitchDegrees) * pxPerDeg)
+    }
+
+    private func apply(location: CGPoint) {
+        cfg.yawDegrees = min(yawRange, max(-yawRange, Double((area.width / 2 - location.x) / pxPerDeg)))
+        cfg.pitchDegrees = min(pitchRange, max(-pitchRange, Double((area.height / 2 - location.y) / pxPerDeg)))
+        onChange(cfg)
+    }
+
+    var body: some View {
+        let widthMeters = Self.baseWidthMeters * cfg.scale
+        let heightMeters = widthMeters / displayAspect
+        let dist = max(0.1, cfg.distanceMeters)
+        let angW = 2 * atan((widthMeters / 2) / dist) * 180 / .pi
+        let angH = 2 * atan((heightMeters / 2) / dist) * 180 / .pi
+        let w = max(20, CGFloat(angW) * pxPerDeg)
+        let h = max(12, CGFloat(angH) * pxPerDeg)
+        return RoundedRectangle(cornerRadius: 5)
+            .fill(Color.purple.opacity(0.5))
+            .overlay(Image(systemName: cfg.kind.symbol).font(.system(size: 9)).foregroundStyle(.white))
+            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(.white.opacity(0.6), lineWidth: 1))
             .frame(width: w, height: h)
             .position(point())
             .gesture(

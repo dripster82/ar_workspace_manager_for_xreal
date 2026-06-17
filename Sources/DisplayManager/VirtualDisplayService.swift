@@ -129,14 +129,28 @@ public struct Workspace: Codable, Identifiable, Hashable, Sendable {
     /// Physical displays (by persistent display UUID string) the user wants mirrored into AR,
     /// mapped to their placement config.
     public var physicalInAR: [String: VirtualScreenConfig]
+    /// Head-locked HUD widgets (clock, power, …) floating in the field of view.
+    public var widgets: [HUDWidget]
 
     public init(id: UUID = UUID(), name: String,
                 virtualScreens: [VirtualScreenConfig] = [],
-                physicalInAR: [String: VirtualScreenConfig] = [:]) {
+                physicalInAR: [String: VirtualScreenConfig] = [:],
+                widgets: [HUDWidget] = []) {
         self.id = id
         self.name = name
         self.virtualScreens = virtualScreens
         self.physicalInAR = physicalInAR
+        self.widgets = widgets
+    }
+
+    // Custom decoding so workspaces saved before widgets existed still load.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        virtualScreens = try c.decodeIfPresent([VirtualScreenConfig].self, forKey: .virtualScreens) ?? []
+        physicalInAR = try c.decodeIfPresent([String: VirtualScreenConfig].self, forKey: .physicalInAR) ?? [:]
+        widgets = try c.decodeIfPresent([HUDWidget].self, forKey: .widgets) ?? []
     }
 }
 

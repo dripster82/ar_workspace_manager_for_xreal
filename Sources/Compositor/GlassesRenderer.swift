@@ -62,6 +62,15 @@ public final class GlassesRenderer: NSObject {
     private var brightnessTexture: MTLTexture?
     public var showBrightness = false
 
+    // Head-locked HUD widgets: small alpha-blended quads drawn always-on-top in view space.
+    private var widgetPipeline: MTLRenderPipelineState!
+    private var widgetDepthState: MTLDepthStencilState?
+    private struct WidgetEntry {
+        let yaw, pitch, distance, widthMeters, aspect: Float
+        let texture: MTLTexture
+    }
+    private var widgetEntries: [WidgetEntry] = []
+
     private struct OverlayVertex { var position: SIMD2<Float>; var uv: SIMD2<Float> }
 
     private let poseStore: PoseStore
@@ -152,6 +161,53 @@ public final class GlassesRenderer: NSObject {
         oDesc.colorAttachments[0].sourceAlphaBlendFactor = .one
         oDesc.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
         overlayPipeline = try? device.makeRenderPipelineState(descriptor: oDesc)
+
+        // Widget pipeline: 3D-placed (screen_vertex) but alpha-blended and drawn into the MSAA
+        // scene target, so head-locked HUD cards composite over the scene with proper perspective.
+        let wDesc = MTLRenderPipelineDescriptor()
+        wDesc.vertexFunction = library.makeFunction(name: "screen_vertex")
+        wDesc.fragmentFunction = library.makeFunction(name: "overlay_fragment")
+        wDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
+        wDesc.colorAttachments[0].isBlendingEnabled = true
+        wDesc.colorAttachments[0].sourceRGBBlendFactor = .one          // premultiplied-alpha over
+        wDesc.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
+        wDesc.colorAttachments[0].sourceAlphaBlendFactor = .one
+        wDesc.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
+        wDesc.depthAttachmentPixelFormat = Self.depthFormat
+        wDesc.rasterSampleCount = sampleCount
+        widgetPipeline = try? device.makeRenderPipelineState(descriptor: wDesc)
+
+        // Always-on-top: don't depth-test or write, so widgets sit above any screen.
+        let wDepth = MTLDepthStencilDescriptor()
+        wDepth.depthCompareFunction = .always
+        wDepth.isDepthWriteEnabled = false
+        widgetDepthState = device.makeDepthStencilState(descriptor: wDepth)
+    }
+
+    /// Per-frame head-locked HUD widgets (premultiplied-alpha CGImages placed by yaw/pitch).
+    public struct WidgetPlacement {
+        public let id: UUID
+        public var yaw, pitch, distance, widthMeters: Float
+        public var image: CGImage
+        public init(id: UUID, yaw: Float, pitch: Float, distance: Float,
+                    widthMeters: Float, image: CGImage) {
+            self.id = id; self.yaw = yaw; self.pitch = pitch
+            self.distance = distance; self.widthMeters = widthMeters; self.image = image
+        }
+    }
+
+    /// Replace the set of HUD widgets. Builds a texture per widget; the aspect is taken from the
+    /// image so cards aren't distorted. Cheap (few small widgets), called when content/layout change.
+    public func setWidgets(_ placements: [WidgetPlacement]) {
+        var entries: [WidgetEntry] = []
+        for p in placements {
+            guard let tex = makeOverlayTexture(p.image) else { continue }
+            entries.append(WidgetEntry(yaw: p.yaw, pitch: p.pitch, distance: p.distance,
+                                       widthMeters: p.widthMeters,
+                                       aspect: Float(tex.width) / Float(max(1, tex.height)),
+                                       texture: tex))
+        }
+        lock.lock(); widgetEntries = entries; lock.unlock()
     }
 
     /// Load an image file into a static GPU texture. Used by the static-image AR experiment to
@@ -890,6 +946,7 @@ public final class GlassesRenderer: NSObject {
                                                      eyeOffsetX: eyeOffset)
             if !anchored.isEmpty { drawScreens(anchored, viewProjection: anchoredVP, encoder: encoder, sharp: sharp) }
             if !floating.isEmpty { drawScreens(floating, viewProjection: floatingVP, encoder: encoder, sharp: sharp) }
+            drawWidgets(viewProjection: floatingVP, encoder: encoder)  // head-locked, on top
         }
 
         if stereoEnabled {
@@ -899,6 +956,38 @@ public final class GlassesRenderer: NSObject {
         } else {
             drawEye(viewportX: 0, eyeWidth: width, eyeOffset: 0)
         }
+    }
+
+    /// Draw the head-locked HUD widgets as alpha-blended quads in view space, always on top.
+    private func drawWidgets(viewProjection: simd_float4x4, encoder: MTLRenderCommandEncoder) {
+        lock.lock(); let entries = widgetEntries; lock.unlock()
+        guard !entries.isEmpty, let pipe = widgetPipeline else { return }
+        encoder.setRenderPipelineState(pipe)
+        encoder.setDepthStencilState(widgetDepthState)
+        var uniforms = Uniforms(viewProjection: viewProjection)
+        for e in entries {
+            let h = e.widthMeters / max(0.01, e.aspect)
+            let qYaw = simd_quatf(angle: e.yaw, axis: SIMD3(0, 1, 0))
+            let qPitch = simd_quatf(angle: e.pitch, axis: SIMD3(1, 0, 0))
+            let rot = qYaw * qPitch
+            func p(_ x: Float, _ y: Float) -> SIMD3<Float> { rot.act(SIMD3(x, y, -e.distance)) }
+            let w = e.widthMeters / 2, hh = h / 2
+            var verts = [
+                SceneScreen.Vertex(position: p(-w,  hh), uv: SIMD2(0, 0)),
+                SceneScreen.Vertex(position: p( w,  hh), uv: SIMD2(1, 0)),
+                SceneScreen.Vertex(position: p(-w, -hh), uv: SIMD2(0, 1)),
+                SceneScreen.Vertex(position: p( w,  hh), uv: SIMD2(1, 0)),
+                SceneScreen.Vertex(position: p( w, -hh), uv: SIMD2(1, 1)),
+                SceneScreen.Vertex(position: p(-w, -hh), uv: SIMD2(0, 1)),
+            ]
+            encoder.setVertexBytes(&verts, length: verts.count * MemoryLayout<SceneScreen.Vertex>.stride, index: 0)
+            encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.size, index: 1)
+            encoder.setRenderPipelineState(pipe)
+            encoder.setFragmentTexture(e.texture, index: 0)
+            encoder.setFragmentSamplerState(linearSampler, index: 0)
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+        }
+        encoder.setDepthStencilState(depthState) // restore for any later draws (e.g. next eye)
     }
 
     private func drawScreens(_ screens: [SceneScreen], viewProjection: simd_float4x4,
