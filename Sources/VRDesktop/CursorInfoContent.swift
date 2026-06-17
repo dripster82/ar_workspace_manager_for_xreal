@@ -5,6 +5,7 @@ import SwiftUI
 /// AR screen and the pixel on it. Computed on demand when the popup opens.
 struct GazeReadout {
     let screenName: String
+    let displayID: CGDirectDisplayID   // the macOS display this AR screen maps to (0 if unknown)
     let pixel: CGPoint
     let screenSize: CGSize
     let offScreen: Bool   // gaze hit the screen's plane but outside its bounds (clamped)
@@ -88,24 +89,36 @@ struct CursorInfoView: View {
     let gaze: GazeReadout?
     let direction: CursorDirection?
 
+    /// Looking-at and cursor are on the same physical/virtual display.
+    private var sameScreen: Bool {
+        guard let gaze, gaze.displayID != 0 else { return false }
+        return gaze.displayID == info.displayID
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            line("You are looking at:", gaze?.screenName ?? "—")
-            line("The cursor is on:", info.screenName)
-            HStack { Spacer(); directionArrow(direction); Spacer() }
+        // Compass dead-centre of the card (which is itself centred in the FOV), the sentence
+        // floating above it. Blue = looking-at, orange = cursor, green = both on one screen.
+        let lookColor: Color = sameScreen ? .green : .blue
+        let cursorColor: Color = sameScreen ? .green : .orange
+        let sentence = Text("You are looking at ")
+            + Text(gaze?.screenName ?? "—").foregroundColor(lookColor).bold()
+            + Text("\nand the cursor is on ")
+            + Text(info.screenName).foregroundColor(cursorColor).bold()
+
+        return ZStack {
+            directionArrow(direction)
+            sentence
+                .font(.title3)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .padding(.horizontal, 8)
         }
-        .padding(24)
-        .frame(width: 300, alignment: .leading)
+        .frame(width: 380, height: 240)
+        .padding(20)
         .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 18))
         .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(.white.opacity(0.15)))
         .foregroundStyle(.white)
-    }
-
-    private func line(_ label: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(label).font(.caption).foregroundStyle(.secondary)
-            Text(value).font(.title3.weight(.semibold)).lineLimit(1)
-        }
     }
 
     /// A compass-style arrow pointing the way to turn the head to reach the cursor. Shows a target

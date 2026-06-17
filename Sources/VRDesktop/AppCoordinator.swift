@@ -864,9 +864,19 @@ final class AppCoordinator: ObservableObject {
         let px = CGFloat(min(1, max(0, u))) * CGFloat(s.width)
         let py = CGFloat(min(1, max(0, v))) * CGFloat(s.height)
         return GazeReadout(screenName: s.name,
+                           displayID: displayID(forConfig: s),
                            pixel: CGPoint(x: px.rounded(), y: py.rounded()),
                            screenSize: CGSize(width: s.width, height: s.height),
                            offScreen: offScreen)
+    }
+
+    /// The macOS display ID a screen config currently maps to (virtual or physical), or 0.
+    private func displayID(forConfig s: VirtualScreenConfig) -> CGDirectDisplayID {
+        if let d = virtualDisplays.displayID(for: s.id) { return d }
+        if let entry = workspaceStore.activeWorkspace?.physicalInAR.first(where: { $0.value.id == s.id }) {
+            return Self.resolvePhysicalDisplay(uuidString: entry.key) ?? 0
+        }
+        return 0
     }
 
     /// Direction from the eye to the mouse cursor in AR space, relative to where the head is
