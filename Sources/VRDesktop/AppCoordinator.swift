@@ -869,6 +869,67 @@ final class AppCoordinator: ObservableObject {
                            offScreen: offScreen)
     }
 
+    /// Direction from the eye to the mouse cursor in AR space, relative to where the head is
+    /// pointing now (so a popup arrow can show which way to turn to find the cursor). `u`/`v` are
+    /// the cursor's fractional position on its display (top-left origin). On-demand, like the gaze
+    /// readout — no live @Published writes. Returns nil if AR is off or the cursor isn't on an AR
+    /// screen.
+    func cursorDirection(onDisplayID displayID: CGDirectDisplayID, u: Double, v: Double) -> CursorDirection? {
+        guard arActive, displayID != 0, let ws = workspaceStore.activeWorkspace else { return nil }
+
+        // Map the display under the cursor to its AR screen config.
+        var config: VirtualScreenConfig?
+        if let entry = virtualDisplays.active.first(where: { $0.value.displayID == displayID }) {
+            config = ws.virtualScreens.first { $0.id == entry.key }
+        }
+        if config == nil {
+            for (uuid, cfg) in ws.physicalInAR where cfg.showInAR {
+                if Self.resolvePhysicalDisplay(uuidString: uuid) == displayID { config = cfg; break }
+            }
+        }
+        guard let s = config else { return nil }
+
+        // Cursor's 3D position on that screen — the inverse of currentGaze()'s pixel mapping.
+        let widthMeters = Float(s.width) / 1920.0 * 1.6 * Float(s.scale)
+        let aspect = Float(s.width) / Float(max(1, s.height))
+        let heightMeters = widthMeters / max(0.0001, aspect)
+        let distance = Float(s.distanceMeters)
+        let arcPerUnit: Float = 30 * .pi / 180
+        let thetaX = (s.autoCurveH ? widthMeters / distance : Float(s.curvatureRadius) * arcPerUnit)
+        let uu = Float(u), vv = Float(v)
+        var localX: Float
+        var zDev: Float = 0
+        if thetaX > 0.001 {
+            let ax = (uu - 0.5) * thetaX
+            let rX = widthMeters / thetaX
+            localX = sinf(ax) * rX
+            zDev = rX * (1 - cosf(ax))
+        } else {
+            localX = (uu - 0.5) * widthMeters
+        }
+        let localY = (0.5 - vv) * heightMeters
+        let local = SIMD3<Float>(localX, localY, -distance + zDev)
+        let qYaw = simd_quatf(angle: Float(s.yawDegrees * .pi / 180), axis: SIMD3(0, 1, 0))
+        let qPitch = simd_quatf(angle: Float(s.pitchDegrees * .pi / 180), axis: SIMD3(1, 0, 0))
+        let world = (qYaw * qPitch).act(local)
+
+        // Direction in head/view space (floating screens already live in view space).
+        let viewDir: SIMD3<Float>
+        if s.placement == .floating {
+            viewDir = simd_normalize(world)
+        } else {
+            let head = IMUService.shared.poseStore.latest().orientation
+            viewDir = simd_normalize(head.inverse.act(world))
+        }
+        let azimuth = atan2(viewDir.x, -viewDir.z)        // + = right
+        let elevation = asin(max(-1, min(1, viewDir.y)))  // + = up
+        let centered = abs(azimuth) < (2 * .pi / 180) && abs(elevation) < (2 * .pi / 180)
+        return CursorDirection(azimuthDeg: Double(azimuth) * 180 / .pi,
+                               elevationDeg: Double(elevation) * 180 / .pi,
+                               angleRadians: atan2(Double(azimuth), Double(elevation)),
+                               centered: centered)
+    }
+
     /// The display that looks like the XREAL glasses, if currently connected.
     func glassesScreenID() -> CGDirectDisplayID? {
         for screen in NSScreen.screens {

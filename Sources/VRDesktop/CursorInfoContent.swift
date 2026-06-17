@@ -10,6 +10,26 @@ struct GazeReadout {
     let offScreen: Bool   // gaze hit the screen's plane but outside its bounds (clamped)
 }
 
+/// The direction from the eye to the mouse cursor's position in AR space, expressed relative
+/// to where the head is currently pointing — i.e. which way to turn to bring the cursor to
+/// centre. Used to draw a pointing arrow in the popup.
+struct CursorDirection {
+    let azimuthDeg: Double      // + = cursor is to the right
+    let elevationDeg: Double    // + = cursor is above
+    let angleRadians: Double    // arrow rotation, clockwise from straight up
+    let centered: Bool          // cursor is ~dead ahead
+
+    /// "24° right · 8° up" style summary.
+    var summary: String {
+        if centered { return "dead ahead" }
+        let h = abs(azimuthDeg) < 1 ? nil
+            : String(format: "%.0f° %@", abs(azimuthDeg), azimuthDeg >= 0 ? "right" : "left")
+        let vrt = abs(elevationDeg) < 1 ? nil
+            : String(format: "%.0f° %@", abs(elevationDeg), elevationDeg >= 0 ? "up" : "down")
+        return [h, vrt].compactMap { $0 }.joined(separator: " · ")
+    }
+}
+
 /// A snapshot of where the mouse cursor is right now: which screen it's on and its
 /// coordinates (both global desktop-space and local to that screen). Captured at the
 /// moment ⌃⌥C is pressed — handy for "where did my cursor go?" across many virtual screens.
@@ -52,8 +72,8 @@ struct CursorInfo {
 
     /// Render the popup card to a CGImage (transparent outside the card) for the in-AR overlay.
     @MainActor
-    func renderCGImage(gaze: GazeReadout?, scale: CGFloat = 2) -> CGImage? {
-        let renderer = ImageRenderer(content: CursorInfoView(info: self, gaze: gaze))
+    func renderCGImage(gaze: GazeReadout?, direction: CursorDirection?, scale: CGFloat = 2) -> CGImage? {
+        let renderer = ImageRenderer(content: CursorInfoView(info: self, gaze: gaze, direction: direction))
         renderer.scale = scale
         renderer.isOpaque = false
         return renderer.cgImage
@@ -65,6 +85,7 @@ struct CursorInfo {
 struct CursorInfoView: View {
     let info: CursorInfo
     let gaze: GazeReadout?
+    let direction: CursorDirection?
 
     private func fmt(_ p: CGPoint) -> String {
         String(format: "%.0f, %.0f", p.x, p.y)
@@ -72,14 +93,19 @@ struct CursorInfoView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label("Cursor", systemImage: "cursorarrow.rays")
-                .font(.headline)
+            HStack(spacing: 12) {
+                Label("Cursor", systemImage: "cursorarrow.rays")
+                    .font(.headline)
+                Spacer()
+                if let direction { directionArrow(direction) }
+            }
             VStack(alignment: .leading, spacing: 6) {
                 row("Screen", info.screenName + (info.isARorGlasses ? "  (AR output)" : ""))
                 row("Display ID", "\(info.displayID)")
                 row("Position", fmt(info.global))
                 row("On screen", "\(fmt(info.local))  of  "
                     + String(format: "%.0f × %.0f", info.screenSize.width, info.screenSize.height))
+                if let direction { row("Direction", direction.summary) }
             }
 
             Divider().overlay(.white.opacity(0.15))
@@ -117,5 +143,24 @@ struct CursorInfoView: View {
                 .font(.system(.callout, design: .monospaced))
                 .textSelection(.enabled)
         }
+    }
+
+    /// A compass-style arrow pointing the way to turn the head to reach the cursor. When the
+    /// cursor is already dead ahead it shows a target dot instead.
+    @ViewBuilder
+    private func directionArrow(_ d: CursorDirection) -> some View {
+        ZStack {
+            Circle().fill(.white.opacity(0.10))
+            Circle().strokeBorder(.white.opacity(0.18))
+            if d.centered {
+                Image(systemName: "scope").font(.system(size: 16, weight: .semibold))
+            } else {
+                Image(systemName: "arrow.up").font(.system(size: 18, weight: .bold))
+                    .rotationEffect(.radians(d.angleRadians))
+            }
+        }
+        .frame(width: 34, height: 34)
+        .foregroundStyle(.tint)
+        .help("Direction to turn to bring the cursor to centre: \(d.summary)")
     }
 }
