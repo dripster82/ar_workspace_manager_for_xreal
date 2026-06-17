@@ -38,6 +38,12 @@ final class AppCoordinator: ObservableObject {
         didSet { IMUService.shared.driftCorrectionEnabled = driftCorrection
                  UserDefaults.standard.set(driftCorrection, forKey: "driftCorrection") }
     }
+    /// Apply the calibrated constant-bias subtraction (separate from the stillness freeze above).
+    @Published var biasDriftCorrection: Bool = UserDefaults.standard.object(forKey: "biasDriftCorrection") == nil
+        ? true : UserDefaults.standard.bool(forKey: "biasDriftCorrection") {
+        didSet { IMUService.shared.biasCorrectionEnabled = biasDriftCorrection
+                 UserDefaults.standard.set(biasDriftCorrection, forKey: "biasDriftCorrection") }
+    }
 
     // Image quality.
     @Published var antialiasLevel: Int = 4 {   // 1 (off), 2, 4, 8
@@ -218,6 +224,7 @@ final class AppCoordinator: ObservableObject {
         IMUService.shared.minCutoff = Float(minCutoffHz)
         IMUService.shared.beta = Float(betaResponsiveness)
         IMUService.shared.driftCorrectionEnabled = driftCorrection
+        IMUService.shared.biasCorrectionEnabled = biasDriftCorrection
         if defaults.object(forKey: "gyroYawBiasRate") != nil {
             IMUService.shared.gyroYawBiasRate = Float(defaults.double(forKey: "gyroYawBiasRate"))
         }

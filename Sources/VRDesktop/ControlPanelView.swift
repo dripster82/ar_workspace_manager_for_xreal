@@ -506,6 +506,10 @@ struct ControlPanelView: View {
             Toggle("Anti-drift (hold yaw when still)", isOn: $coordinator.driftCorrection)
                 .font(.caption)
                 .help("Freezes heading while your head is still, cancelling the slow sideways slide. Safe; doesn't affect head turns.")
+            Toggle("Subtract calibrated drift (during turns too)", isOn: $coordinator.biasDriftCorrection)
+                .font(.caption)
+                .help("Applies the constant gyro-bias correction measured by 'Calibrate drift' — "
+                      + "works even while turning your head. No effect until you've calibrated.")
             HStack(spacing: 8) {
                 Button(coordinator.driftCalibrating ? "Calibrating…" : "Calibrate drift") {
                     coordinator.calibrateDrift()

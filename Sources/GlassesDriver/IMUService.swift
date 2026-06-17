@@ -140,14 +140,15 @@ public final class IMUService: @unchecked Sendable {
         // touches yaw only (pitch/roll are already gravity-locked).
         // Calibrated constant gyro-bias correction: integrate the measured drift rate out of the
         // heading continuously (works even during head turns, unlike the stillness freeze below).
-        if gyroYawBiasRate != 0 { biasYaw -= gyroYawBiasRate * dt }
+        let biasActive = biasCorrectionEnabled && gyroYawBiasRate != 0
+        if biasActive { biasYaw -= gyroYawBiasRate * dt }
 
         let rawYaw = Self.yaw(of: qSmooth)
         if calibrating { sampleCalibration(rawYaw: rawYaw, now: now) }
 
         // Stillness freeze observes the bias-corrected heading, so it only cancels the residual
         // (no double-correction with the bias term above).
-        let curYaw = rawYaw + biasYaw
+        let curYaw = rawYaw + (biasActive ? biasYaw : 0)
         if let prev = driftPrevYaw, driftCorrectionEnabled {
             let speedDegS = simd_length(velFiltered) * 180 / .pi
             if speedDegS < driftStillThresholdDegS {
@@ -157,8 +158,8 @@ public final class IMUService: @unchecked Sendable {
             }
         }
         driftPrevYaw = curYaw
-        let totalYawCorrection = driftCorrectionEnabled ? driftYaw + biasYaw : biasYaw
-        let corrected = (driftCorrectionEnabled || gyroYawBiasRate != 0)
+        let totalYawCorrection = (driftCorrectionEnabled ? driftYaw : 0) + (biasActive ? biasYaw : 0)
+        let corrected = (driftCorrectionEnabled || biasActive)
             ? simd_normalize(simd_quatf(angle: totalYawCorrection, axis: SIMD3(0, 1, 0)) * qSmooth)
             : qSmooth
 
@@ -191,6 +192,11 @@ public final class IMUService: @unchecked Sendable {
     /// `calibrateDrift`; the app persists/restores it across launches.
     public var gyroYawBiasRate: Float = 0
     private var biasYaw: Float = 0           // running integral of -gyroYawBiasRate·dt
+    /// Whether to apply the calibrated bias subtraction. Independent of the stillness freeze.
+    /// Toggling restarts the integrator so the heading doesn't jump by the accumulated amount.
+    public var biasCorrectionEnabled = true {
+        didSet { if biasCorrectionEnabled != oldValue { biasYaw = 0; driftPrevYaw = nil } }
+    }
 
     // Drift-calibration state (mutated on the IMU thread once armed from the control queue).
     private var calibrating = false
