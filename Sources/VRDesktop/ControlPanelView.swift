@@ -506,6 +506,20 @@ struct ControlPanelView: View {
             Toggle("Anti-drift (hold yaw when still)", isOn: $coordinator.driftCorrection)
                 .font(.caption)
                 .help("Freezes heading while your head is still, cancelling the slow sideways slide. Safe; doesn't affect head turns.")
+            HStack(spacing: 8) {
+                Button(coordinator.driftCalibrating ? "Calibrating…" : "Calibrate drift") {
+                    coordinator.calibrateDrift()
+                }
+                .controlSize(.small)
+                .disabled(coordinator.driftCalibrating || !glassesConnected)
+                .help("Rest the glasses flat and still, then press. Measures the residual yaw drift "
+                      + "and subtracts it continuously — helps even during head turns.")
+                if coordinator.driftCalibrating { ProgressView().controlSize(.small) }
+            }
+            if let status = coordinator.driftCalibrationStatus {
+                Text(status).font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Divider()
             HStack {
                 Text("Anti-alias").frame(width: 78, alignment: .leading).font(.caption)

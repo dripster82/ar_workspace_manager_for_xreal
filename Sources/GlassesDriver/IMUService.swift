@@ -10,6 +10,13 @@ public enum GlassesState: Equatable, Sendable {
     case error(String)
 }
 
+/// Outcome of a stationary drift calibration.
+public enum DriftCalibrationResult: Sendable {
+    case success(driftDegPerMin: Float)  // measured constant yaw drift now being subtracted
+    case movedTooMuch                    // the glasses weren't still enough — retry
+    case noData                          // disconnected / no samples gathered
+}
+
 /// Owns the C driver and a dedicated thread running the ~1kHz HID read loop.
 /// The C callback has no context pointer, so a single shared instance bridges to Swift.
 public final class IMUService: @unchecked Sendable {
@@ -47,6 +54,21 @@ public final class IMUService: @unchecked Sendable {
     }
 
     public func recenter(includeRoll: Bool = true) { poseStore.recenter(includeRoll: includeRoll) }
+
+    /// Measure the residual yaw drift while the glasses rest still on a flat surface, then subtract
+    /// it continuously as a constant gyro-bias correction. `completion` is called on the main queue.
+    /// The caller should ask the user to keep the glasses motionless for `duration` seconds.
+    public func calibrateDrift(duration: TimeInterval = 4.0,
+                               completion: @escaping @Sendable (DriftCalibrationResult) -> Void) {
+        queue.async { [self] in
+            calibCompletion = completion
+            calibDuration = duration
+            calibStartTime = 0
+            calibMaxSpeedDegS = 0
+            calibUnwrappedYaw = 0
+            calibrating = true
+        }
+    }
 
     private func readLoop() {
         while running {
@@ -116,7 +138,16 @@ public final class IMUService: @unchecked Sendable {
         // opposite into `driftYaw` (a rotation about world-up) to freeze the heading. It only
         // engages below the stillness threshold, so it never fights a real head turn, and it
         // touches yaw only (pitch/roll are already gravity-locked).
-        let curYaw = Self.yaw(of: qSmooth)
+        // Calibrated constant gyro-bias correction: integrate the measured drift rate out of the
+        // heading continuously (works even during head turns, unlike the stillness freeze below).
+        if gyroYawBiasRate != 0 { biasYaw -= gyroYawBiasRate * dt }
+
+        let rawYaw = Self.yaw(of: qSmooth)
+        if calibrating { sampleCalibration(rawYaw: rawYaw, now: now) }
+
+        // Stillness freeze observes the bias-corrected heading, so it only cancels the residual
+        // (no double-correction with the bias term above).
+        let curYaw = rawYaw + biasYaw
         if let prev = driftPrevYaw, driftCorrectionEnabled {
             let speedDegS = simd_length(velFiltered) * 180 / .pi
             if speedDegS < driftStillThresholdDegS {
@@ -126,8 +157,9 @@ public final class IMUService: @unchecked Sendable {
             }
         }
         driftPrevYaw = curYaw
-        let corrected = driftCorrectionEnabled
-            ? simd_normalize(simd_quatf(angle: driftYaw, axis: SIMD3(0, 1, 0)) * qSmooth)
+        let totalYawCorrection = driftCorrectionEnabled ? driftYaw + biasYaw : biasYaw
+        let corrected = (driftCorrectionEnabled || gyroYawBiasRate != 0)
+            ? simd_normalize(simd_quatf(angle: totalYawCorrection, axis: SIMD3(0, 1, 0)) * qSmooth)
             : qSmooth
 
         poseStore.update(Pose(orientation: corrected, angularVelocity: velFiltered, timestamp: now))
@@ -154,6 +186,56 @@ public final class IMUService: @unchecked Sendable {
     public var driftCorrectionEnabled = true
     /// Below this angular speed the head is treated as still and yaw is held.
     public var driftStillThresholdDegS: Float = 1.5
+
+    /// Measured constant yaw-drift rate (rad/s) subtracted continuously. 0 = uncalibrated. Set by
+    /// `calibrateDrift`; the app persists/restores it across launches.
+    public var gyroYawBiasRate: Float = 0
+    private var biasYaw: Float = 0           // running integral of -gyroYawBiasRate·dt
+
+    // Drift-calibration state (mutated on the IMU thread once armed from the control queue).
+    private var calibrating = false
+    private var calibCompletion: (@Sendable (DriftCalibrationResult) -> Void)?
+    private var calibDuration: TimeInterval = 4.0
+    private var calibStartTime: TimeInterval = 0
+    private var calibStartYaw: Float = 0
+    private var calibPrevYaw: Float = 0
+    private var calibUnwrappedYaw: Float = 0   // total yaw change over the window (unwrapped)
+    private var calibMaxSpeedDegS: Float = 0
+    /// If the glasses exceed this speed at any point, they weren't still — calibration fails.
+    private let calibStillFailDegS: Float = 3.0
+
+    private func sampleCalibration(rawYaw: Float, now: TimeInterval) {
+        calibMaxSpeedDegS = max(calibMaxSpeedDegS, simd_length(velFiltered) * 180 / .pi)
+        if calibStartTime == 0 {
+            calibStartTime = now
+            calibStartYaw = rawYaw
+            calibPrevYaw = rawYaw
+            calibUnwrappedYaw = 0
+            return
+        }
+        var d = rawYaw - calibPrevYaw
+        d = atan2f(sinf(d), cosf(d))            // shortest-path step
+        calibUnwrappedYaw += d
+        calibPrevYaw = rawYaw
+        guard now - calibStartTime >= calibDuration else { return }
+
+        calibrating = false
+        let completion = calibCompletion
+        calibCompletion = nil
+        let elapsed = now - calibStartTime
+        let result: DriftCalibrationResult
+        if calibMaxSpeedDegS > calibStillFailDegS {
+            result = .movedTooMuch
+        } else if elapsed > 0.5 {
+            gyroYawBiasRate = calibUnwrappedYaw / Float(elapsed)   // rad/s
+            biasYaw = 0
+            driftPrevYaw = nil                                     // restart the freeze cleanly
+            result = .success(driftDegPerMin: gyroYawBiasRate * 180 / .pi * 60)
+        } else {
+            result = .noData
+        }
+        if let completion { DispatchQueue.main.async { completion(result) } }
+    }
 
     /// Live raw-vs-filtered logging (for diagnosing jitter/calibration). Set the sink to route
     /// lines to the debug log; enable the flag to start.

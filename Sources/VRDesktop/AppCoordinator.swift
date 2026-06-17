@@ -218,6 +218,9 @@ final class AppCoordinator: ObservableObject {
         IMUService.shared.minCutoff = Float(minCutoffHz)
         IMUService.shared.beta = Float(betaResponsiveness)
         IMUService.shared.driftCorrectionEnabled = driftCorrection
+        if defaults.object(forKey: "gyroYawBiasRate") != nil {
+            IMUService.shared.gyroYawBiasRate = Float(defaults.double(forKey: "gyroYawBiasRate"))
+        }
 
         if defaults.object(forKey: "antialiasLevel") != nil {
             antialiasLevel = defaults.integer(forKey: "antialiasLevel")
@@ -378,6 +381,41 @@ final class AppCoordinator: ObservableObject {
     }
 
     func recenter() { IMUService.shared.recenter(includeRoll: recenterRoll) }
+
+    // MARK: Drift calibration
+
+    /// Calibration progress for the UI: nil = idle, otherwise a short status line.
+    @Published var driftCalibrationStatus: String?
+    @Published var driftCalibrating = false
+    private let driftCalibrationSeconds: TimeInterval = 4.0
+
+    /// Ask the user to rest the glasses still, measure the residual yaw drift, and subtract it.
+    func calibrateDrift() {
+        guard !driftCalibrating else { return }
+        guard case .connected = glassesState else {
+            driftCalibrationStatus = "Connect the glasses first."
+            return
+        }
+        driftCalibrating = true
+        driftCalibrationStatus = "Lay the glasses flat and still — measuring…"
+        IMUService.shared.calibrateDrift(duration: driftCalibrationSeconds) { [weak self] result in
+            // completion arrives on the main queue; hop to the main actor for the @Published writes
+            Task { @MainActor in
+                guard let self else { return }
+                self.driftCalibrating = false
+                switch result {
+                case .success(let degPerMin):
+                    UserDefaults.standard.set(Double(IMUService.shared.gyroYawBiasRate), forKey: "gyroYawBiasRate")
+                    self.driftCalibrationStatus = String(format: "Calibrated — corrected %.1f°/min of drift.", abs(degPerMin))
+                    DebugLog.shared.log(String(format: "drift calibration: %.2f°/min", degPerMin))
+                case .movedTooMuch:
+                    self.driftCalibrationStatus = "Glasses moved — keep them still and try again."
+                case .noData:
+                    self.driftCalibrationStatus = "Calibration failed — are the glasses connected?"
+                }
+            }
+        }
+    }
 
     // MARK: Glasses brightness (0–7)
 
