@@ -96,8 +96,8 @@ struct CursorInfoView: View {
         }
         .padding(24)
         .frame(width: 300, alignment: .leading)
-        .background(Color(white: 0.34).opacity(0.9), in: RoundedRectangle(cornerRadius: 18))
-        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(.white.opacity(0.22)))
+        .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 18))
+        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(.white.opacity(0.15)))
         .foregroundStyle(.white)
     }
 
