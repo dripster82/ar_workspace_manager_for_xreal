@@ -187,7 +187,7 @@ final class AppCoordinator: ObservableObject {
 
     init() {
         if UserDefaults.standard.bool(forKey: "debugLogging") { DebugLog.shared.setEnabled(true) }
-        DebugLog.shared.log("App launched")
+        DebugLog.shared.log("App launched — build \(BuildInfo.version)")
         renderer = GlassesRenderer(poseStore: IMUService.shared.poseStore)
         renderer?.useDedicatedRenderThread = useDedicatedRenderThread
         IMUService.shared.stateChanged = { [weak self] state in

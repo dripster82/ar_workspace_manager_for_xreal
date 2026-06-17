@@ -437,6 +437,11 @@ struct ControlPanelView: View {
                 }
                 .controlSize(.small)
             }
+            Divider()
+            Label("Build \(BuildInfo.version)", systemImage: "hammer")
+                .font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
+                .help("The running build's commit (stamped by Scripts/build.sh). 'dev' = built with "
+                    + "a bare swift build, so the version wasn't stamped.")
         }
     }
 
