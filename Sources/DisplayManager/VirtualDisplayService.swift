@@ -156,6 +156,19 @@ public final class VirtualDisplayService {
     private static let maxHiDPIBackingWidth = 6144
 
     @discardableResult
+    /// Deterministic 32-bit serial from a screen's UUID (FNV-1a), stable across launches so the
+    /// virtual display keeps one identity — and one reused ColorSync profile — instead of a new
+    /// one every session.
+    private static func stableSerial(for id: UUID) -> UInt32 {
+        var hash: UInt32 = 2166136261
+        let b = id.uuid
+        for byte in [b.0, b.1, b.2, b.3, b.4, b.5, b.6, b.7,
+                     b.8, b.9, b.10, b.11, b.12, b.13, b.14, b.15] {
+            hash = (hash ^ UInt32(byte)) &* 16777619
+        }
+        return hash
+    }
+
     public func create(_ config: VirtualScreenConfig) -> CGDirectDisplayID? {
         guard Self.isAvailable else { return nil }
 
@@ -171,7 +184,13 @@ public final class VirtualDisplayService {
         // Approximate physical size at ~100 ppi so macOS picks sensible default scaling.
         descriptor.sizeInMillimeters = CGSize(width: Double(config.width) * 0.254,
                                               height: Double(config.height) * 0.254)
-        descriptor.serialNum = UInt32(truncatingIfNeeded: config.id.hashValue)
+        // Stable per-screen identity. config.id.hashValue is randomised every process launch, so
+        // each session the virtual display looked like a brand-new monitor — macOS then generated
+        // a fresh ColorSync profile each time and piled up hundreds in
+        // /Library/ColorSync/Profiles/Displays/. Deriving the serial deterministically from the
+        // screen's UUID (FNV-1a over its 16 bytes) keeps the identity stable across launches, so
+        // macOS reuses one profile per screen instead of accumulating new ones.
+        descriptor.serialNum = Self.stableSerial(for: config.id)
         descriptor.productID = 0x5652 // "VR"
         descriptor.vendorID = 0x4444
         descriptor.queue = DispatchQueue.main
