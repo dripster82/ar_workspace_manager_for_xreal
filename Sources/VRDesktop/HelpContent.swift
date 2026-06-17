@@ -21,6 +21,7 @@ enum HelpContent {
             Shortcut(keys: "⌃⌥D", action: "Depth — Stereo (SBS) on / off"),
             Shortcut(keys: "⌃⌥ + brightness", action: "Dim / brighten the glasses"),
             Shortcut(keys: "⌃⌥H", action: "Show / hide this help"),
+            Shortcut(keys: "⌃⌥C", action: "Show cursor screen & coordinates"),
             Shortcut(keys: "⌃⌥Q", action: "Quit VR Desktop"),
         ]),
     ]

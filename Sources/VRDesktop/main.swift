@@ -15,11 +15,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var statusItem: NSStatusItem!
     let brightnessHotKey = BrightnessHotKey()
     var helpOverlay: HelpOverlayController!
+    var cursorInfoOverlay: CursorInfoOverlayController!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let icon = NSImage(named: "AppIcon") { NSApp.applicationIconImage = icon }
         coordinator = AppCoordinator()
         helpOverlay = HelpOverlayController(coordinator: coordinator)
+        cursorInfoOverlay = CursorInfoOverlayController(coordinator: coordinator)
 
         window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 520, height: 680),
@@ -54,12 +56,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var toggleARHotKeyRef: EventHotKeyRef?
     private var sbsHotKeyRef: EventHotKeyRef?
     private var quitHotKeyRef: EventHotKeyRef?
+    private var cursorInfoHotKeyRef: EventHotKeyRef?
     private static let recenterHotKeyID: UInt32 = 1
     private static let stopARHotKeyID: UInt32 = 2
     private static let helpHotKeyID: UInt32 = 3
     private static let toggleARHotKeyID: UInt32 = 4
     private static let sbsHotKeyID: UInt32 = 5
     private static let quitHotKeyID: UInt32 = 6
+    private static let cursorInfoHotKeyID: UInt32 = 7
 
     private func registerGlobalRecenterHotKey() {
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
@@ -80,6 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 case AppDelegate.toggleARHotKeyID: delegate.toggleAR()
                 case AppDelegate.sbsHotKeyID:
                     delegate.coordinator.setStereo(!delegate.coordinator.stereoEnabled)
+                case AppDelegate.cursorInfoHotKeyID: delegate.cursorInfoOverlay.toggle()
                 case AppDelegate.quitHotKeyID: NSApp.terminate(nil)
                 default: break
                 }
@@ -102,6 +107,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         register(kVK_ANSI_S, AppDelegate.toggleARHotKeyID, &toggleARHotKeyRef)
         register(kVK_ANSI_D, AppDelegate.sbsHotKeyID, &sbsHotKeyRef)
         register(kVK_ANSI_Q, AppDelegate.quitHotKeyID, &quitHotKeyRef)
+        register(kVK_ANSI_C, AppDelegate.cursorInfoHotKeyID, &cursorInfoHotKeyRef)
     }
 
     // MARK: Menu bar
@@ -144,6 +150,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         sbs.target = self
         sbs.isEnabled = coordinator.arActive
         menu.addItem(sbs)
+
+        let cursorInfo = NSMenuItem(title: "Where's My Cursor? (⌃⌥C)",
+                                    action: #selector(toggleCursorInfo), keyEquivalent: "")
+        cursorInfo.target = self
+        menu.addItem(cursorInfo)
 
         let help = NSMenuItem(title: "Keyboard Shortcuts (⌃⌥H)", action: #selector(toggleHelp),
                               keyEquivalent: "")
@@ -193,6 +204,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @MainActor @objc private func menuRecenter() { coordinator.recenter() }
 
     @MainActor @objc private func toggleHelp() { helpOverlay.toggle() }
+
+    @MainActor @objc private func toggleCursorInfo() { cursorInfoOverlay.toggle() }
 
     @MainActor @objc private func toggleSBS() { coordinator.setStereo(!coordinator.stereoEnabled) }
 
