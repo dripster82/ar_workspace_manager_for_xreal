@@ -44,7 +44,7 @@ final class WidgetManager {
     private var widgets: [HUDWidget] = []
     private var timer: Timer?
     /// Apparent width (metres) of a widget card at scale 1; height follows the rendered aspect.
-    private let baseWidthMeters: Float = 0.45
+    private let baseWidthMeters: Float = 0.225
 
     init(renderer: GlassesRenderer?) { self.renderer = renderer }
 

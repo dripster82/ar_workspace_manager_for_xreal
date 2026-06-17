@@ -25,14 +25,26 @@ public enum WidgetTint: String, Codable, CaseIterable, Sendable, Identifiable {
     public var displayName: String { rawValue.capitalized }
 }
 
+/// Card background behind a widget.
+public enum WidgetBackground: String, Codable, CaseIterable, Sendable, Identifiable {
+    case pill    // translucent dark capsule
+    case solid   // opaque dark capsule
+    case none    // no background (text/icon only, with a shadow for legibility)
+    public var id: String { rawValue }
+    public var displayName: String { self == .none ? "None" : rawValue.capitalized }
+}
+
 /// Per-widget styling.
 public struct WidgetStyle: Codable, Hashable, Sendable {
     public var tint: WidgetTint
+    public var background: WidgetBackground
     public var clock24h: Bool
     public var showSeconds: Bool
 
-    public init(tint: WidgetTint = .white, clock24h: Bool = true, showSeconds: Bool = false) {
+    public init(tint: WidgetTint = .white, background: WidgetBackground = .pill,
+                clock24h: Bool = true, showSeconds: Bool = false) {
         self.tint = tint
+        self.background = background
         self.clock24h = clock24h
         self.showSeconds = showSeconds
     }
@@ -40,6 +52,7 @@ public struct WidgetStyle: Codable, Hashable, Sendable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         tint = try c.decodeIfPresent(WidgetTint.self, forKey: .tint) ?? .white
+        background = try c.decodeIfPresent(WidgetBackground.self, forKey: .background) ?? .pill
         clock24h = try c.decodeIfPresent(Bool.self, forKey: .clock24h) ?? true
         showSeconds = try c.decodeIfPresent(Bool.self, forKey: .showSeconds) ?? false
     }

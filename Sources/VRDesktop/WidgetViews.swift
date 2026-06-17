@@ -14,17 +14,26 @@ extension WidgetTint {
     }
 }
 
-/// Shared translucent dark-pill chrome for HUD widgets.
+/// Shared chrome for HUD widgets: tinted content on a pill / solid / no background.
 private struct WidgetPill<Content: View>: View {
-    let tint: WidgetTint
+    let style: WidgetStyle
     @ViewBuilder let content: () -> Content
+
     var body: some View {
-        content()
-            .foregroundStyle(tint.color)
-            .padding(.horizontal, 26)
-            .padding(.vertical, 14)
-            .background(Color.black.opacity(0.55), in: Capsule())
-            .overlay(Capsule().strokeBorder(.white.opacity(0.15)))
+        let inner = content()
+            .foregroundStyle(style.tint.color)
+            .padding(.horizontal, style.background == .none ? 4 : 26)
+            .padding(.vertical, style.background == .none ? 2 : 14)
+        switch style.background {
+        case .pill:
+            inner.background(Color.black.opacity(0.55), in: Capsule())
+                .overlay(Capsule().strokeBorder(.white.opacity(0.15)))
+        case .solid:
+            inner.background(Color.black.opacity(0.92), in: Capsule())
+                .overlay(Capsule().strokeBorder(.white.opacity(0.18)))
+        case .none:
+            inner.shadow(color: .black.opacity(0.85), radius: 3, x: 0, y: 1)
+        }
     }
 }
 
@@ -41,7 +50,7 @@ struct ClockWidgetView: View {
     }
 
     var body: some View {
-        WidgetPill(tint: style.tint) {
+        WidgetPill(style: style) {
             Text(text)
                 .font(.system(size: 46, weight: .semibold, design: .rounded).monospacedDigit())
         }
@@ -70,7 +79,7 @@ struct PowerWidgetView: View {
     }
 
     var body: some View {
-        WidgetPill(tint: style.tint) {
+        WidgetPill(style: style) {
             HStack(spacing: 12) {
                 Image(systemName: symbol).font(.system(size: 32))
                 Text(label)

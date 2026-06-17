@@ -648,7 +648,7 @@ struct WidgetRow: View {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     Text("Scale").font(.caption).frame(width: 70, alignment: .leading)
-                    Slider(value: $cfg.scale, in: 0.4...3, step: 0.05)
+                    Slider(value: $cfg.scale, in: 0.1...3, step: 0.05)
                     Text(String(format: "%.0f%%", cfg.scale * 100)).font(.caption.monospacedDigit())
                         .frame(width: 44)
                 }
@@ -656,6 +656,13 @@ struct WidgetRow: View {
                     Text("Colour").font(.caption).frame(width: 70, alignment: .leading)
                     Picker("", selection: $cfg.style.tint) {
                         ForEach(WidgetTint.allCases) { Text($0.displayName).tag($0) }
+                    }.labelsHidden().fixedSize()
+                    Spacer()
+                }
+                HStack {
+                    Text("Background").font(.caption).frame(width: 70, alignment: .leading)
+                    Picker("", selection: $cfg.style.background) {
+                        ForEach(WidgetBackground.allCases) { Text($0.displayName).tag($0) }
                     }.labelsHidden().fixedSize()
                     Spacer()
                 }
@@ -1053,7 +1060,7 @@ private struct WidgetBox: View {
     }
 
     // Must match WidgetManager.baseWidthMeters; aspect is approximate per kind for the map box.
-    private static let baseWidthMeters = 0.45
+    private static let baseWidthMeters = 0.225
     private var displayAspect: Double { cfg.kind == .clock ? 3.0 : 2.6 }
 
     private func point() -> CGPoint {
