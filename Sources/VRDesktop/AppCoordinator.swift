@@ -347,6 +347,7 @@ final class AppCoordinator: ObservableObject {
                 Task { @MainActor in
                     if !self.editingBrightness, Int(self.glassesBrightness) != value {
                         self.glassesBrightness = Double(value)
+                        self.onBrightnessChanged?()
                     }
                 }
             }
@@ -380,9 +381,13 @@ final class AppCoordinator: ObservableObject {
 
     // MARK: Glasses brightness (0–7)
 
-    @Published var glassesBrightness: Double = 4 // device value 0–7
+    @Published var glassesBrightness: Double = 4 // device value 0–8
     @Published var brightnessAvailable = false
     var editingBrightness = false // suppress polling while the user drags the slider
+    static let brightnessMaxLevel = 8 // device range is 0…8 (shown to the user as 1…9)
+    /// Called on the main actor whenever the brightness changes via the hotkey or the glasses'
+    /// own buttons, so the UI can flash the brightness HUD. Set by the app delegate.
+    var onBrightnessChanged: (@MainActor () -> Void)?
 
     func refreshBrightness() {
         MCUService.shared.brightness { value in
@@ -408,8 +413,9 @@ final class AppCoordinator: ObservableObject {
     /// Step glasses brightness up/down by one (0–7), used by the ⌃⌥+brightness hotkey.
     func adjustBrightness(up: Bool) {
         guard brightnessAvailable else { return }
-        glassesBrightness = min(8, max(0, glassesBrightness + (up ? 1 : -1)))
+        glassesBrightness = min(Double(Self.brightnessMaxLevel), max(0, glassesBrightness + (up ? 1 : -1)))
         applyBrightness()
+        onBrightnessChanged?()
     }
 
     // MARK: Stereo / SBS (experimental)
@@ -1056,6 +1062,7 @@ final class AppCoordinator: ObservableObject {
 
         renderer.setScreens(assembleScene(pairs))
         arActive = true
+        refreshBrightness() // sync the slider to the glasses' actual brightness as AR starts
         lastWindowSnapshot = CACurrentMediaTime() // defer the first periodic snapshot ~10s
 
         // Keep macOS from throttling our scheduling while head-tracking (App Nap / timer

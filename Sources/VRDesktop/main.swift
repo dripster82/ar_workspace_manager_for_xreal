@@ -16,12 +16,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let brightnessHotKey = BrightnessHotKey()
     var helpOverlay: HelpOverlayController!
     var cursorInfoOverlay: CursorInfoOverlayController!
+    var brightnessHUD: BrightnessHUDController!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let icon = NSImage(named: "AppIcon") { NSApp.applicationIconImage = icon }
         coordinator = AppCoordinator()
         helpOverlay = HelpOverlayController(coordinator: coordinator)
         cursorInfoOverlay = CursorInfoOverlayController(coordinator: coordinator)
+        brightnessHUD = BrightnessHUDController(coordinator: coordinator)
+        coordinator.onBrightnessChanged = { [weak self] in self?.brightnessHUD.flash() }
 
         window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 520, height: 680),

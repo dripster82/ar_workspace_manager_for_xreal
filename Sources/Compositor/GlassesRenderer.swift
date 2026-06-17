@@ -59,6 +59,8 @@ public final class GlassesRenderer: NSObject {
     private var overlayPipeline: MTLRenderPipelineState!
     private var helpTexture: MTLTexture?
     public var showHelp = false
+    private var brightnessTexture: MTLTexture?
+    public var showBrightness = false
 
     private struct OverlayVertex { var position: SIMD2<Float>; var uv: SIMD2<Float> }
 
@@ -168,15 +170,37 @@ public final class GlassesRenderer: NSObject {
     /// MTKTextureLoader can reject). Returns false if the texture couldn't be made.
     @discardableResult
     public func setHelpImage(_ cgImage: CGImage) -> Bool {
+        guard let tex = makeOverlayTexture(cgImage) else { return false }
+        helpTexture = tex
+        showHelp = true
+        return true
+    }
+
+    public func clearHelp() { showHelp = false }
+
+    /// Set the bottom-centre HUD overlay (e.g. the brightness bar). Same upload path as the help
+    /// overlay but a separate texture slot, so it can show alongside the centred help/cursor card.
+    @discardableResult
+    public func setBrightnessImage(_ cgImage: CGImage) -> Bool {
+        guard let tex = makeOverlayTexture(cgImage) else { return false }
+        brightnessTexture = tex
+        showBrightness = true
+        return true
+    }
+
+    public func clearBrightness() { showBrightness = false }
+
+    /// Build a premultiplied BGRA texture from a CGImage for the alpha-blended overlays.
+    private func makeOverlayTexture(_ cgImage: CGImage) -> MTLTexture? {
         let w = cgImage.width, h = cgImage.height
-        guard w > 0, h > 0 else { return false }
+        guard w > 0, h > 0 else { return nil }
         let bytesPerRow = w * 4
         let bitmapInfo = CGImageAlphaInfo.premultipliedFirst.rawValue
             | CGBitmapInfo.byteOrder32Little.rawValue
         guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8,
                                   bytesPerRow: bytesPerRow, space: CGColorSpaceCreateDeviceRGB(),
                                   bitmapInfo: bitmapInfo),
-              let data = ctx.data else { return false }
+              let data = ctx.data else { return nil }
         ctx.clear(CGRect(x: 0, y: 0, width: w, height: h))
         ctx.draw(cgImage, in: CGRect(x: 0, y: 0, width: w, height: h))
 
@@ -184,15 +208,11 @@ public final class GlassesRenderer: NSObject {
             pixelFormat: .bgra8Unorm, width: w, height: h, mipmapped: false)
         desc.usage = .shaderRead
         desc.storageMode = .shared
-        guard let tex = device.makeTexture(descriptor: desc) else { return false }
+        guard let tex = device.makeTexture(descriptor: desc) else { return nil }
         tex.replace(region: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0,
                     withBytes: data, bytesPerRow: bytesPerRow)
-        helpTexture = tex
-        showHelp = true
-        return true
+        return tex
     }
-
-    public func clearHelp() { showHelp = false }
 
     /// Copy a (possibly GPU-private) texture's level 0 into a readable buffer and write it as a
     /// JPEG. Used by the debug stage-capture to inspect the pipeline (raw → merged → curved).
@@ -753,6 +773,7 @@ public final class GlassesRenderer: NSObject {
         }
 
         drawHelpOverlay(commandBuffer: commandBuffer, drawable: drawable)
+        drawBrightnessOverlay(commandBuffer: commandBuffer, drawable: drawable)
 
         commandBuffer.present(drawable)
         commandBuffer.commit()
@@ -787,10 +808,28 @@ public final class GlassesRenderer: NSObject {
         }
     }
 
-    /// Draw the help HUD as a centered, alpha-blended quad on top of the final frame
-    /// (in each eye half when stereo), so it appears above everything.
+    private enum OverlayAnchor { case center; case bottom(marginNDC: Float) }
+
+    /// Draw the centred help/cursor HUD as an alpha-blended quad on top of the final frame.
     private func drawHelpOverlay(commandBuffer: MTLCommandBuffer, drawable: CAMetalDrawable) {
-        guard showHelp, let tex = helpTexture, let pipe = overlayPipeline else { return }
+        guard showHelp, let tex = helpTexture else { return }
+        drawOverlay(tex, commandBuffer: commandBuffer, drawable: drawable,
+                    heightFraction: 0.6, maxWidthFraction: 0.8, anchor: .center)
+    }
+
+    /// Draw the brightness HUD as a small bar anchored to the bottom-centre of each eye.
+    private func drawBrightnessOverlay(commandBuffer: MTLCommandBuffer, drawable: CAMetalDrawable) {
+        guard showBrightness, let tex = brightnessTexture else { return }
+        drawOverlay(tex, commandBuffer: commandBuffer, drawable: drawable,
+                    heightFraction: 0.12, maxWidthFraction: 0.55, anchor: .bottom(marginNDC: 0.16))
+    }
+
+    /// Shared alpha-blended overlay quad, drawn in each eye half when stereo. `heightFraction` is
+    /// the panel height as a fraction of the eye height; the anchor places it centred or pinned to
+    /// the bottom (marginNDC above the bottom edge).
+    private func drawOverlay(_ tex: MTLTexture, commandBuffer: MTLCommandBuffer, drawable: CAMetalDrawable,
+                             heightFraction: Float, maxWidthFraction: Float, anchor: OverlayAnchor) {
+        guard let pipe = overlayPipeline else { return }
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = drawable.texture
         pass.colorAttachments[0].loadAction = .load
@@ -805,20 +844,26 @@ public final class GlassesRenderer: NSObject {
         let texAspect = Float(tex.width) / Float(max(1, tex.height))
         for region in regions {
             let regionW = Float(region.w), regionH = Float(H)
-            var panelH = regionH * 0.6   // ~15% smaller than before
+            var panelH = regionH * heightFraction
             var panelW = panelH * texAspect
-            if panelW > regionW * 0.8 { panelW = regionW * 0.8; panelH = panelW / texAspect }
+            if panelW > regionW * maxWidthFraction { panelW = regionW * maxWidthFraction; panelH = panelW / texAspect }
             let nw = panelW / regionW * 2, nh = panelH / regionH * 2
+            let cy: Float
+            switch anchor {
+            case .center: cy = 0
+            case .bottom(let m): cy = -1 + m + nh / 2  // NDC: bottom edge is -1
+            }
             enc.setViewport(MTLViewport(originX: Double(region.x), originY: 0,
                                         width: Double(region.w), height: Double(H),
                                         znear: 0, zfar: 1))
+            let top = cy + nh / 2, bot = cy - nh / 2
             var verts = [
-                OverlayVertex(position: SIMD2(-nw/2,  nh/2), uv: SIMD2(0, 0)),
-                OverlayVertex(position: SIMD2( nw/2,  nh/2), uv: SIMD2(1, 0)),
-                OverlayVertex(position: SIMD2(-nw/2, -nh/2), uv: SIMD2(0, 1)),
-                OverlayVertex(position: SIMD2( nw/2,  nh/2), uv: SIMD2(1, 0)),
-                OverlayVertex(position: SIMD2( nw/2, -nh/2), uv: SIMD2(1, 1)),
-                OverlayVertex(position: SIMD2(-nw/2, -nh/2), uv: SIMD2(0, 1)),
+                OverlayVertex(position: SIMD2(-nw/2, top), uv: SIMD2(0, 0)),
+                OverlayVertex(position: SIMD2( nw/2, top), uv: SIMD2(1, 0)),
+                OverlayVertex(position: SIMD2(-nw/2, bot), uv: SIMD2(0, 1)),
+                OverlayVertex(position: SIMD2( nw/2, top), uv: SIMD2(1, 0)),
+                OverlayVertex(position: SIMD2( nw/2, bot), uv: SIMD2(1, 1)),
+                OverlayVertex(position: SIMD2(-nw/2, bot), uv: SIMD2(0, 1)),
             ]
             enc.setVertexBytes(&verts, length: verts.count * MemoryLayout<OverlayVertex>.stride, index: 0)
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
