@@ -67,7 +67,11 @@ final class CursorInfoOverlayController {
     /// surface is showing.
     private func refresh() {
         guard visible else { return }
-        let info = CursorInfo.current(arOutputDisplayID: coordinator.arOutputDisplayID)
+        var info = CursorInfo.current(arOutputDisplayID: coordinator.arOutputDisplayID)
+        // Prefer the app-level (renamed) name for AR screens; the OS display name lags a rename.
+        if let renamed = coordinator.configName(forDisplayID: info.displayID) {
+            info.screenName = renamed
+        }
         let gaze = coordinator.currentGaze()
         // Cursor's fractional position on its display (top-left origin), for the eye→cursor arrow.
         let u = info.screenSize.width > 0 ? Double(info.local.x / info.screenSize.width) : 0.5

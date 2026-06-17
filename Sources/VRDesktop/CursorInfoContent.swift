@@ -35,7 +35,7 @@ struct CursorDirection {
 /// coordinates (both global desktop-space and local to that screen). Captured at the
 /// moment ⌃⌥C is pressed — handy for "where did my cursor go?" across many virtual screens.
 struct CursorInfo {
-    let screenName: String
+    var screenName: String   // var so the controller can swap in the renamed AR-screen name
     let displayID: CGDirectDisplayID
     let isARorGlasses: Bool
     let global: CGPoint          // desktop space, top-left origin (matches what users expect)

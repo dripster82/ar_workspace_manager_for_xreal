@@ -870,6 +870,20 @@ final class AppCoordinator: ObservableObject {
                            offScreen: offScreen)
     }
 
+    /// The app-level (possibly renamed) screen name for a display, if it maps to an AR screen
+    /// config. The OS display name only picks up a rename on the next AR start, so the cursor-info
+    /// popup uses this to show the current name for the screen the cursor is on.
+    func configName(forDisplayID displayID: CGDirectDisplayID) -> String? {
+        guard displayID != 0, let ws = workspaceStore.activeWorkspace else { return nil }
+        if let entry = virtualDisplays.active.first(where: { $0.value.displayID == displayID }) {
+            return ws.virtualScreens.first { $0.id == entry.key }?.name
+        }
+        for (uuid, cfg) in ws.physicalInAR {
+            if Self.resolvePhysicalDisplay(uuidString: uuid) == displayID { return cfg.name }
+        }
+        return nil
+    }
+
     /// The macOS display ID a screen config currently maps to (virtual or physical), or 0.
     private func displayID(forConfig s: VirtualScreenConfig) -> CGDirectDisplayID {
         if let d = virtualDisplays.displayID(for: s.id) { return d }
