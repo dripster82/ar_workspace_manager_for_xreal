@@ -12,16 +12,20 @@ if [ -n "$(git status --porcelain -uno -- . ':!Sources/VRDesktop/BuildInfo.swift
 else
     DIRTY=""
 fi
-STAMP="$HASH$DIRTY @ $(date '+%Y-%m-%d %H:%M:%S')"
+COMMIT="$HASH$DIRTY"
+DATE="$(date '+%Y-%m-%d %H:%M')"
+STAMP="$COMMIT · $DATE"
 
 cat > Sources/VRDesktop/BuildInfo.swift <<EOF
-/// Build version, stamped by Scripts/build.sh. Do not edit by hand.
+/// Build identity, stamped by Scripts/build.sh. Do not edit by hand.
 enum BuildInfo {
+    static let commit = "$COMMIT"
+    static let date = "$DATE"
     static let version = "$STAMP"
 }
 EOF
 
-echo "==> stamped BuildInfo.version = $STAMP"
+echo "==> stamped BuildInfo = $STAMP"
 CMD="${1:-build}"
 shift 2>/dev/null || true
 exec swift "$CMD" "$@"

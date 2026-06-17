@@ -27,14 +27,22 @@ struct ControlPanelView: View {
         .frame(minWidth: 460, idealWidth: 540, minHeight: 420, idealHeight: 720)
         .background(Color(nsColor: .windowBackgroundColor))
         .safeAreaInset(edge: .bottom) {
-            if !coordinator.statusMessage.isEmpty {
-                Text(coordinator.statusMessage)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16).padding(.vertical, 8)
-                    .background(.thinMaterial)
+            HStack(spacing: 8) {
+                if !coordinator.statusMessage.isEmpty {
+                    Text(coordinator.statusMessage)
+                        .font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.tail)
+                }
+                Spacer(minLength: 8)
+                Label("\(BuildInfo.commit) · \(BuildInfo.date)", systemImage: "hammer")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .help("Running build (commit · date), stamped by Scripts/build.sh. "
+                          + "'dev' means it was built with a bare swift build.")
             }
+            .padding(.horizontal, 16).padding(.vertical, 6)
+            .frame(maxWidth: .infinity)
+            .background(.thinMaterial)
         }
     }
 
@@ -437,11 +445,6 @@ struct ControlPanelView: View {
                 }
                 .controlSize(.small)
             }
-            Divider()
-            Label("Build \(BuildInfo.version)", systemImage: "hammer")
-                .font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
-                .help("The running build's commit (stamped by Scripts/build.sh). 'dev' = built with "
-                    + "a bare swift build, so the version wasn't stamped.")
         }
     }
 
