@@ -150,11 +150,16 @@ final class SlackService: ObservableObject {
         guard let token else { return }
         do {
             let convos = try await listConversations(token: token)
+            let imCount = convos.filter { $0.isIM }.count
+            let starredCount = convos.filter { $0.isStarred }.count
+            DebugLog.shared.log("slack refresh: \(convos.count) convos, \(imCount) DMs, \(starredCount) starred")
             // People (any IM) and starred channels.
             let relevant = convos.filter { $0.isIM || $0.isStarred }
             var result: [SlackUnread] = []
             for c in relevant {
-                guard let info = try await conversationInfo(id: c.id, token: token), info.unread > 0 else { continue }
+                guard let info = try await conversationInfo(id: c.id, token: token) else { continue }
+                DebugLog.shared.log("slack convo \(c.id) im=\(c.isIM) starred=\(c.isStarred) unread=\(info.unread)")
+                guard info.unread > 0 else { continue }
                 let name: String
                 if c.isIM {
                     name = await resolveUserName(c.userID, token: token) ?? "Direct message"
@@ -168,7 +173,7 @@ final class SlackService: ObservableObject {
             state = .error("Slack token expired — reconnect.")
             stopPolling()
         } catch {
-            // Transient (network / rate-limit): keep the last snapshot.
+            DebugLog.shared.log("slack refresh error: \(error.localizedDescription)")
         }
     }
 
@@ -196,6 +201,9 @@ final class SlackService: ObservableObject {
     private func conversationInfo(id: String, token: String) async throws -> Info? {
         let json = try await call("conversations.info", token: token, query: ["channel": id])
         guard let ch = json["channel"] as? [String: Any] else { return nil }
+        if ch["unread_count_display"] == nil && ch["unread_count"] == nil {
+            DebugLog.shared.log("slack info \(id): no unread fields returned (likely missing history scope)")
+        }
         let unread = (ch["unread_count_display"] as? Int) ?? (ch["unread_count"] as? Int) ?? 0
         return Info(unread: unread, name: ch["name"] as? String)
     }
