@@ -35,7 +35,7 @@ final class SlackService: ObservableObject {
         }
     }
     static let pollOptions: [(label: String, seconds: Int)] = [
-        ("5s", 5), ("15s", 15), ("30s", 30), ("1 min", 60), ("2 min", 120), ("5 min", 300),
+        ("10s", 10), ("15s", 15), ("30s", 30), ("1 min", 60), ("2 min", 120), ("5 min", 300),
     ]
 
     static let redirectPort: UInt16 = 53682
