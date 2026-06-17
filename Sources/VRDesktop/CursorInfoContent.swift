@@ -81,86 +81,55 @@ struct CursorInfo {
 }
 
 /// The cursor-info card, used both for the in-AR overlay rasterization and the macOS panel.
-/// Shows the mouse cursor's location plus, when AR is running, where the gaze lands in-glasses.
+/// A compact readout: which screen you're looking at, which screen the cursor is on, and an
+/// arrow pointing the way to turn to find the cursor. Auto-refreshes while visible.
 struct CursorInfoView: View {
     let info: CursorInfo
     let gaze: GazeReadout?
     let direction: CursorDirection?
 
-    private func fmt(_ p: CGPoint) -> String {
-        String(format: "%.0f, %.0f", p.x, p.y)
-    }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 12) {
-                Label("Cursor", systemImage: "cursorarrow.rays")
-                    .font(.headline)
-                Spacer()
-                if let direction { directionArrow(direction) }
-            }
-            VStack(alignment: .leading, spacing: 6) {
-                row("Screen", info.screenName + (info.isARorGlasses ? "  (AR output)" : ""))
-                row("Display ID", "\(info.displayID)")
-                row("Position", fmt(info.global))
-                row("On screen", "\(fmt(info.local))  of  "
-                    + String(format: "%.0f × %.0f", info.screenSize.width, info.screenSize.height))
-                if let direction { row("Direction", direction.summary) }
-            }
-
-            Divider().overlay(.white.opacity(0.15))
-
-            Label("Looking at", systemImage: "eye")
-                .font(.headline)
-            if let gaze {
-                VStack(alignment: .leading, spacing: 6) {
-                    row("Screen", gaze.screenName)
-                    row("Gaze", fmt(gaze.pixel) + (gaze.offScreen ? "  (edge)" : ""))
-                    row("On screen", String(format: "%.0f × %.0f",
-                                            gaze.screenSize.width, gaze.screenSize.height))
-                }
-            } else {
-                Text("Not looking at a screen (or AR is off).")
-                    .font(.callout).foregroundStyle(.secondary)
-            }
-
-            Text("Press ⌃⌥C to refresh / close")
-                .font(.caption2).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 16) {
+            line("You are looking at:", gaze?.screenName ?? "—")
+            line("The cursor is on:", info.screenName)
+            HStack { Spacer(); directionArrow(direction); Spacer() }
         }
-        .padding(22)
-        .frame(width: 380, alignment: .leading)
+        .padding(24)
+        .frame(width: 300, alignment: .leading)
         .background(Color.black.opacity(0.82), in: RoundedRectangle(cornerRadius: 18))
         .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(.white.opacity(0.15)))
         .foregroundStyle(.white)
     }
 
-    private func row(_ label: String, _ value: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Text(label)
-                .font(.caption).foregroundStyle(.secondary)
-                .frame(width: 90, alignment: .leading)
-            Text(value)
-                .font(.system(.callout, design: .monospaced))
-                .textSelection(.enabled)
+    private func line(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(label).font(.caption).foregroundStyle(.secondary)
+            Text(value).font(.title3.weight(.semibold)).lineLimit(1)
         }
     }
 
-    /// A compass-style arrow pointing the way to turn the head to reach the cursor. When the
-    /// cursor is already dead ahead it shows a target dot instead.
+    /// A compass-style arrow pointing the way to turn the head to reach the cursor. Shows a target
+    /// reticle when the cursor is dead ahead, or a dimmed dot when there's no direction (AR off /
+    /// cursor not on an AR screen).
     @ViewBuilder
-    private func directionArrow(_ d: CursorDirection) -> some View {
+    private func directionArrow(_ d: CursorDirection?) -> some View {
         ZStack {
             Circle().fill(.white.opacity(0.10))
             Circle().strokeBorder(.white.opacity(0.18))
-            if d.centered {
-                Image(systemName: "scope").font(.system(size: 16, weight: .semibold))
+            if let d {
+                if d.centered {
+                    Image(systemName: "scope").font(.system(size: 22, weight: .semibold))
+                } else {
+                    Image(systemName: "arrow.up").font(.system(size: 26, weight: .bold))
+                        .rotationEffect(.radians(d.angleRadians))
+                }
             } else {
-                Image(systemName: "arrow.up").font(.system(size: 18, weight: .bold))
-                    .rotationEffect(.radians(d.angleRadians))
+                Circle().fill(.white.opacity(0.25)).frame(width: 6, height: 6)
             }
         }
-        .frame(width: 34, height: 34)
+        .frame(width: 52, height: 52)
         .foregroundStyle(.tint)
-        .help("Direction to turn to bring the cursor to centre: \(d.summary)")
+        .help(d.map { "Turn to bring the cursor to centre: \($0.summary)" }
+              ?? "Cursor direction unavailable (AR off or cursor not on an AR screen)")
     }
 }

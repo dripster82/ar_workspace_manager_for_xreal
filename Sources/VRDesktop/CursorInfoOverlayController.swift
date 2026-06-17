@@ -2,12 +2,14 @@ import AppKit
 import SwiftUI
 
 /// Toggles the cursor-info popup: an in-AR screen-space overlay while AR is running, or a
-/// floating macOS panel when it isn't. Each show captures the cursor's current screen and
-/// coordinates, so pressing ⌃⌥C again refreshes the readout.
+/// floating macOS panel when it isn't. While visible it auto-refreshes ~every 0.5s so the
+/// screen names and direction arrow track head movement live; press ⌃⌥C again to close.
 @MainActor
 final class CursorInfoOverlayController {
     private let coordinator: AppCoordinator
     private var panel: NSPanel?
+    private var hosting: NSHostingView<CursorInfoView>?
+    private var refreshTimer: Timer?
     private(set) var visible = false
 
     init(coordinator: AppCoordinator) {
@@ -19,42 +21,68 @@ final class CursorInfoOverlayController {
     }
 
     func show() {
+        visible = true
+        refresh()
+        // Light 2 Hz refresh — a direct texture upload / rootView swap, not an @Published write,
+        // so it doesn't re-render the Control Panel or disturb the render display link.
+        let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refresh() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        refreshTimer = timer
+    }
+
+    func hide() {
+        visible = false
+        refreshTimer?.invalidate()
+        refreshTimer = nil
+        coordinator.renderer?.clearHelp()
+        panel?.orderOut(nil)
+    }
+
+    /// Re-sample the cursor + gaze + direction and update whichever surface is showing.
+    private func refresh() {
+        guard visible else { return }
         let info = CursorInfo.current(arOutputDisplayID: coordinator.arOutputDisplayID)
         let gaze = coordinator.currentGaze()
         // Cursor's fractional position on its display (top-left origin), for the eye→cursor arrow.
         let u = info.screenSize.width > 0 ? Double(info.local.x / info.screenSize.width) : 0.5
         let v = info.screenSize.height > 0 ? Double(info.local.y / info.screenSize.height) : 0.5
         let direction = coordinator.cursorDirection(onDisplayID: info.displayID, u: u, v: v)
-        visible = true
+        let view = CursorInfoView(info: info, gaze: gaze, direction: direction)
+
         if coordinator.arActive, let renderer = coordinator.renderer,
-           let image = info.renderCGImage(gaze: gaze, direction: direction), renderer.setHelpImage(image) {
-            // Shown as the in-AR overlay (shares the help overlay slot).
+           let image = info.renderCGImage(gaze: gaze, direction: direction),
+           renderer.setHelpImage(image) {
+            // In-AR overlay (shares the help overlay slot). Hide the panel if AR just came on.
+            panel?.orderOut(nil)
         } else {
-            showPanel(info, gaze: gaze, direction: direction) // AR off / overlay failed — macOS panel
+            coordinator.renderer?.clearHelp()
+            showPanel(view)
         }
     }
 
-    func hide() {
-        visible = false
-        coordinator.renderer?.clearHelp()
-        panel?.orderOut(nil)
-    }
-
-    private func showPanel(_ info: CursorInfo, gaze: GazeReadout?, direction: CursorDirection?) {
-        let hosting = NSHostingView(rootView: CursorInfoView(info: info, gaze: gaze, direction: direction))
+    private func showPanel(_ view: CursorInfoView) {
+        let hosting = self.hosting ?? NSHostingView(rootView: view)
+        hosting.rootView = view
+        self.hosting = hosting
         hosting.frame = NSRect(origin: .zero, size: hosting.fittingSize)
+
         let panel = self.panel ?? makePanel()
         self.panel = panel
-        panel.contentView = hosting
+        if panel.contentView !== hosting { panel.contentView = hosting }
         panel.setContentSize(hosting.fittingSize)
-        // Centre on the screen under the cursor, never the AR output.
-        panel.setFrameOrigin(WindowPlacement.originUnderCursor(
-            size: panel.frame.size, excluding: coordinator.arOutputDisplayID))
-        panel.makeKeyAndOrderFront(nil)
+        if !panel.isVisible {
+            // Centre on the screen under the cursor, never the AR output. Only on first show so the
+            // panel doesn't jump around as it auto-refreshes.
+            panel.setFrameOrigin(WindowPlacement.originUnderCursor(
+                size: panel.frame.size, excluding: coordinator.arOutputDisplayID))
+            panel.orderFrontRegardless()
+        }
     }
 
     private func makePanel() -> NSPanel {
-        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 380, height: 200),
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 300, height: 200),
                             styleMask: [.borderless, .nonactivatingPanel],
                             backing: .buffered, defer: false)
         panel.isFloatingPanel = true
