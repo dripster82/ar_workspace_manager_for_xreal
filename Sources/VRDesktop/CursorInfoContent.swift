@@ -72,9 +72,13 @@ struct CursorInfo {
     }
 
     /// Render the popup card to a CGImage (transparent outside the card) for the in-AR overlay.
+    /// `pulse` is the 0…1 phase of the homing ping (driven by the controller, since SwiftUI
+    /// animations don't run inside ImageRenderer); `pulseActive` is false when dead-on / no target.
     @MainActor
-    func renderCGImage(gaze: GazeReadout?, direction: CursorDirection?, scale: CGFloat = 2) -> CGImage? {
-        let renderer = ImageRenderer(content: CursorInfoView(info: self, gaze: gaze, direction: direction))
+    func renderCGImage(gaze: GazeReadout?, direction: CursorDirection?,
+                       pulse: Double, pulseActive: Bool, scale: CGFloat = 2) -> CGImage? {
+        let renderer = ImageRenderer(content: CursorInfoView(
+            info: self, gaze: gaze, direction: direction, pulse: pulse, pulseActive: pulseActive))
         renderer.scale = scale
         renderer.isOpaque = false
         return renderer.cgImage
@@ -82,12 +86,14 @@ struct CursorInfo {
 }
 
 /// The cursor-info card, used both for the in-AR overlay rasterization and the macOS panel.
-/// A compact readout: which screen you're looking at, which screen the cursor is on, and an
-/// arrow pointing the way to turn to find the cursor. Auto-refreshes while visible.
+/// A compact readout: which screen you're looking at, which screen the cursor is on, and a
+/// homing compass that pings faster the closer the cursor is to centre. Auto-refreshes while visible.
 struct CursorInfoView: View {
     let info: CursorInfo
     let gaze: GazeReadout?
     let direction: CursorDirection?
+    var pulse: Double = 0          // 0…1 ping phase, advanced by the controller
+    var pulseActive: Bool = false  // false = dead-on or no target (no ping)
 
     /// Looking-at and cursor are on the same physical/virtual display.
     private var sameScreen: Bool {
@@ -108,39 +114,45 @@ struct CursorInfoView: View {
         return ZStack {
             directionArrow(direction)
             sentence
-                .font(.title3)
+                .font(.callout)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                .padding(.horizontal, 8)
+                .padding(.horizontal, 6)
         }
-        .frame(width: 380, height: 240)
-        .padding(20)
-        .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 18))
-        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(.white.opacity(0.15)))
+        .frame(width: 280, height: 150)
+        .padding(16)
+        .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(.white.opacity(0.15)))
         .foregroundStyle(.white)
     }
 
-    /// A compass-style arrow pointing the way to turn the head to reach the cursor. Shows a target
-    /// reticle when the cursor is dead ahead, or a dimmed dot when there's no direction (AR off /
-    /// cursor not on an AR screen).
+    /// A compass-style arrow pointing the way to turn the head to reach the cursor. A radar-style
+    /// ring pings outward — faster the closer the cursor is to centre — and stops once dead-on
+    /// (which shows a target reticle). A dimmed dot means no direction (AR off / off-screen).
     @ViewBuilder
     private func directionArrow(_ d: CursorDirection?) -> some View {
         ZStack {
+            // Homing ping: expands and fades as pulse goes 0→1.
+            if pulseActive {
+                Circle().strokeBorder(.tint, lineWidth: 2)
+                    .scaleEffect(1 + 0.5 * pulse)
+                    .opacity(1 - pulse)
+            }
             Circle().fill(.white.opacity(0.10))
             Circle().strokeBorder(.white.opacity(0.18))
             if let d {
                 if d.centered {
-                    Image(systemName: "scope").font(.system(size: 22, weight: .semibold))
+                    Image(systemName: "scope").font(.system(size: 20, weight: .semibold))
                 } else {
-                    Image(systemName: "arrow.up").font(.system(size: 26, weight: .bold))
+                    Image(systemName: "arrow.up").font(.system(size: 24, weight: .bold))
                         .rotationEffect(.radians(d.angleRadians))
                 }
             } else {
                 Circle().fill(.white.opacity(0.25)).frame(width: 6, height: 6)
             }
         }
-        .frame(width: 52, height: 52)
+        .frame(width: 48, height: 48)
         .foregroundStyle(.tint)
         .help(d.map { "Turn to bring the cursor to centre: \($0.summary)" }
               ?? "Cursor direction unavailable (AR off or cursor not on an AR screen)")

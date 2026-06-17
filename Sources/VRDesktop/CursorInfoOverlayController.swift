@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import QuartzCore
 import DisplayManager
 
 /// Toggles the cursor-info popup: an in-AR screen-space overlay while AR is running, or a
@@ -18,6 +19,13 @@ final class CursorInfoOverlayController {
     private let searchCursorScale: Float = 2.5
     private var savedCursorScale: Float?
 
+    // Homing-ping state. The pulse phase is advanced by elapsed time × a frequency that rises as
+    // the cursor nears centre, so SwiftUI animation isn't needed (and wouldn't run in the AR
+    // rasterization anyway). ~20 Hz refresh keeps the ping smooth.
+    private var pulsePhase: Double = 0
+    private var lastTick: CFTimeInterval = 0
+    private let refreshInterval: TimeInterval = 0.05
+
     init(coordinator: AppCoordinator) {
         self.coordinator = coordinator
     }
@@ -28,14 +36,17 @@ final class CursorInfoOverlayController {
 
     func show() {
         visible = true
+        pulsePhase = 0
+        lastTick = CACurrentMediaTime()
         // Enlarge the system cursor (captured into AR) so it's easy to find. Remember the user's
         // current scale so we can restore it exactly on close.
         if savedCursorScale == nil { savedCursorScale = CursorScale.current }
         CursorScale.set(searchCursorScale)
         refresh()
-        // Light 2 Hz refresh — a direct texture upload / rootView swap, not an @Published write,
-        // so it doesn't re-render the Control Panel or disturb the render display link.
-        let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+        // ~20 Hz refresh — a direct texture upload / rootView swap, not an @Published write, so it
+        // doesn't re-render the Control Panel; rasterization runs on the main thread while AR
+        // renders on its own thread. Frequent enough for a smooth homing ping.
+        let timer = Timer(timeInterval: refreshInterval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refresh() }
         }
         RunLoop.main.add(timer, forMode: .common)
@@ -52,7 +63,8 @@ final class CursorInfoOverlayController {
         panel?.orderOut(nil)
     }
 
-    /// Re-sample the cursor + gaze + direction and update whichever surface is showing.
+    /// Re-sample the cursor + gaze + direction, advance the homing ping, and update whichever
+    /// surface is showing.
     private func refresh() {
         guard visible else { return }
         let info = CursorInfo.current(arOutputDisplayID: coordinator.arOutputDisplayID)
@@ -61,10 +73,27 @@ final class CursorInfoOverlayController {
         let u = info.screenSize.width > 0 ? Double(info.local.x / info.screenSize.width) : 0.5
         let v = info.screenSize.height > 0 ? Double(info.local.y / info.screenSize.height) : 0.5
         let direction = coordinator.cursorDirection(onDisplayID: info.displayID, u: u, v: v)
-        let view = CursorInfoView(info: info, gaze: gaze, direction: direction)
+
+        // Advance the homing ping. Frequency rises as the cursor nears centre; it stops when
+        // dead-on or when there's no target.
+        let now = CACurrentMediaTime()
+        let dt = max(0, min(0.25, now - lastTick))
+        lastTick = now
+        let pulseActive = direction != nil && !(direction?.centered ?? true)
+        if pulseActive, let d = direction {
+            let mag = (d.azimuthDeg * d.azimuthDeg + d.elevationDeg * d.elevationDeg).squareRoot()
+            pulsePhase += pingFrequency(magnitudeDeg: mag) * dt
+            pulsePhase -= pulsePhase.rounded(.down) // keep in 0…1
+        } else {
+            pulsePhase = 0
+        }
+
+        let view = CursorInfoView(info: info, gaze: gaze, direction: direction,
+                                  pulse: pulsePhase, pulseActive: pulseActive)
 
         if coordinator.arActive, let renderer = coordinator.renderer,
-           let image = info.renderCGImage(gaze: gaze, direction: direction),
+           let image = info.renderCGImage(gaze: gaze, direction: direction,
+                                          pulse: pulsePhase, pulseActive: pulseActive),
            renderer.setHelpImage(image) {
             // In-AR overlay (shares the help overlay slot). Hide the panel if AR just came on.
             panel?.orderOut(nil)
@@ -72,6 +101,14 @@ final class CursorInfoOverlayController {
             coordinator.renderer?.clearHelp()
             showPanel(view)
         }
+    }
+
+    /// Pings per second for a given angular offset: slow when far, fast when near, capped so it
+    /// stays smooth at the refresh rate.
+    private func pingFrequency(magnitudeDeg mag: Double) -> Double {
+        let t = min(1, max(0, mag / 45))   // 0 = near centre, 1 = far (≥45°)
+        let fNear = 3.0, fFar = 0.6
+        return fFar + (fNear - fFar) * (1 - t)
     }
 
     private func showPanel(_ view: CursorInfoView) {
