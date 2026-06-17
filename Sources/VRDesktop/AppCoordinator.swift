@@ -870,6 +870,31 @@ final class AppCoordinator: ObservableObject {
                            offScreen: offScreen)
     }
 
+    /// Warp the mouse cursor to where the user is looking — the gaze point on the looked-at AR
+    /// screen (⌃⌥X). No-op if AR is off or the gaze isn't on a screen. The looked-at screens are
+    /// virtual/physical displays the OS knows as monitors (not the glasses output), so the cursor
+    /// lives there normally and the confiner won't yank it back.
+    @discardableResult
+    func moveCursorToGaze() -> Bool {
+        guard let gaze = currentGaze(), gaze.displayID != 0,
+              gaze.screenSize.width > 0, gaze.screenSize.height > 0 else {
+            DebugLog.shared.log("moveCursorToGaze: no gaze target")
+            return false
+        }
+        // gaze.pixel is top-left pixels on that screen; CGDisplayBounds is top-left global points.
+        let bounds = CGDisplayBounds(gaze.displayID)
+        let u = gaze.pixel.x / gaze.screenSize.width
+        let v = gaze.pixel.y / gaze.screenSize.height
+        let target = CGPoint(x: bounds.origin.x + u * bounds.width,
+                             y: bounds.origin.y + v * bounds.height)
+        CGWarpMouseCursorPosition(target)
+        CGAssociateMouseAndMouseCursorPosition(1) // resync hardware delta after the warp
+        let name = gaze.screenName
+        DebugLog.shared.log(String(format: "moveCursorToGaze: '%@' px(%.0f,%.0f) -> global(%.0f,%.0f)",
+                                   name, gaze.pixel.x, gaze.pixel.y, target.x, target.y))
+        return true
+    }
+
     /// The app-level (possibly renamed) screen name for a display, if it maps to an AR screen
     /// config. The OS display name only picks up a rename on the next AR start, so the cursor-info
     /// popup uses this to show the current name for the screen the cursor is on.

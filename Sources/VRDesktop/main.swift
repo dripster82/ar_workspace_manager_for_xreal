@@ -57,6 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var sbsHotKeyRef: EventHotKeyRef?
     private var quitHotKeyRef: EventHotKeyRef?
     private var cursorInfoHotKeyRef: EventHotKeyRef?
+    private var cursorToGazeHotKeyRef: EventHotKeyRef?
     private static let recenterHotKeyID: UInt32 = 1
     private static let stopARHotKeyID: UInt32 = 2
     private static let helpHotKeyID: UInt32 = 3
@@ -64,6 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private static let sbsHotKeyID: UInt32 = 5
     private static let quitHotKeyID: UInt32 = 6
     private static let cursorInfoHotKeyID: UInt32 = 7
+    private static let cursorToGazeHotKeyID: UInt32 = 8
 
     private func registerGlobalRecenterHotKey() {
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
@@ -85,6 +87,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 case AppDelegate.sbsHotKeyID:
                     delegate.coordinator.setStereo(!delegate.coordinator.stereoEnabled)
                 case AppDelegate.cursorInfoHotKeyID: delegate.cursorInfoOverlay.toggle()
+                case AppDelegate.cursorToGazeHotKeyID: delegate.coordinator.moveCursorToGaze()
                 case AppDelegate.quitHotKeyID: NSApp.terminate(nil)
                 default: break
                 }
@@ -108,6 +111,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         register(kVK_ANSI_D, AppDelegate.sbsHotKeyID, &sbsHotKeyRef)
         register(kVK_ANSI_Q, AppDelegate.quitHotKeyID, &quitHotKeyRef)
         register(kVK_ANSI_C, AppDelegate.cursorInfoHotKeyID, &cursorInfoHotKeyRef)
+        register(kVK_ANSI_X, AppDelegate.cursorToGazeHotKeyID, &cursorToGazeHotKeyRef)
     }
 
     // MARK: Menu bar
@@ -155,6 +159,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                                     action: #selector(toggleCursorInfo), keyEquivalent: "")
         cursorInfo.target = self
         menu.addItem(cursorInfo)
+
+        let cursorToGaze = NSMenuItem(title: "Move Cursor to Where I'm Looking (⌃⌥X)",
+                                      action: #selector(moveCursorToGaze), keyEquivalent: "")
+        cursorToGaze.target = self
+        cursorToGaze.isEnabled = coordinator.arActive
+        menu.addItem(cursorToGaze)
 
         let help = NSMenuItem(title: "Keyboard Shortcuts (⌃⌥H)", action: #selector(toggleHelp),
                               keyEquivalent: "")
@@ -206,6 +216,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @MainActor @objc private func toggleHelp() { helpOverlay.toggle() }
 
     @MainActor @objc private func toggleCursorInfo() { cursorInfoOverlay.toggle() }
+
+    @MainActor @objc private func moveCursorToGaze() { coordinator.moveCursorToGaze() }
 
     @MainActor @objc private func toggleSBS() { coordinator.setStereo(!coordinator.stereoEnabled) }
 
