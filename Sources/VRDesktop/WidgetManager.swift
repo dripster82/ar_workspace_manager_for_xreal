@@ -96,9 +96,11 @@ final class WidgetManager {
         case .clock: content = AnyView(ClockWidgetView(style: widget.style, date: date))
         case .power: content = AnyView(PowerWidgetView(style: widget.style, power: power))
         case .slack:
+            let nextIn = slack?.nextRefreshAt.map { max(0, Int($0.timeIntervalSinceNow.rounded())) }
             content = AnyView(SlackWidgetView(style: widget.style,
                                               connected: slack?.isConnected ?? false,
-                                              unreads: slack?.unreads ?? []))
+                                              unreads: slack?.unreads ?? [],
+                                              nextIn: nextIn))
         }
         let renderer = ImageRenderer(content: content)
         renderer.scale = 2

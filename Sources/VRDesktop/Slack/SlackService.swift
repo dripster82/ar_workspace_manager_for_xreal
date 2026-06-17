@@ -42,9 +42,20 @@ final class SlackService: ObservableObject {
     static var redirectURI: String { "http://localhost:\(redirectPort)/oauth/callback" }
     static let scopes = "channels:read,groups:read,im:read,mpim:read,users:read"
 
+    /// When the next poll tick is scheduled — drives the widget's "next update" countdown.
+    @Published private(set) var nextRefreshAt: Date?
+
     private var pollTimer: Timer?
     private var userNameCache: [String: String] = [:]
     private let session = URLSession(configuration: .ephemeral)
+    private var refreshing = false
+    /// Last-seen `updated` (last-activity) timestamp per conversation, so we only re-check ones
+    /// that changed. Avoids re-scanning all ~80 conversations every poll (which hit the rate limit).
+    private var seenUpdated: [String: Double] = [:]
+    /// Current unread per conversation, kept across polls; only re-checked conversations are updated.
+    private var unreadByID: [String: SlackUnread] = [:]
+    /// Cap on conversations probed for unread per sweep (recent-activity first) — keeps under limits.
+    private let maxScanPerSweep = 25
 
     // MARK: Stored credentials
 
@@ -136,39 +147,48 @@ final class SlackService: ObservableObject {
 
     func startPolling() {
         guard pollTimer == nil else { return }
+        scheduleNext()
         let t = Timer(timeInterval: TimeInterval(pollSeconds), repeats: true) { [weak self] _ in
-            Task { @MainActor in await self?.refresh() }
+            Task { @MainActor in self?.scheduleNext(); await self?.refresh() }
         }
         RunLoop.main.add(t, forMode: .common)
         pollTimer = t
         Task { await refresh() }
     }
 
-    func stopPolling() { pollTimer?.invalidate(); pollTimer = nil }
+    func stopPolling() { pollTimer?.invalidate(); pollTimer = nil; nextRefreshAt = nil }
+
+    private func scheduleNext() { nextRefreshAt = Date().addingTimeInterval(TimeInterval(pollSeconds)) }
 
     private func refresh() async {
-        guard let token else { return }
+        guard let token, !refreshing else { return }   // never overlap sweeps
+        refreshing = true
+        defer { refreshing = false }
         do {
             let convos = try await listConversations(token: token)
-            let imCount = convos.filter { $0.isIM }.count
-            let starredCount = convos.filter { $0.isStarred }.count
-            DebugLog.shared.log("slack refresh: \(convos.count) convos, \(imCount) DMs, \(starredCount) starred")
-            // People (any IM) and starred channels.
-            let relevant = convos.filter { $0.isIM || $0.isStarred }
-            var result: [SlackUnread] = []
-            for c in relevant {
+            // conversations.info only returns unread counts for DMs (is_im) — channels/mpims come
+            // back with no unread fields under these scopes — so we only scan DMs. Probe the
+            // most-recently-active DMs whose activity changed since we last looked, plus any we
+            // currently show as unread (to catch reads). Keeps each sweep to a few calls, not ~80.
+            let dms = convos.filter { $0.isIM }
+            let recent = dms.sorted { $0.updated > $1.updated }.prefix(maxScanPerSweep)
+            var candidates: [Convo] = recent.filter { $0.updated > (seenUpdated[$0.id] ?? -1) }
+            let candidateIDs = Set(candidates.map { $0.id })
+            candidates += dms.filter { unreadByID[$0.id] != nil && !candidateIDs.contains($0.id) }
+            DebugLog.shared.log("slack refresh: \(dms.count) DMs, probing \(candidates.count)")
+
+            for c in candidates {
                 guard let info = try await conversationInfo(id: c.id, token: token) else { continue }
-                DebugLog.shared.log("slack convo \(c.id) im=\(c.isIM) starred=\(c.isStarred) unread=\(info.unread)")
-                guard info.unread > 0 else { continue }
-                let name: String
-                if c.isIM {
-                    name = await resolveUserName(c.userID, token: token) ?? "Direct message"
+                seenUpdated[c.id] = c.updated
+                if info.unread > 0 {
+                    let name = await resolveUserName(c.userID, token: token) ?? "Direct message"
+                    unreadByID[c.id] = SlackUnread(id: c.id, name: name, count: info.unread, isChannel: false)
                 } else {
-                    name = info.name ?? c.name ?? "channel"
+                    unreadByID[c.id] = nil
                 }
-                result.append(SlackUnread(id: c.id, name: name, count: info.unread, isChannel: !c.isIM))
+                try? await Task.sleep(nanoseconds: 1_200_000_000) // ~1.2s spacing → stay under ~50/min
             }
-            unreads = result.sorted { $0.count > $1.count }
+            unreads = unreadByID.values.sorted { $0.count > $1.count }
         } catch SlackError.api(let msg) where msg == "invalid_auth" || msg == "token_revoked" || msg == "account_inactive" {
             state = .error("Slack token expired — reconnect.")
             stopPolling()
@@ -179,8 +199,8 @@ final class SlackService: ObservableObject {
 
     // MARK: API
 
-    private struct Convo { let id: String; let isIM: Bool; let isStarred: Bool; let name: String?; let userID: String? }
-    private struct Info { let unread: Int; let name: String? }
+    private struct Convo { let id: String; let isIM: Bool; let name: String?; let userID: String?; let updated: Double }
+    private struct Info { let unread: Int; let name: String?; let isStarred: Bool }
 
     private func listConversations(token: String) async throws -> [Convo] {
         let json = try await call("users.conversations", token: token, query: [
@@ -192,20 +212,17 @@ final class SlackService: ObservableObject {
         return channels.map { ch in
             Convo(id: ch["id"] as? String ?? "",
                   isIM: (ch["is_im"] as? Bool) ?? false,
-                  isStarred: (ch["is_starred"] as? Bool) ?? false,
                   name: ch["name"] as? String,
-                  userID: ch["user"] as? String)
+                  userID: ch["user"] as? String,
+                  updated: (ch["updated"] as? Double) ?? 0)
         }.filter { !$0.id.isEmpty }
     }
 
     private func conversationInfo(id: String, token: String) async throws -> Info? {
         let json = try await call("conversations.info", token: token, query: ["channel": id])
         guard let ch = json["channel"] as? [String: Any] else { return nil }
-        if ch["unread_count_display"] == nil && ch["unread_count"] == nil {
-            DebugLog.shared.log("slack info \(id): no unread fields returned (likely missing history scope)")
-        }
         let unread = (ch["unread_count_display"] as? Int) ?? (ch["unread_count"] as? Int) ?? 0
-        return Info(unread: unread, name: ch["name"] as? String)
+        return Info(unread: unread, name: ch["name"] as? String, isStarred: (ch["is_starred"] as? Bool) ?? false)
     }
 
     private func resolveUserName(_ userID: String?, token: String) async -> String? {
@@ -227,11 +244,19 @@ final class SlackService: ObservableObject {
         comps.queryItems = query.map { URLQueryItem(name: $0, value: $1) }
         var req = URLRequest(url: comps.url!)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        let (data, _) = try await session.data(for: req)
-        let json = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any]) ?? [:]
-        guard (json["ok"] as? Bool) == true else {
-            throw SlackError.api((json["error"] as? String) ?? "request failed")
+        for _ in 0..<3 {
+            let (data, resp) = try await session.data(for: req)
+            if let http = resp as? HTTPURLResponse, http.statusCode == 429 {
+                let retry = Double(http.value(forHTTPHeaderField: "Retry-After") ?? "") ?? 3
+                try await Task.sleep(nanoseconds: UInt64((retry + 0.5) * 1_000_000_000))
+                continue   // back off and retry, don't abort the sweep
+            }
+            let json = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any]) ?? [:]
+            guard (json["ok"] as? Bool) == true else {
+                throw SlackError.api((json["error"] as? String) ?? "request failed")
+            }
+            return json
         }
-        return json
+        throw SlackError.api("ratelimited")
     }
 }

@@ -61,6 +61,7 @@ struct SlackWidgetView: View {
     let style: WidgetStyle
     let connected: Bool
     let unreads: [SlackUnread]
+    var nextIn: Int? = nil
 
     private func countLabel(_ n: Int) -> String { n > 9 ? "9+" : "\(n)" }
 
@@ -70,6 +71,11 @@ struct SlackWidgetView: View {
                 HStack(spacing: 6) {
                     Image(systemName: "message.badge.fill").font(.system(size: 16))
                     Text("Slack").font(.system(size: 16, weight: .semibold, design: .rounded))
+                    Spacer(minLength: 12)
+                    if let nextIn, connected {
+                        Label("\(nextIn)s", systemImage: "arrow.clockwise")
+                            .font(.system(size: 11, weight: .medium)).opacity(0.6)
+                    }
                 }
                 if !connected {
                     Text("Not connected").font(.system(size: 14)).opacity(0.7)
