@@ -29,6 +29,14 @@ struct SlackSettingsView: View {
                         .textSelection(.enabled)
                 }
 
+                HStack {
+                    Text("Refresh every").font(.caption)
+                    Picker("", selection: $slack.pollSeconds) {
+                        ForEach(SlackService.pollOptions, id: \.seconds) { Text($0.label).tag($0.seconds) }
+                    }.labelsHidden().fixedSize()
+                    Spacer()
+                }
+
                 HStack(spacing: 10) {
                     switch slack.state {
                     case .connecting:

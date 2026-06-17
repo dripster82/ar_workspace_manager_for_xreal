@@ -27,6 +27,16 @@ private enum SlackError: Error, LocalizedError {
 final class SlackService: ObservableObject {
     @Published private(set) var state: SlackConnState = .disconnected
     @Published private(set) var unreads: [SlackUnread] = []
+    /// Poll interval in seconds; persisted. Restarts the timer live when changed.
+    @Published var pollSeconds: Int = UserDefaults.standard.object(forKey: "slackPollSeconds") as? Int ?? 30 {
+        didSet {
+            UserDefaults.standard.set(pollSeconds, forKey: "slackPollSeconds")
+            if pollTimer != nil { stopPolling(); startPolling() }
+        }
+    }
+    static let pollOptions: [(label: String, seconds: Int)] = [
+        ("5s", 5), ("15s", 15), ("30s", 30), ("1 min", 60), ("2 min", 120), ("5 min", 300),
+    ]
 
     static let redirectPort: UInt16 = 53682
     static var redirectURI: String { "http://localhost:\(redirectPort)/oauth/callback" }
@@ -126,7 +136,7 @@ final class SlackService: ObservableObject {
 
     func startPolling() {
         guard pollTimer == nil else { return }
-        let t = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
+        let t = Timer(timeInterval: TimeInterval(pollSeconds), repeats: true) { [weak self] _ in
             Task { @MainActor in await self?.refresh() }
         }
         RunLoop.main.add(t, forMode: .common)
