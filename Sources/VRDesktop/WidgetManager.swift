@@ -96,31 +96,60 @@ final class WidgetManager {
                                     image: image))
         }
 
-        // Stacks: compose member widgets into one V/H stack image, sized by content.
+        // Stacks: compose member widgets (each at its own scale) into one V/H stack image, sized by
+        // content. `align` controls the anchor so the stack grows the right way: vertical → top /
+        // bottom / centre, horizontal → left / right / centre.
         for stack in stacks {
             let members = widgets.filter { $0.stackID == stack.id }
             guard !members.isEmpty else { continue }
-            let body = stackBody(stack, members: members, date: date, power: power)
-            guard let (image, pointWidth) = renderSized(body) else { continue }
+            // Natural point size of each member (for the per-widget scale layout).
+            let sized: [(HUDWidget, CGSize)] = members.compactMap { m in
+                guard let (_, sz) = renderSized(view(for: m, date: date, power: power)) else { return nil }
+                return (m, sz)
+            }
+            guard !sized.isEmpty else { continue }
+            guard let (image, pt) = renderSized(stackBody(stack, sized: sized, date: date, power: power)) else { continue }
+            let widthMeters = Float(pt.width) * metersPerPoint * Float(stack.scale)
+            let heightMeters = pt.height > 0 ? widthMeters * Float(pt.height / pt.width) : widthMeters
+            let (ox, oy) = anchorOffset(stack, widthMeters: widthMeters, heightMeters: heightMeters)
             placements.append(.init(id: stack.id,
                                     yaw: Float(stack.yawDegrees * .pi / 180),
                                     pitch: Float(stack.pitchDegrees * .pi / 180),
                                     distance: Float(stack.distanceMeters),
-                                    widthMeters: pointWidth * metersPerPoint * Float(stack.scale),
-                                    image: image))
+                                    widthMeters: widthMeters, offsetX: ox, offsetY: oy, image: image))
         }
         renderer.setWidgets(placements)
     }
 
-    @ViewBuilder
-    private func stackBody(_ stack: HUDStack, members: [HUDWidget], date: Date, power: PowerStatus) -> some View {
-        let views = members.map { view(for: $0, date: date, power: power) }
+    /// Local-plane shift so the stack is anchored at the requested edge (and grows away from it).
+    private func anchorOffset(_ stack: HUDStack, widthMeters: Float, heightMeters: Float) -> (Float, Float) {
         if stack.axis == .vertical {
-            let a: HorizontalAlignment = stack.align == .start ? .leading : (stack.align == .end ? .trailing : .center)
-            VStack(alignment: a, spacing: 10) { ForEach(views.indices, id: \.self) { views[$0] } }
+            switch stack.align {     // top / centre / bottom
+            case .start: return (0, -heightMeters / 2)   // anchor top, grow down
+            case .end:   return (0,  heightMeters / 2)   // anchor bottom, grow up
+            case .center: return (0, 0)
+            }
         } else {
-            let a: VerticalAlignment = stack.align == .start ? .top : (stack.align == .end ? .bottom : .center)
-            HStack(alignment: a, spacing: 10) { ForEach(views.indices, id: \.self) { views[$0] } }
+            switch stack.align {     // left / centre / right
+            case .start: return ( widthMeters / 2, 0)    // anchor left, grow right
+            case .end:   return (-widthMeters / 2, 0)    // anchor right, grow left
+            case .center: return (0, 0)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func stackBody(_ stack: HUDStack, sized: [(HUDWidget, CGSize)], date: Date, power: PowerStatus) -> some View {
+        let cards = sized.map { (m, sz) in
+            AnyView(view(for: m, date: date, power: power)
+                .frame(width: sz.width, height: sz.height)
+                .scaleEffect(CGFloat(m.scale))
+                .frame(width: sz.width * CGFloat(m.scale), height: sz.height * CGFloat(m.scale)))
+        }
+        if stack.axis == .vertical {
+            VStack(spacing: 10) { ForEach(cards.indices, id: \.self) { cards[$0] } }
+        } else {
+            HStack(spacing: 10) { ForEach(cards.indices, id: \.self) { cards[$0] } }
         }
     }
 
@@ -150,10 +179,10 @@ final class WidgetManager {
         return r.cgImage
     }
 
-    /// Render and also return the content's logical (point) width, for content-based sizing.
-    private func renderSized<V: View>(_ content: V) -> (CGImage, Float)? {
+    /// Render and also return the content's logical (point) size, for content-based sizing.
+    private func renderSized<V: View>(_ content: V) -> (CGImage, CGSize)? {
         let r = ImageRenderer(content: content); r.scale = 2; r.isOpaque = false
         guard let image = r.cgImage else { return nil }
-        return (image, Float(image.width) / 2) // scale 2 → points = pixels / 2
+        return (image, CGSize(width: CGFloat(image.width) / 2, height: CGFloat(image.height) / 2))
     }
 }

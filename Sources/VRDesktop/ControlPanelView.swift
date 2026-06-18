@@ -740,10 +740,11 @@ struct StackRow: View {
         _cfg = State(initialValue: initial)
     }
 
+    // Anchor: which edge the stack is pinned to (so it grows away from it).
     private var alignLabels: [(StackAlign, String)] {
         cfg.axis == .vertical
-            ? [(.start, "Left"), (.center, "Centre"), (.end, "Right")]
-            : [(.start, "Top"), (.center, "Centre"), (.end, "Bottom")]
+            ? [(.start, "Top"), (.center, "Centre"), (.end, "Bottom")]
+            : [(.start, "Left"), (.center, "Centre"), (.end, "Right")]
     }
 
     var body: some View {
@@ -754,11 +755,12 @@ struct StackRow: View {
                     Text("Horizontal").tag(StackAxis.horizontal)
                 }.pickerStyle(.segmented)
                 HStack {
-                    Text("Align").font(.caption).frame(width: 70, alignment: .leading)
+                    Text("Anchor").font(.caption).frame(width: 70, alignment: .leading)
                     Picker("", selection: $cfg.align) {
                         ForEach(alignLabels, id: \.0) { Text($0.1).tag($0.0) }
                     }.pickerStyle(.segmented)
                 }
+                .help("Which edge the stack is pinned to, so it grows away from it when a widget changes size.")
                 HStack {
                     Text("Scale").font(.caption).frame(width: 70, alignment: .leading)
                     Slider(value: $cfg.scale, in: 0.1...3, step: 0.05)

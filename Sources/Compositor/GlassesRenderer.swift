@@ -67,6 +67,7 @@ public final class GlassesRenderer: NSObject {
     private var widgetDepthState: MTLDepthStencilState?
     private struct WidgetEntry {
         let yaw, pitch, distance, widthMeters, aspect: Float
+        let offsetX, offsetY: Float   // shift in the quad's local plane (metres) — for stack anchoring
         let texture: MTLTexture
     }
     private var widgetEntries: [WidgetEntry] = []
@@ -188,11 +189,13 @@ public final class GlassesRenderer: NSObject {
     public struct WidgetPlacement {
         public let id: UUID
         public var yaw, pitch, distance, widthMeters: Float
+        public var offsetX, offsetY: Float   // local-plane shift (metres) for stack anchoring
         public var image: CGImage
-        public init(id: UUID, yaw: Float, pitch: Float, distance: Float,
-                    widthMeters: Float, image: CGImage) {
+        public init(id: UUID, yaw: Float, pitch: Float, distance: Float, widthMeters: Float,
+                    offsetX: Float = 0, offsetY: Float = 0, image: CGImage) {
             self.id = id; self.yaw = yaw; self.pitch = pitch
-            self.distance = distance; self.widthMeters = widthMeters; self.image = image
+            self.distance = distance; self.widthMeters = widthMeters
+            self.offsetX = offsetX; self.offsetY = offsetY; self.image = image
         }
     }
 
@@ -205,6 +208,7 @@ public final class GlassesRenderer: NSObject {
             entries.append(WidgetEntry(yaw: p.yaw, pitch: p.pitch, distance: p.distance,
                                        widthMeters: p.widthMeters,
                                        aspect: Float(tex.width) / Float(max(1, tex.height)),
+                                       offsetX: p.offsetX, offsetY: p.offsetY,
                                        texture: tex))
         }
         lock.lock(); widgetEntries = entries; lock.unlock()
@@ -970,7 +974,7 @@ public final class GlassesRenderer: NSObject {
             let qYaw = simd_quatf(angle: e.yaw, axis: SIMD3(0, 1, 0))
             let qPitch = simd_quatf(angle: e.pitch, axis: SIMD3(1, 0, 0))
             let rot = qYaw * qPitch
-            func p(_ x: Float, _ y: Float) -> SIMD3<Float> { rot.act(SIMD3(x, y, -e.distance)) }
+            func p(_ x: Float, _ y: Float) -> SIMD3<Float> { rot.act(SIMD3(x + e.offsetX, y + e.offsetY, -e.distance)) }
             let w = e.widthMeters / 2, hh = h / 2
             var verts = [
                 SceneScreen.Vertex(position: p(-w,  hh), uv: SIMD2(0, 0)),
