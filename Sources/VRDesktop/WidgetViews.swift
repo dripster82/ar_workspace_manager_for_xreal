@@ -106,6 +106,55 @@ struct SlackWidgetView: View {
     }
 }
 
+struct GitHubWidgetView: View {
+    let style: WidgetStyle
+    let connected: Bool
+    let counts: GitHubCounts
+
+    private struct Row { let label: String; let count: Int; let symbol: String; let hot: Color? }
+
+    private var rows: [Row] {
+        [
+            Row(label: "Needs your review", count: counts.needsReview, symbol: "eye", hot: .yellow),
+            Row(label: "Team review", count: counts.teamReview, symbol: "person.2", hot: nil),
+            Row(label: "Changes requested", count: counts.changesRequested, symbol: "pencil.line", hot: .orange),
+            Row(label: "Failing checks", count: counts.failingChecks, symbol: "xmark.octagon", hot: .red),
+            Row(label: "Ready to merge", count: counts.readyToMerge, symbol: "checkmark.seal", hot: .green),
+        ]
+    }
+
+    var body: some View {
+        WidgetPill(style: style) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.left.forwardslash.chevron.right").font(.system(size: 15))
+                    Text("GitHub").font(.system(size: 16, weight: .semibold, design: .rounded))
+                }
+                if !connected {
+                    Text("Not connected").font(.system(size: 14)).opacity(0.7)
+                } else {
+                    ForEach(rows.indices, id: \.self) { i in
+                        let row = rows[i]
+                        let active = row.count > 0
+                        HStack(spacing: 8) {
+                            Image(systemName: row.symbol)
+                                .font(.system(size: 12)).frame(width: 16)
+                                .foregroundStyle(active ? (row.hot ?? style.tint.color) : style.tint.color.opacity(0.55))
+                            Text(row.label).font(.system(size: 15, weight: .medium))
+                                .opacity(active ? 1 : 0.6)
+                            Spacer(minLength: 8)
+                            Text("\(row.count)")
+                                .font(.system(size: 15, weight: .bold, design: .rounded).monospacedDigit())
+                                .foregroundStyle(active ? (row.hot ?? style.tint.color) : style.tint.color.opacity(0.6))
+                        }
+                    }
+                }
+            }
+            .frame(minWidth: 190, alignment: .leading)
+        }
+    }
+}
+
 struct PowerWidgetView: View {
     let style: WidgetStyle
     let power: PowerStatus

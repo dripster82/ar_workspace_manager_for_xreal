@@ -442,6 +442,10 @@ struct ControlPanelView: View {
                 Divider()
                 SlackSettingsView(slack: coordinator.slack)
             }
+            if coordinator.widgets.contains(where: { $0.kind == .github }) {
+                Divider()
+                GitHubSettingsView(github: coordinator.github)
+            }
             if !coordinator.arActive {
                 Text("Widgets appear once AR is running.")
                     .font(.caption2).foregroundStyle(.secondary)
