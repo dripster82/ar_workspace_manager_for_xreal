@@ -76,13 +76,15 @@ enum ICS {
     // MARK: Parsing helpers
 
     /// Unfold RFC 5545 line continuations (a CRLF/LF followed by space or tab) and split into lines.
+    /// Note: Swift treats "\r\n" as a single grapheme-cluster Character, so we must split on
+    /// `isNewline` (which matches the CRLF grapheme) rather than comparing to "\r"/"\n".
     private static func unfold(_ text: String) -> [String] {
         let joined = text
             .replacingOccurrences(of: "\r\n ", with: "")
             .replacingOccurrences(of: "\r\n\t", with: "")
             .replacingOccurrences(of: "\n ", with: "")
             .replacingOccurrences(of: "\n\t", with: "")
-        return joined.split(whereSeparator: { $0 == "\r" || $0 == "\n" }).map(String.init)
+        return joined.split(whereSeparator: { $0.isNewline }).map(String.init)
     }
 
     private static func properties(_ block: [String]) -> [String: (params: [String: String], value: String)] {
