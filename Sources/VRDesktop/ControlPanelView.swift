@@ -428,22 +428,34 @@ struct ControlPanelView: View {
                 }
                 .menuStyle(.borderlessButton).fixedSize()
             }
-            if coordinator.widgets.isEmpty {
+            if coordinator.widgets.isEmpty && coordinator.stacks.isEmpty {
                 Text("No widgets yet. Add a Clock or Power widget, then drag it into place in the "
                      + "Layout map's “In view (floating)” area.")
                     .font(.caption2).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
+                if !coordinator.stacks.isEmpty {
+                    Text("Drag a widget onto a stack to add it, or between widgets to reorder.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
                 ForEach(coordinator.stacks) { stack in
+                    // Stack header — dropping a widget here appends it to the stack.
                     StackRow(initial: stack,
                              onChange: { coordinator.updateStack($0) },
                              onRemove: { coordinator.removeStack(id: stack.id) })
+                        .dropDestination(for: String.self) { items, _ in drop(items, toStack: stack.id, before: nil) }
+                    ForEach(coordinator.widgets.filter { $0.stackID == stack.id }) { w in
+                        widgetRow(w).padding(.leading, 16)
+                    }
                 }
-                ForEach(coordinator.widgets) { widget in
-                    WidgetRow(initial: widget, stacks: coordinator.stacks,
-                              onChange: { coordinator.updateWidget($0) },
-                              onRemove: { coordinator.removeWidget(id: widget.id) })
+                let loose = coordinator.widgets.filter { $0.stackID == nil }
+                if !coordinator.stacks.isEmpty {
+                    Text("Unstacked")
+                        .font(.caption2.bold()).foregroundStyle(.secondary).padding(.top, 4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .dropDestination(for: String.self) { items, _ in drop(items, toStack: nil, before: nil) }
                 }
+                ForEach(loose) { w in widgetRow(w) }
             }
             if coordinator.widgets.contains(where: { $0.kind == .slack }) {
                 Divider()
@@ -462,6 +474,22 @@ struct ControlPanelView: View {
                     .font(.caption2).foregroundStyle(.secondary)
             }
         }
+    }
+
+    /// A widget row that can be dragged (to a stack / to reorder) and is itself a drop target
+    /// (dropping another widget here inserts it before this one, into this widget's group).
+    private func widgetRow(_ w: HUDWidget) -> some View {
+        WidgetRow(initial: w, stacks: coordinator.stacks,
+                  onChange: { coordinator.updateWidget($0) },
+                  onRemove: { coordinator.removeWidget(id: w.id) })
+            .draggable(w.id.uuidString)
+            .dropDestination(for: String.self) { items, _ in drop(items, toStack: w.stackID, before: w.id) }
+    }
+
+    private func drop(_ ids: [String], toStack stackID: UUID?, before beforeID: UUID?) -> Bool {
+        guard let s = ids.first, let id = UUID(uuidString: s) else { return false }
+        coordinator.moveWidget(id, toStack: stackID, before: beforeID)
+        return true
     }
 
     private var generalSection: some View {

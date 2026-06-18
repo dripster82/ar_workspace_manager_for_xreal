@@ -1764,6 +1764,21 @@ final class AppCoordinator: ObservableObject {
         commitWidgets(ws)
     }
 
+    /// Drag-and-drop move: put `id` into `stackID` (nil = standalone), inserted just before
+    /// `beforeID` in the widget array (which drives stack order), or at the end if `beforeID` is nil.
+    func moveWidget(_ id: UUID, toStack stackID: UUID?, before beforeID: UUID?) {
+        guard var ws = workspaceStore.activeWorkspace,
+              let idx = ws.widgets.firstIndex(where: { $0.id == id }), id != beforeID else { return }
+        var w = ws.widgets.remove(at: idx)
+        w.stackID = stackID
+        if let beforeID, let bi = ws.widgets.firstIndex(where: { $0.id == beforeID }) {
+            ws.widgets.insert(w, at: bi)
+        } else {
+            ws.widgets.append(w)
+        }
+        commitWidgets(ws)
+    }
+
     func removeWidget(id: UUID) {
         guard var ws = workspaceStore.activeWorkspace,
               let i = ws.widgets.firstIndex(where: { $0.id == id }) else { return }
