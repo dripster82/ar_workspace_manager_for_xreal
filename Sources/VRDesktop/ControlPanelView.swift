@@ -476,14 +476,20 @@ struct ControlPanelView: View {
         }
     }
 
-    /// A widget row that can be dragged (to a stack / to reorder) and is itself a drop target
-    /// (dropping another widget here inserts it before this one, into this widget's group).
+    /// A widget row with a drag handle (the drag source — dragging the whole DisclosureGroup
+    /// conflicts with its toggle). The row is a drop target: dropping another widget here inserts
+    /// it before this one, reordering within a stack or moving it into this widget's group.
     private func widgetRow(_ w: HUDWidget) -> some View {
-        WidgetRow(initial: w, stacks: coordinator.stacks,
-                  onChange: { coordinator.updateWidget($0) },
-                  onRemove: { coordinator.removeWidget(id: w.id) })
-            .draggable(w.id.uuidString)
-            .dropDestination(for: String.self) { items, _ in drop(items, toStack: w.stackID, before: w.id) }
+        HStack(alignment: .top, spacing: 4) {
+            Image(systemName: "line.3.horizontal")
+                .font(.caption).foregroundStyle(.secondary).padding(.top, 6)
+                .draggable(w.id.uuidString)
+                .help("Drag to reorder, or onto a stack to add it")
+            WidgetRow(initial: w, stacks: coordinator.stacks,
+                      onChange: { coordinator.updateWidget($0) },
+                      onRemove: { coordinator.removeWidget(id: w.id) })
+        }
+        .dropDestination(for: String.self) { items, _ in drop(items, toStack: w.stackID, before: w.id) }
     }
 
     private func drop(_ ids: [String], toStack stackID: UUID?, before beforeID: UUID?) -> Bool {
