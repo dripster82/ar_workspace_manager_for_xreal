@@ -9,23 +9,14 @@ struct CalendarSettingsView: View {
     var body: some View {
         DisclosureGroup(isExpanded: $expanded) {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Create a Google Cloud OAuth client (type: Desktop app) with the Calendar API "
-                     + "enabled, add the redirect URL below, then paste its Client ID & Secret and Connect.")
+                Text("In Google Calendar → Settings → your calendar → “Integrate calendar”, copy the "
+                     + "“Secret address in iCal format” and paste it here. No Google project needed.")
                     .font(.caption2).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
-                field("Client ID",
-                      TextField("…apps.googleusercontent.com",
-                                text: Binding(get: { calendar.clientID }, set: { calendar.clientID = $0 })))
-                field("Client Secret",
-                      SecureField("•••••••••••••",
-                                  text: Binding(get: { calendar.clientSecret }, set: { calendar.clientSecret = $0 })))
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Redirect URL (add to your OAuth client):").font(.caption2).foregroundStyle(.secondary)
-                    Text(GoogleCalendarService.redirectURI)
-                        .font(.caption.monospaced()).textSelection(.enabled)
-                }
+                field("iCal URL",
+                      TextField("https://calendar.google.com/calendar/ical/…/basic.ics",
+                                text: Binding(get: { calendar.icalURL }, set: { calendar.icalURL = $0 })))
 
                 HStack {
                     Text("Refresh every").font(.caption)
@@ -38,7 +29,7 @@ struct CalendarSettingsView: View {
                 HStack(spacing: 10) {
                     switch calendar.state {
                     case .connecting:
-                        ProgressView().controlSize(.small); Text("Waiting for sign-in…").font(.caption)
+                        ProgressView().controlSize(.small); Text("Loading…").font(.caption)
                     case .connected:
                         Button("Disconnect") { calendar.disconnect() }.controlSize(.small)
                     default:
