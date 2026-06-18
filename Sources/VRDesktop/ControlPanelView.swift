@@ -446,6 +446,10 @@ struct ControlPanelView: View {
                 Divider()
                 GitHubSettingsView(github: coordinator.github)
             }
+            if coordinator.widgets.contains(where: { $0.kind == .calendar }) {
+                Divider()
+                CalendarSettingsView(calendar: coordinator.calendar)
+            }
             if !coordinator.arActive {
                 Text("Widgets appear once AR is running.")
                     .font(.caption2).foregroundStyle(.secondary)

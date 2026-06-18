@@ -85,6 +85,7 @@ final class AppCoordinator: ObservableObject {
     private(set) var renderer: GlassesRenderer?
     let slack = SlackService()
     let github = GitHubService()
+    let calendar = GoogleCalendarService()
     private var widgetManager: WidgetManager?
     private var captures: [UUID: CaptureSource] = [:]
     private var statsTimer: Timer?
@@ -202,6 +203,7 @@ final class AppCoordinator: ObservableObject {
         widgetManager = WidgetManager(renderer: renderer)
         widgetManager?.slack = slack
         widgetManager?.github = github
+        widgetManager?.calendar = calendar
         IMUService.shared.stateChanged = { [weak self] state in
             Task { @MainActor in
                 self?.glassesState = state

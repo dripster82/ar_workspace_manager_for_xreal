@@ -2,7 +2,7 @@ import Foundation
 
 /// Kinds of HUD widget. v1: a clock and a power/battery indicator.
 public enum WidgetKind: String, Codable, CaseIterable, Sendable, Identifiable {
-    case clock, power, slack, github
+    case clock, power, slack, github, calendar
     public var id: String { rawValue }
     public var displayName: String {
         switch self {
@@ -10,6 +10,7 @@ public enum WidgetKind: String, Codable, CaseIterable, Sendable, Identifiable {
         case .power: return "Power"
         case .slack: return "Slack unreads"
         case .github: return "GitHub PRs"
+        case .calendar: return "Google Calendar"
         }
     }
     public var symbol: String {
@@ -18,6 +19,7 @@ public enum WidgetKind: String, Codable, CaseIterable, Sendable, Identifiable {
         case .power: return "battery.100"
         case .slack: return "message.badge"
         case .github: return "chevron.left.forwardslash.chevron.right"
+        case .calendar: return "calendar"
         }
     }
 }

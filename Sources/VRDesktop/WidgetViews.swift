@@ -108,6 +108,66 @@ struct SlackWidgetView: View {
     }
 }
 
+struct CalendarWidgetView: View {
+    let style: WidgetStyle
+    let connected: Bool
+    let events: [CalEvent]
+
+    private static let timeFmt: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "HH:mm"; return f
+    }()
+
+    private func relative(_ e: CalEvent) -> String {
+        let now = Date()
+        if now >= e.start && now < e.end { return "now" }
+        let secs = e.start.timeIntervalSince(now)
+        guard secs > 0 else { return "" }
+        if secs < 3600 { return "in \(max(1, Int(secs / 60)))m" }
+        if secs < 86400 { return "in \(Int(secs / 3600))h" }
+        return ""
+    }
+
+    private var upcoming: [CalEvent] {
+        let now = Date()
+        return events.filter { $0.end > now }.prefix(3).map { $0 }
+    }
+
+    var body: some View {
+        WidgetPill(style: style) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Image(systemName: "calendar").font(.system(size: 15))
+                    Text("Calendar").font(.system(size: 16, weight: .semibold, design: .rounded))
+                }
+                if !connected {
+                    Text("Not connected").font(.system(size: 14)).opacity(0.7)
+                } else if upcoming.isEmpty {
+                    Text("No upcoming events").font(.system(size: 14)).opacity(0.7)
+                } else {
+                    ForEach(Array(upcoming.enumerated()), id: \.element.id) { idx, e in
+                        let isNext = idx == 0
+                        HStack(spacing: 8) {
+                            Text(e.allDay ? "all-day" : Self.timeFmt.string(from: e.start))
+                                .font(.system(size: 13, weight: .medium, design: .rounded).monospacedDigit())
+                                .frame(width: 52, alignment: .leading).opacity(0.8)
+                            Text(e.title).font(.system(size: 15, weight: isNext ? .semibold : .medium))
+                                .lineLimit(1)
+                            Spacer(minLength: 8)
+                            let r = relative(e)
+                            if !r.isEmpty {
+                                Text(r).font(.system(size: 13, weight: .bold, design: .rounded))
+                                    .foregroundStyle(r == "now" ? .green : style.tint.color.opacity(0.85))
+                            }
+                        }
+                        .opacity(isNext ? 1 : 0.75)
+                    }
+                }
+            }
+            .frame(minWidth: 200, alignment: .leading)
+        }
+    }
+}
+
 struct GitHubWidgetView: View {
     let style: WidgetStyle
     let connected: Bool

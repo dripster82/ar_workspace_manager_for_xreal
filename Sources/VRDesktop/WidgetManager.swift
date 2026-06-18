@@ -43,6 +43,7 @@ final class WidgetManager {
     private weak var renderer: GlassesRenderer?
     weak var slack: SlackService?
     weak var github: GitHubService?
+    weak var calendar: GoogleCalendarService?
     private var widgets: [HUDWidget] = []
     private var timer: Timer?
     /// Apparent width (metres) of a widget card at scale 1; height follows the rendered aspect.
@@ -106,6 +107,10 @@ final class WidgetManager {
             content = AnyView(GitHubWidgetView(style: widget.style,
                                                connected: github?.isConnected ?? false,
                                                counts: github?.counts ?? GitHubCounts()))
+        case .calendar:
+            content = AnyView(CalendarWidgetView(style: widget.style,
+                                                 connected: calendar?.isConnected ?? false,
+                                                 events: calendar?.events ?? []))
         }
         let renderer = ImageRenderer(content: content)
         renderer.scale = 2
