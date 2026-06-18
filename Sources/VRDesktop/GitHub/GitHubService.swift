@@ -123,16 +123,18 @@ final class GitHubService: ObservableObject {
     private func scheduleNext() { nextRefreshAt = Date().addingTimeInterval(TimeInterval(pollSeconds)) }
 
     private func refresh() async {
-        guard case .connected(let login) = state, !refreshing else { return }
+        guard case .connected = state, !refreshing else { return }
         refreshing = true
         defer { refreshing = false }
         do {
-            let direct = try await searchCount("is:open is:pr user-review-requested:\(login)")
-            let allReq = try await searchCount("is:open is:pr review-requested:\(login)")
-            let changes = try await searchCount("is:open is:pr author:\(login) draft:false review:changes_requested")
-            let failing = try await searchCount("is:open is:pr author:\(login) draft:false status:failure")
-            let ready = try await searchCount("is:open is:pr author:\(login) draft:false review:approved status:success")
-            counts = GitHubCounts(needsReview: direct, teamReview: max(0, allReq - direct),
+            // sort:updated-desc omitted — it's a UI-only sort, not a REST search qualifier, and
+            // doesn't affect total_count.
+            let needsReview = try await searchCount("is:pr user-review-requested:@me state:open archived:false")
+            let teamReview = try await searchCount("is:pr team-review-requested-user:@me state:open archived:false")
+            let changes = try await searchCount("is:pr author:@me state:open review:changes_requested archived:false -is:draft")
+            let failing = try await searchCount("is:pr author:@me state:open status:failure archived:false -is:draft")
+            let ready = try await searchCount("is:pr author:@me state:open -is:draft review:approved -review:changes_requested -status:failure -is:queued archived:false")
+            counts = GitHubCounts(needsReview: needsReview, teamReview: teamReview,
                                   changesRequested: changes, failingChecks: failing, readyToMerge: ready)
         } catch GHError.unauthorized {
             state = .error("Token expired — reconnect.")
