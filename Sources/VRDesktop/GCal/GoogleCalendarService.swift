@@ -74,6 +74,7 @@ final class GoogleCalendarService: ObservableObject {
                 let key = "\(event.id)#\(lead)"
                 if now >= at, now < at.addingTimeInterval(120), !firedAlarms.contains(key) {
                     firedAlarms.insert(key)
+                    DebugLog.shared.log("gcal alarm: '\(event.title)' lead=\(lead)min start=\(event.start)")
                     onAlarm(event, lead)
                 }
             }

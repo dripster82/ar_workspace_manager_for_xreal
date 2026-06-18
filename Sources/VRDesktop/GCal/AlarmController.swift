@@ -37,6 +37,7 @@ final class AlarmController {
 
     func dismiss() {
         guard showing else { return }
+        DebugLog.shared.log("gcal alarm: dismissed")
         showing = false
         sound?.stop(); sound = nil
         autoHide?.invalidate(); autoHide = nil
