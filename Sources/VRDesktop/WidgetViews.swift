@@ -19,18 +19,20 @@ private struct WidgetPill<Content: View>: View {
     let style: WidgetStyle
     @ViewBuilder let content: () -> Content
 
+    private let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+
     var body: some View {
         let inner = content()
             .foregroundStyle(style.tint.color)
-            .padding(.horizontal, style.background == .none ? 4 : 26)
+            .padding(.horizontal, style.background == .none ? 4 : 22)
             .padding(.vertical, style.background == .none ? 2 : 14)
         switch style.background {
         case .pill:
-            inner.background(Color.black.opacity(0.55), in: Capsule())
-                .overlay(Capsule().strokeBorder(.white.opacity(0.15)))
+            inner.background(Color.black.opacity(0.55), in: shape)
+                .overlay(shape.strokeBorder(.white.opacity(0.15)))
         case .solid:
-            inner.background(Color.black.opacity(0.92), in: Capsule())
-                .overlay(Capsule().strokeBorder(.white.opacity(0.18)))
+            inner.background(Color.black.opacity(0.92), in: shape)
+                .overlay(shape.strokeBorder(.white.opacity(0.18)))
         case .none:
             inner.shadow(color: .black.opacity(0.85), radius: 3, x: 0, y: 1)
         }

@@ -38,6 +38,21 @@ final class SlackService: ObservableObject {
     static let pollOptions: [(label: String, seconds: Int)] = [
         ("10s", 10), ("15s", 15), ("30s", 30), ("1 min", 60), ("2 min", 120), ("5 min", 300),
     ]
+    /// Comma-separated names of important people/channels that should be checked every sweep
+    /// (top priority), instead of waiting for the rotation. Persisted.
+    @Published var priorityText: String = UserDefaults.standard.string(forKey: "slackPriority") ?? "" {
+        didSet { UserDefaults.standard.set(priorityText, forKey: "slackPriority") }
+    }
+    private var priorityTerms: [String] {
+        priorityText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+            .filter { !$0.isEmpty }
+    }
+    private func matchesPriority(_ label: String?) -> Bool {
+        guard let l = label?.lowercased(), !l.isEmpty, !priorityTerms.isEmpty else { return false }
+        return priorityTerms.contains { l.contains($0) || $0.contains(l) }
+    }
+    /// DM display names by conversation id, seeded gradually so priority DMs can be matched by name.
+    private var dmNameByID: [String: String] = [:]
 
     static let redirectPort: UInt16 = 53682
     static var redirectURI: String { "http://localhost:\(redirectPort)/oauth/callback" }
@@ -180,10 +195,20 @@ final class SlackService: ObservableObject {
             // most-recently-active DMs whose activity changed since last sweep, plus any currently
             // shown as unread (to catch reads). A few calls, not ~80 (which tripped the limit).
             let dms = convos.filter { $0.isIM }
+            // Seed a few DM display names per sweep so priority DMs can be matched by name.
+            for c in dms.filter({ $0.userID != nil && dmNameByID[$0.id] == nil }).prefix(5) {
+                if let n = await resolveUserName(c.userID, token: token) { dmNameByID[c.id] = n }
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+            }
             let recent = dms.sorted { $0.updated > $1.updated }.prefix(maxScanPerSweep)
             var dmCandidates: [Convo] = recent.filter { $0.updated > (seenUpdated[$0.id] ?? -1) }
-            let dmIDs = Set(dmCandidates.map { $0.id })
-            dmCandidates += dms.filter { unreadByID[$0.id]?.showsCount == true && !dmIDs.contains($0.id) }
+            var dmIDs = Set(dmCandidates.map { $0.id })
+            // Always re-check currently-unread DMs and any flagged as priority.
+            dmCandidates += dms.filter {
+                !dmIDs.contains($0.id)
+                    && (unreadByID[$0.id]?.showsCount == true || matchesPriority(dmNameByID[$0.id]))
+            }
+            dmIDs = Set(dmCandidates.map { $0.id })
 
             for c in dmCandidates {
                 guard let info = try await conversationInfo(id: c.id, token: token) else { continue }
@@ -208,7 +233,9 @@ final class SlackService: ObservableObject {
                 }
                 mpimCursor = (mpimCursor + mpimBatchPerSweep) % mpims.count
             }
-            let currentMpims = mpims.filter { unreadByID[$0.id]?.symbol == "person.2.fill" }
+            let currentMpims = mpims.filter {
+                unreadByID[$0.id]?.symbol == "person.2.fill" || matchesPriority(mpimLabel($0.name))
+            }
             var mProbed = Set<String>()
             for c in mpimBatch + currentMpims where mProbed.insert(c.id).inserted {
                 guard let info = try await conversationInfo(id: c.id, token: token) else { continue }
@@ -225,19 +252,20 @@ final class SlackService: ObservableObject {
             let channels = convos.filter { !$0.isIM && !$0.isMpim }
             let discover = channels.filter { !channelStarChecked.contains($0.id) }.prefix(maxStarDiscoveryPerSweep)
             let knownStarred = channels.filter { starredChannels.contains($0.id) }
+            let priorityChannels = channels.filter { matchesPriority($0.name) }
             var probed = Set<String>()
-            for c in Array(discover) + knownStarred where probed.insert(c.id).inserted {
+            for c in Array(discover) + knownStarred + priorityChannels where probed.insert(c.id).inserted {
                 guard let info = try await conversationInfo(id: c.id, token: token) else { continue }
                 channelStarChecked.insert(c.id)
-                if info.isStarred {
-                    starredChannels.insert(c.id)
+                if info.isStarred { starredChannels.insert(c.id) } else { starredChannels.remove(c.id) }
+                // Show a channel's unread if it's starred OR explicitly prioritised by name.
+                if info.isStarred || matchesPriority(info.name ?? c.name) {
                     var unread = info.unread > 0
                     if !unread { unread = await channelHasUnread(id: c.id, lastRead: info.lastRead, token: token) }
                     unreadByID[c.id] = unread
                         ? SlackUnread(id: c.id, name: info.name ?? c.name ?? "channel", count: 0, showsCount: false, symbol: "number")
                         : nil
                 } else {
-                    starredChannels.remove(c.id)
                     unreadByID[c.id] = nil
                 }
                 try? await Task.sleep(nanoseconds: 1_200_000_000)

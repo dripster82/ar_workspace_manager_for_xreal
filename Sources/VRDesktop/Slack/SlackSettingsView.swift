@@ -37,6 +37,15 @@ struct SlackSettingsView: View {
                     Spacer()
                 }
 
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Always check (top priority)").font(.caption)
+                    TextField("e.g. Derek, dev-interviewing, HR", text: $slack.priorityText)
+                        .textFieldStyle(.roundedBorder).font(.caption)
+                    Text("Comma-separated names of people / channels to check every refresh, "
+                         + "instead of waiting for the rotation.")
+                        .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+
                 HStack(spacing: 10) {
                     switch slack.state {
                     case .connecting:
