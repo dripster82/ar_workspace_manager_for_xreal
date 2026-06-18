@@ -92,7 +92,7 @@ struct SlackWidgetView: View {
                         }
                     }
                 }
-                if connected {
+                if connected && style.showRefreshCountdown {
                     HStack(spacing: 4) {
                         Image(systemName: "arrow.clockwise").font(.system(size: 10))
                         Text(nextIn.map { "next in \($0)s" } ?? "refreshing…")

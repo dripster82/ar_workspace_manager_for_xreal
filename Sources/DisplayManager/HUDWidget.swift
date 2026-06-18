@@ -42,13 +42,16 @@ public struct WidgetStyle: Codable, Hashable, Sendable {
     public var background: WidgetBackground
     public var clock24h: Bool
     public var showSeconds: Bool
+    /// Slack: show the "next refresh in Xs" countdown footer (off by default).
+    public var showRefreshCountdown: Bool
 
     public init(tint: WidgetTint = .white, background: WidgetBackground = .pill,
-                clock24h: Bool = true, showSeconds: Bool = false) {
+                clock24h: Bool = true, showSeconds: Bool = false, showRefreshCountdown: Bool = false) {
         self.tint = tint
         self.background = background
         self.clock24h = clock24h
         self.showSeconds = showSeconds
+        self.showRefreshCountdown = showRefreshCountdown
     }
 
     public init(from decoder: Decoder) throws {
@@ -57,6 +60,7 @@ public struct WidgetStyle: Codable, Hashable, Sendable {
         background = try c.decodeIfPresent(WidgetBackground.self, forKey: .background) ?? .pill
         clock24h = try c.decodeIfPresent(Bool.self, forKey: .clock24h) ?? true
         showSeconds = try c.decodeIfPresent(Bool.self, forKey: .showSeconds) ?? false
+        showRefreshCountdown = try c.decodeIfPresent(Bool.self, forKey: .showRefreshCountdown) ?? false
     }
 }
 

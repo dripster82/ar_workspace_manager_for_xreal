@@ -674,6 +674,9 @@ struct WidgetRow: View {
                     Toggle("24-hour", isOn: $cfg.style.clock24h).font(.caption)
                     Toggle("Show seconds", isOn: $cfg.style.showSeconds).font(.caption)
                 }
+                if cfg.kind == .slack {
+                    Toggle("Show refresh countdown", isOn: $cfg.style.showRefreshCountdown).font(.caption)
+                }
                 HStack {
                     Button("Remove", role: .destructive, action: onRemove)
                     Spacer()
