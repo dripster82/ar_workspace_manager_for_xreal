@@ -88,8 +88,13 @@ struct SlackWidgetView: View {
                                 .font(.system(size: 12)).opacity(0.7).frame(width: 14)
                             Text(item.name).font(.system(size: 16, weight: .medium)).lineLimit(1)
                             Spacer(minLength: 8)
-                            Text(countLabel(item.count))
-                                .font(.system(size: 15, weight: .bold, design: .rounded).monospacedDigit())
+                            if item.isChannel {
+                                // Starred channel: just highlight that it has unread (no count).
+                                Circle().frame(width: 8, height: 8)
+                            } else {
+                                Text(countLabel(item.count))
+                                    .font(.system(size: 15, weight: .bold, design: .rounded).monospacedDigit())
+                            }
                         }
                     }
                 }

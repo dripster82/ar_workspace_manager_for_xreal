@@ -40,7 +40,7 @@ final class SlackService: ObservableObject {
 
     static let redirectPort: UInt16 = 53682
     static var redirectURI: String { "http://localhost:\(redirectPort)/oauth/callback" }
-    static let scopes = "channels:read,groups:read,im:read,mpim:read,users:read"
+    static let scopes = "channels:read,groups:read,im:read,mpim:read,users:read,channels:history,groups:history"
 
     /// When the next poll tick is scheduled — drives the widget's "next update" countdown.
     @Published private(set) var nextRefreshAt: Date?
@@ -56,6 +56,10 @@ final class SlackService: ObservableObject {
     private var unreadByID: [String: SlackUnread] = [:]
     /// Cap on conversations probed for unread per sweep (recent-activity first) — keeps under limits.
     private let maxScanPerSweep = 25
+    /// Starred channels discovered so far, and which channels we've already checked for star status.
+    private var starredChannels: Set<String> = []
+    private var channelStarChecked: Set<String> = []
+    private let maxStarDiscoveryPerSweep = 6
 
     // MARK: Stored credentials
 
@@ -166,18 +170,17 @@ final class SlackService: ObservableObject {
         defer { refreshing = false }
         do {
             let convos = try await listConversations(token: token)
-            // conversations.info only returns unread counts for DMs (is_im) — channels/mpims come
-            // back with no unread fields under these scopes — so we only scan DMs. Probe the
-            // most-recently-active DMs whose activity changed since we last looked, plus any we
-            // currently show as unread (to catch reads). Keeps each sweep to a few calls, not ~80.
+
+            // --- DMs: real unread counts (conversations.info returns them for is_im). Probe the
+            // most-recently-active DMs whose activity changed since last sweep, plus any currently
+            // shown as unread (to catch reads). A few calls, not ~80 (which tripped the limit).
             let dms = convos.filter { $0.isIM }
             let recent = dms.sorted { $0.updated > $1.updated }.prefix(maxScanPerSweep)
-            var candidates: [Convo] = recent.filter { $0.updated > (seenUpdated[$0.id] ?? -1) }
-            let candidateIDs = Set(candidates.map { $0.id })
-            candidates += dms.filter { unreadByID[$0.id] != nil && !candidateIDs.contains($0.id) }
-            DebugLog.shared.log("slack refresh: \(dms.count) DMs, probing \(candidates.count)")
+            var dmCandidates: [Convo] = recent.filter { $0.updated > (seenUpdated[$0.id] ?? -1) }
+            let dmIDs = Set(dmCandidates.map { $0.id })
+            dmCandidates += dms.filter { unreadByID[$0.id]?.isChannel == false && !dmIDs.contains($0.id) }
 
-            for c in candidates {
+            for c in dmCandidates {
                 guard let info = try await conversationInfo(id: c.id, token: token) else { continue }
                 seenUpdated[c.id] = c.updated
                 if info.unread > 0 {
@@ -188,7 +191,36 @@ final class SlackService: ObservableObject {
                 }
                 try? await Task.sleep(nanoseconds: 1_200_000_000) // ~1.2s spacing → stay under ~50/min
             }
-            unreads = unreadByID.values.sorted { $0.count > $1.count }
+
+            // --- Starred channels: highlight unread (boolean, no count). Discover star status a few
+            // channels per sweep (cached), then each sweep re-check known starred channels.
+            let channels = convos.filter { !$0.isIM }
+            let discover = channels.filter { !channelStarChecked.contains($0.id) }.prefix(maxStarDiscoveryPerSweep)
+            let knownStarred = channels.filter { starredChannels.contains($0.id) }
+            var probed = Set<String>()
+            for c in Array(discover) + knownStarred where probed.insert(c.id).inserted {
+                guard let info = try await conversationInfo(id: c.id, token: token) else { continue }
+                channelStarChecked.insert(c.id)
+                if info.isStarred {
+                    starredChannels.insert(c.id)
+                    var unread = info.unread > 0
+                    if !unread { unread = await channelHasUnread(id: c.id, lastRead: info.lastRead, token: token) }
+                    unreadByID[c.id] = unread
+                        ? SlackUnread(id: c.id, name: info.name ?? c.name ?? "channel", count: 0, isChannel: true)
+                        : nil
+                } else {
+                    starredChannels.remove(c.id)
+                    unreadByID[c.id] = nil
+                }
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+            }
+            let starredCount = starredChannels.count, unreadTotal = unreadByID.count
+            DebugLog.shared.log("slack refresh: \(dms.count) DMs, \(starredCount) starred ch, \(unreadTotal) unread")
+
+            unreads = unreadByID.values.sorted {
+                if $0.isChannel != $1.isChannel { return !$0.isChannel } // DMs first
+                return $0.count > $1.count
+            }
         } catch SlackError.api(let msg) where msg == "invalid_auth" || msg == "token_revoked" || msg == "account_inactive" {
             state = .error("Slack token expired — reconnect.")
             stopPolling()
@@ -200,7 +232,7 @@ final class SlackService: ObservableObject {
     // MARK: API
 
     private struct Convo { let id: String; let isIM: Bool; let name: String?; let userID: String?; let updated: Double }
-    private struct Info { let unread: Int; let name: String?; let isStarred: Bool }
+    private struct Info { let unread: Int; let name: String?; let isStarred: Bool; let lastRead: Double? }
 
     private func listConversations(token: String) async throws -> [Convo] {
         let json = try await call("users.conversations", token: token, query: [
@@ -222,7 +254,19 @@ final class SlackService: ObservableObject {
         let json = try await call("conversations.info", token: token, query: ["channel": id])
         guard let ch = json["channel"] as? [String: Any] else { return nil }
         let unread = (ch["unread_count_display"] as? Int) ?? (ch["unread_count"] as? Int) ?? 0
-        return Info(unread: unread, name: ch["name"] as? String, isStarred: (ch["is_starred"] as? Bool) ?? false)
+        let lastRead = (ch["last_read"] as? String).flatMap(Double.init) ?? (ch["last_read"] as? Double)
+        return Info(unread: unread, name: ch["name"] as? String,
+                    isStarred: (ch["is_starred"] as? Bool) ?? false, lastRead: lastRead)
+    }
+
+    /// Channels don't report an unread count under read scopes, so test for any message newer than
+    /// last_read via conversations.history (needs channels:history / groups:history).
+    private func channelHasUnread(id: String, lastRead: Double?, token: String) async -> Bool {
+        guard let lastRead else { return false }
+        guard let json = try? await call("conversations.history", token: token, query: [
+            "channel": id, "oldest": String(lastRead), "limit": "1", "inclusive": "false",
+        ]) else { return false }
+        return !((json["messages"] as? [[String: Any]]) ?? []).isEmpty
     }
 
     private func resolveUserName(_ userID: String?, token: String) async -> String? {
