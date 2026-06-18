@@ -131,16 +131,19 @@ public struct Workspace: Codable, Identifiable, Hashable, Sendable {
     public var physicalInAR: [String: VirtualScreenConfig]
     /// Head-locked HUD widgets (clock, power, …) floating in the field of view.
     public var widgets: [HUDWidget]
+    /// Stack containers that lay out grouped widgets.
+    public var stacks: [HUDStack]
 
     public init(id: UUID = UUID(), name: String,
                 virtualScreens: [VirtualScreenConfig] = [],
                 physicalInAR: [String: VirtualScreenConfig] = [:],
-                widgets: [HUDWidget] = []) {
+                widgets: [HUDWidget] = [], stacks: [HUDStack] = []) {
         self.id = id
         self.name = name
         self.virtualScreens = virtualScreens
         self.physicalInAR = physicalInAR
         self.widgets = widgets
+        self.stacks = stacks
     }
 
     // Custom decoding so workspaces saved before widgets existed still load.
@@ -151,6 +154,7 @@ public struct Workspace: Codable, Identifiable, Hashable, Sendable {
         virtualScreens = try c.decodeIfPresent([VirtualScreenConfig].self, forKey: .virtualScreens) ?? []
         physicalInAR = try c.decodeIfPresent([String: VirtualScreenConfig].self, forKey: .physicalInAR) ?? [:]
         widgets = try c.decodeIfPresent([HUDWidget].self, forKey: .widgets) ?? []
+        stacks = try c.decodeIfPresent([HUDStack].self, forKey: .stacks) ?? []
     }
 }
 

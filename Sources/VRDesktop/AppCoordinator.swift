@@ -1126,7 +1126,7 @@ final class AppCoordinator: ObservableObject {
 
         renderer.setScreens(assembleScene(pairs))
         arActive = true
-        widgetManager?.setWidgets(workspace.widgets)
+        widgetManager?.setLayout(widgets: workspace.widgets, stacks: workspace.stacks)
         widgetManager?.start()
         refreshBrightness() // sync the slider to the glasses' actual brightness as AR starts
         lastWindowSnapshot = CACurrentMediaTime() // defer the first periodic snapshot ~10s
@@ -1771,11 +1771,39 @@ final class AppCoordinator: ObservableObject {
         commitWidgets(ws)
     }
 
+    // MARK: HUD stacks
+
+    var stacks: [HUDStack] { workspaceStore.activeWorkspace?.stacks ?? [] }
+
+    func addStack() {
+        guard var ws = workspaceStore.activeWorkspace else { return }
+        let n = ws.stacks.count
+        ws.stacks.append(HUDStack(name: "Stack \(n + 1)",
+                                  yawDegrees: -14 + Double(n % 3) * 16, pitchDegrees: 8))
+        commitWidgets(ws)
+    }
+
+    func updateStack(_ stack: HUDStack) {
+        guard var ws = workspaceStore.activeWorkspace,
+              let i = ws.stacks.firstIndex(where: { $0.id == stack.id }) else { return }
+        ws.stacks[i] = stack
+        commitWidgets(ws)
+    }
+
+    func removeStack(id: UUID) {
+        guard var ws = workspaceStore.activeWorkspace,
+              let i = ws.stacks.firstIndex(where: { $0.id == id }) else { return }
+        ws.stacks.remove(at: i)
+        // Release its members back to standalone.
+        for j in ws.widgets.indices where ws.widgets[j].stackID == id { ws.widgets[j].stackID = nil }
+        commitWidgets(ws)
+    }
+
     private func commitWidgets(_ ws: Workspace) {
         workspaceStore.activeWorkspace = ws
         workspaceStore.save()
         objectWillChange.send()
-        if arActive { widgetManager?.setWidgets(ws.widgets) }
+        if arActive { widgetManager?.setLayout(widgets: ws.widgets, stacks: ws.stacks) }
     }
 
     /// All editable screens in the active workspace, for the UI list and Layout map: virtual

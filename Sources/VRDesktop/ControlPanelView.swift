@@ -415,6 +415,8 @@ struct ControlPanelView: View {
             HStack {
                 Text("Floating info cards in your view.").font(.caption).foregroundStyle(.secondary)
                 Spacer()
+                Button { coordinator.addStack() } label: { Label("Add stack", systemImage: "rectangle.stack") }
+                    .buttonStyle(.borderless).controlSize(.small)
                 Menu {
                     ForEach(WidgetKind.allCases) { kind in
                         Button {
@@ -432,8 +434,13 @@ struct ControlPanelView: View {
                     .font(.caption2).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
+                ForEach(coordinator.stacks) { stack in
+                    StackRow(initial: stack,
+                             onChange: { coordinator.updateStack($0) },
+                             onRemove: { coordinator.removeStack(id: stack.id) })
+                }
                 ForEach(coordinator.widgets) { widget in
-                    WidgetRow(initial: widget,
+                    WidgetRow(initial: widget, stacks: coordinator.stacks,
                               onChange: { coordinator.updateWidget($0) },
                               onRemove: { coordinator.removeWidget(id: widget.id) })
                 }
@@ -642,14 +649,17 @@ struct ControlPanelView: View {
 /// by dragging the widget in the Layout map's floating zone.
 struct WidgetRow: View {
     let initial: HUDWidget
+    let stacks: [HUDStack]
     var onChange: (HUDWidget) -> Void
     var onRemove: () -> Void
 
     @State private var cfg: HUDWidget
     @State private var expanded = false
 
-    init(initial: HUDWidget, onChange: @escaping (HUDWidget) -> Void, onRemove: @escaping () -> Void) {
+    init(initial: HUDWidget, stacks: [HUDStack],
+         onChange: @escaping (HUDWidget) -> Void, onRemove: @escaping () -> Void) {
         self.initial = initial
+        self.stacks = stacks
         self.onChange = onChange
         self.onRemove = onRemove
         _cfg = State(initialValue: initial)
@@ -658,6 +668,15 @@ struct WidgetRow: View {
     var body: some View {
         DisclosureGroup(isExpanded: $expanded) {
             VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Stack").font(.caption).frame(width: 70, alignment: .leading)
+                    Picker("", selection: Binding(get: { cfg.stackID }, set: { cfg.stackID = $0 })) {
+                        Text("None").tag(UUID?.none)
+                        ForEach(stacks) { Text($0.name).tag(UUID?.some($0.id)) }
+                    }.labelsHidden().fixedSize()
+                    Spacer()
+                }
+                .help("Put this widget into a stack container, or None to place it on its own.")
                 HStack {
                     Text("Scale").font(.caption).frame(width: 70, alignment: .leading)
                     Slider(value: $cfg.scale, in: 0.1...3, step: 0.05)
@@ -696,6 +715,67 @@ struct WidgetRow: View {
             HStack {
                 Image(systemName: cfg.kind.symbol).foregroundStyle(.secondary)
                 Text(cfg.kind.displayName)
+                Spacer()
+                Text(String(format: "yaw %.0f°  pitch %.0f°", cfg.yawDegrees, cfg.pitchDegrees))
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        .onChange(of: cfg) { newValue in onChange(newValue) }
+        .onChange(of: initial) { newValue in if newValue != cfg { cfg = newValue } }
+    }
+}
+
+/// A row to edit a stack container: axis, alignment, scale, remove. Position is set by dragging the
+/// stack in the Layout map's floating zone; member widgets are assigned via each widget's row.
+struct StackRow: View {
+    let initial: HUDStack
+    var onChange: (HUDStack) -> Void
+    var onRemove: () -> Void
+
+    @State private var cfg: HUDStack
+    @State private var expanded = false
+
+    init(initial: HUDStack, onChange: @escaping (HUDStack) -> Void, onRemove: @escaping () -> Void) {
+        self.initial = initial; self.onChange = onChange; self.onRemove = onRemove
+        _cfg = State(initialValue: initial)
+    }
+
+    private var alignLabels: [(StackAlign, String)] {
+        cfg.axis == .vertical
+            ? [(.start, "Left"), (.center, "Centre"), (.end, "Right")]
+            : [(.start, "Top"), (.center, "Centre"), (.end, "Bottom")]
+    }
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $expanded) {
+            VStack(alignment: .leading, spacing: 6) {
+                Picker("Direction", selection: $cfg.axis) {
+                    Text("Vertical").tag(StackAxis.vertical)
+                    Text("Horizontal").tag(StackAxis.horizontal)
+                }.pickerStyle(.segmented)
+                HStack {
+                    Text("Align").font(.caption).frame(width: 70, alignment: .leading)
+                    Picker("", selection: $cfg.align) {
+                        ForEach(alignLabels, id: \.0) { Text($0.1).tag($0.0) }
+                    }.pickerStyle(.segmented)
+                }
+                HStack {
+                    Text("Scale").font(.caption).frame(width: 70, alignment: .leading)
+                    Slider(value: $cfg.scale, in: 0.1...3, step: 0.05)
+                    Text(String(format: "%.0f%%", cfg.scale * 100)).font(.caption.monospacedDigit()).frame(width: 44)
+                }
+                HStack {
+                    Button("Remove", role: .destructive, action: onRemove)
+                    Spacer()
+                }.controlSize(.small)
+            }
+            .padding(.leading, 8)
+        } label: {
+            HStack {
+                Image(systemName: "rectangle.stack").foregroundStyle(.tint)
+                Text(cfg.name)
+                Text(cfg.axis == .vertical ? "vertical" : "horizontal")
+                    .font(.caption2).foregroundStyle(.secondary)
                 Spacer()
                 Text(String(format: "yaw %.0f°  pitch %.0f°", cfg.yawDegrees, cfg.pitchDegrees))
                     .font(.caption2).foregroundStyle(.secondary)
@@ -956,14 +1036,21 @@ struct PlacementMapView: View {
                                       lookedAt: coordinator.lookedAtScreenID == cfg.id,
                                       onChange: { coordinator.updateScreen($0) })
                         }
-                        // Head-locked HUD widgets live in the field of view → floating zone only.
+                        // Head-locked HUD widgets/stacks live in the field of view → floating only.
                         if placement == .floating {
-                            ForEach(coordinator.widgets) { widget in
+                            ForEach(coordinator.widgets.filter { $0.stackID == nil }) { widget in
                                 WidgetBox(initial: widget,
                                           area: CGSize(width: contentW, height: contentH),
                                           coordinateSpace: spaceName, pxPerDeg: ppd,
                                           yawRange: baseYaw, pitchRange: basePitch,
                                           onChange: { coordinator.updateWidget($0) })
+                            }
+                            ForEach(coordinator.stacks) { stack in
+                                StackBox(initial: stack,
+                                         area: CGSize(width: contentW, height: contentH),
+                                         coordinateSpace: spaceName, pxPerDeg: ppd,
+                                         yawRange: baseYaw, pitchRange: basePitch,
+                                         onChange: { coordinator.updateStack($0) })
                             }
                         }
                     }
@@ -1107,6 +1194,51 @@ private struct WidgetBox: View {
                 DragGesture(coordinateSpace: .named(coordinateSpace))
                     .onChanged { apply(location: $0.location) }
             )
+            .onChange(of: initial) { newValue in if newValue != cfg { cfg = newValue } }
+    }
+}
+
+/// A draggable stack-container box in the floating zone — drag to set the stack's yaw/pitch.
+private struct StackBox: View {
+    let initial: HUDStack
+    let area: CGSize
+    let coordinateSpace: String
+    let pxPerDeg: CGFloat
+    let yawRange: Double
+    let pitchRange: Double
+    var onChange: (HUDStack) -> Void
+
+    @State private var cfg: HUDStack
+
+    init(initial: HUDStack, area: CGSize, coordinateSpace: String, pxPerDeg: CGFloat,
+         yawRange: Double, pitchRange: Double, onChange: @escaping (HUDStack) -> Void) {
+        self.initial = initial; self.area = area; self.coordinateSpace = coordinateSpace
+        self.pxPerDeg = pxPerDeg; self.yawRange = yawRange; self.pitchRange = pitchRange
+        self.onChange = onChange
+        _cfg = State(initialValue: initial)
+    }
+
+    private func point() -> CGPoint {
+        CGPoint(x: area.width / 2 - CGFloat(cfg.yawDegrees) * pxPerDeg,
+                y: area.height / 2 - CGFloat(cfg.pitchDegrees) * pxPerDeg)
+    }
+
+    private func apply(location: CGPoint) {
+        cfg.yawDegrees = min(yawRange, max(-yawRange, Double((area.width / 2 - location.x) / pxPerDeg)))
+        cfg.pitchDegrees = min(pitchRange, max(-pitchRange, Double((area.height / 2 - location.y) / pxPerDeg)))
+        onChange(cfg)
+    }
+
+    var body: some View {
+        let w: CGFloat = cfg.axis == .vertical ? 26 : 40
+        let h: CGFloat = cfg.axis == .vertical ? 40 : 26
+        return RoundedRectangle(cornerRadius: 5)
+            .fill(Color.teal.opacity(0.5))
+            .overlay(Image(systemName: "rectangle.stack").font(.system(size: 10)).foregroundStyle(.white))
+            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(.white.opacity(0.7), lineWidth: 1))
+            .frame(width: w * CGFloat(cfg.scale), height: h * CGFloat(cfg.scale))
+            .position(point())
+            .gesture(DragGesture(coordinateSpace: .named(coordinateSpace)).onChanged { apply(location: $0.location) })
             .onChange(of: initial) { newValue in if newValue != cfg { cfg = newValue } }
     }
 }
