@@ -482,10 +482,13 @@ struct ControlPanelView: View {
     /// conflicts with its toggle). The row is a drop target: dropping another widget here inserts
     /// it before this one, reordering within a stack or moving it into this widget's group.
     private func widgetRow(_ w: HUDWidget) -> some View {
-        HStack(alignment: .top, spacing: 4) {
+        HStack(alignment: .top, spacing: 6) {
+            // Solid grip — onDrag only makes opaque content draggable, so it needs a filled area.
             Image(systemName: "line.3.horizontal")
                 .font(.body).foregroundStyle(.secondary)
-                .frame(width: 22, height: 24).contentShape(Rectangle())
+                .frame(width: 26).frame(maxHeight: .infinity)
+                .background(Color.secondary.opacity(0.14), in: RoundedRectangle(cornerRadius: 4))
+                .contentShape(Rectangle())
                 .onDrag { NSItemProvider(object: w.id.uuidString as NSString) }
                 .help("Drag to reorder, or onto a stack to add it")
             WidgetRow(initial: w, stacks: coordinator.stacks,
@@ -707,58 +710,65 @@ struct WidgetRow: View {
     }
 
     var body: some View {
-        DisclosureGroup(isExpanded: $expanded) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Text("Stack").font(.caption).frame(width: 70, alignment: .leading)
-                    Picker("", selection: Binding(get: { cfg.stackID }, set: { cfg.stackID = $0 })) {
-                        Text("None").tag(UUID?.none)
-                        ForEach(stacks) { Text($0.name).tag(UUID?.some($0.id)) }
-                    }.labelsHidden().fixedSize()
-                    Spacer()
-                }
-                .help("Put this widget into a stack container, or None to place it on its own.")
-                HStack {
-                    Text("Scale").font(.caption).frame(width: 70, alignment: .leading)
-                    Slider(value: $cfg.scale, in: 0.1...3, step: 0.05)
-                    Text(String(format: "%.0f%%", cfg.scale * 100)).font(.caption.monospacedDigit())
-                        .frame(width: 44)
-                }
-                HStack {
-                    Text("Colour").font(.caption).frame(width: 70, alignment: .leading)
-                    Picker("", selection: $cfg.style.tint) {
-                        ForEach(WidgetTint.allCases) { Text($0.displayName).tag($0) }
-                    }.labelsHidden().fixedSize()
-                    Spacer()
-                }
-                HStack {
-                    Text("Background").font(.caption).frame(width: 70, alignment: .leading)
-                    Picker("", selection: $cfg.style.background) {
-                        ForEach(WidgetBackground.allCases) { Text($0.displayName).tag($0) }
-                    }.labelsHidden().fixedSize()
-                    Spacer()
-                }
-                if cfg.kind == .clock {
-                    Toggle("24-hour", isOn: $cfg.style.clock24h).font(.caption)
-                    Toggle("Show seconds", isOn: $cfg.style.showSeconds).font(.caption)
-                }
-                if cfg.kind == .slack {
-                    Toggle("Show refresh countdown", isOn: $cfg.style.showRefreshCountdown).font(.caption)
-                }
-                HStack {
-                    Button("Remove", role: .destructive, action: onRemove)
-                    Spacer()
-                }
-                .controlSize(.small)
-            }
-            .padding(.leading, 8)
-        } label: {
-            HStack {
+        VStack(alignment: .leading, spacing: 6) {
+            // Full-width clickable header (the DisclosureGroup only made the chevron/label clickable).
+            HStack(spacing: 6) {
+                Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                    .font(.caption2).foregroundStyle(.secondary).frame(width: 10)
                 Image(systemName: cfg.kind.symbol).foregroundStyle(.secondary)
                 Text(cfg.kind.displayName)
                 Spacer()
                 Text(String(format: "yaw %.0f°  pitch %.0f°", cfg.yawDegrees, cfg.pitchDegrees))
                     .font(.caption2).foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 3)
+            .contentShape(Rectangle())
+            .onTapGesture { expanded.toggle() }
+
+            if expanded {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("Stack").font(.caption).frame(width: 70, alignment: .leading)
+                        Picker("", selection: Binding(get: { cfg.stackID }, set: { cfg.stackID = $0 })) {
+                            Text("None").tag(UUID?.none)
+                            ForEach(stacks) { Text($0.name).tag(UUID?.some($0.id)) }
+                        }.labelsHidden().fixedSize()
+                        Spacer()
+                    }
+                    HStack {
+                        Text("Scale").font(.caption).frame(width: 70, alignment: .leading)
+                        Slider(value: $cfg.scale, in: 0.1...3, step: 0.05)
+                        Text(String(format: "%.0f%%", cfg.scale * 100)).font(.caption.monospacedDigit())
+                            .frame(width: 44)
+                    }
+                    HStack {
+                        Text("Colour").font(.caption).frame(width: 70, alignment: .leading)
+                        Picker("", selection: $cfg.style.tint) {
+                            ForEach(WidgetTint.allCases) { Text($0.displayName).tag($0) }
+                        }.labelsHidden().fixedSize()
+                        Spacer()
+                    }
+                    HStack {
+                        Text("Background").font(.caption).frame(width: 70, alignment: .leading)
+                        Picker("", selection: $cfg.style.background) {
+                            ForEach(WidgetBackground.allCases) { Text($0.displayName).tag($0) }
+                        }.labelsHidden().fixedSize()
+                        Spacer()
+                    }
+                    if cfg.kind == .clock {
+                        Toggle("24-hour", isOn: $cfg.style.clock24h).font(.caption)
+                        Toggle("Show seconds", isOn: $cfg.style.showSeconds).font(.caption)
+                    }
+                    if cfg.kind == .slack {
+                        Toggle("Show refresh countdown", isOn: $cfg.style.showRefreshCountdown).font(.caption)
+                    }
+                    HStack {
+                        Button("Remove", role: .destructive, action: onRemove)
+                        Spacer()
+                    }
+                    .controlSize(.small)
+                }
+                .padding(.leading, 8)
             }
         }
         .onChange(of: cfg) { newValue in onChange(newValue) }
@@ -789,32 +799,10 @@ struct StackRow: View {
     }
 
     var body: some View {
-        DisclosureGroup(isExpanded: $expanded) {
-            VStack(alignment: .leading, spacing: 6) {
-                Picker("Direction", selection: $cfg.axis) {
-                    Text("Vertical").tag(StackAxis.vertical)
-                    Text("Horizontal").tag(StackAxis.horizontal)
-                }.pickerStyle(.segmented)
-                HStack {
-                    Text("Anchor").font(.caption).frame(width: 70, alignment: .leading)
-                    Picker("", selection: $cfg.align) {
-                        ForEach(alignLabels, id: \.0) { Text($0.1).tag($0.0) }
-                    }.pickerStyle(.segmented)
-                }
-                .help("Which edge the stack is pinned to, so it grows away from it when a widget changes size.")
-                HStack {
-                    Text("Scale").font(.caption).frame(width: 70, alignment: .leading)
-                    Slider(value: $cfg.scale, in: 0.1...3, step: 0.05)
-                    Text(String(format: "%.0f%%", cfg.scale * 100)).font(.caption.monospacedDigit()).frame(width: 44)
-                }
-                HStack {
-                    Button("Remove", role: .destructive, action: onRemove)
-                    Spacer()
-                }.controlSize(.small)
-            }
-            .padding(.leading, 8)
-        } label: {
-            HStack {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                    .font(.caption2).foregroundStyle(.secondary).frame(width: 10)
                 Image(systemName: "rectangle.stack").foregroundStyle(.tint)
                 Text(cfg.name)
                 Text(cfg.axis == .vertical ? "vertical" : "horizontal")
@@ -822,6 +810,35 @@ struct StackRow: View {
                 Spacer()
                 Text(String(format: "yaw %.0f°  pitch %.0f°", cfg.yawDegrees, cfg.pitchDegrees))
                     .font(.caption2).foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 3)
+            .contentShape(Rectangle())
+            .onTapGesture { expanded.toggle() }
+
+            if expanded {
+                VStack(alignment: .leading, spacing: 6) {
+                    Picker("Direction", selection: $cfg.axis) {
+                        Text("Vertical").tag(StackAxis.vertical)
+                        Text("Horizontal").tag(StackAxis.horizontal)
+                    }.pickerStyle(.segmented)
+                    HStack {
+                        Text("Anchor").font(.caption).frame(width: 70, alignment: .leading)
+                        Picker("", selection: $cfg.align) {
+                            ForEach(alignLabels, id: \.0) { Text($0.1).tag($0.0) }
+                        }.pickerStyle(.segmented)
+                    }
+                    .help("Which edge the stack is pinned to, so it grows away from it when a widget changes size.")
+                    HStack {
+                        Text("Scale").font(.caption).frame(width: 70, alignment: .leading)
+                        Slider(value: $cfg.scale, in: 0.1...3, step: 0.05)
+                        Text(String(format: "%.0f%%", cfg.scale * 100)).font(.caption.monospacedDigit()).frame(width: 44)
+                    }
+                    HStack {
+                        Button("Remove", role: .destructive, action: onRemove)
+                        Spacer()
+                    }.controlSize(.small)
+                }
+                .padding(.leading, 8)
             }
         }
         .onChange(of: cfg) { newValue in onChange(newValue) }
