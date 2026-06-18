@@ -112,12 +112,14 @@ enum ICS {
     /// Parse an iCal date/date-time value. Returns the instant and whether it's an all-day date.
     static func parseDate(_ value: String, params: [String: String]) -> (Date, Bool)? {
         if params["VALUE"] == "DATE" || (value.count == 8 && !value.contains("T")) {
-            let f = DateFormatter(); f.dateFormat = "yyyyMMdd"; f.timeZone = .current
+            let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX")
+            f.dateFormat = "yyyyMMdd"; f.timeZone = .current
             return f.date(from: value).map { ($0, true) }
         }
         let utc = value.hasSuffix("Z")
         let clean = utc ? String(value.dropLast()) : value
-        let f = DateFormatter(); f.dateFormat = "yyyyMMdd'T'HHmmss"
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyyMMdd'T'HHmmss"
         f.timeZone = utc ? TimeZone(identifier: "UTC") : timeZone(for: params)
         return f.date(from: clean).map { ($0, false) }
     }
@@ -154,7 +156,7 @@ enum ICS {
         let until = rule["UNTIL"].flatMap { parseDate($0, params: [:])?.0 }
         var results: [Date] = []
         var emitted = 0
-        let cap = 1500
+        let cap = 3000
 
         func consider(_ date: Date) -> Bool { // returns false to stop
             if let until, date > until { return false }
@@ -165,21 +167,27 @@ enum ICS {
         }
 
         if freq == "WEEKLY", let byday = rule["BYDAY"] {
-            let days = byday.split(separator: ",").compactMap { weekdayMap[String($0.suffix(2))] }
             let comps = cal.dateComponents([.hour, .minute, .second], from: start)
-            var weekRef = start
+            // Day offsets from Monday (MO=0 … SU=6) for each BYDAY weekday.
+            let offsets = byday.split(separator: ",").compactMap { s -> Int? in
+                guard let wd = weekdayMap[String(s.suffix(2))] else { return nil }
+                return (wd + 5) % 7
+            }.sorted()
+            let startWeekday = cal.component(.weekday, from: start)
+            let daysSinceMon = (startWeekday + 5) % 7
+            guard var weekMonday = cal.date(byAdding: .day, value: -daysSinceMon, to: cal.startOfDay(for: start))
+            else { return results }
             for _ in 0..<cap {
-                let yc = cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: weekRef)
-                for wd in days.sorted() {
-                    var dc = DateComponents()
-                    dc.yearForWeekOfYear = yc.yearForWeekOfYear; dc.weekOfYear = yc.weekOfYear
-                    dc.weekday = wd; dc.hour = comps.hour; dc.minute = comps.minute; dc.second = comps.second
+                for off in offsets {
+                    guard let day = cal.date(byAdding: .day, value: off, to: weekMonday) else { continue }
+                    var dc = cal.dateComponents([.year, .month, .day], from: day)
+                    dc.hour = comps.hour; dc.minute = comps.minute; dc.second = comps.second
                     guard let occ = cal.date(from: dc), occ >= start else { continue }
                     if !consider(occ) { return results }
                 }
-                guard let next = cal.date(byAdding: .weekOfYear, value: interval, to: weekRef) else { break }
-                weekRef = next
-                if weekRef > windowEnd.addingTimeInterval(86400) { break }
+                guard let next = cal.date(byAdding: .day, value: 7 * interval, to: weekMonday) else { break }
+                weekMonday = next
+                if weekMonday > windowEnd.addingTimeInterval(8 * 86400) { break }
             }
             return results
         }

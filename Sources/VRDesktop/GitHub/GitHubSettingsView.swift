@@ -32,6 +32,7 @@ struct GitHubSettingsView: View {
                     case .connecting:
                         ProgressView().controlSize(.small); Text("Checking…").font(.caption)
                     case .connected:
+                        Button("Refresh now") { github.refreshNow() }.controlSize(.small)
                         Button("Disconnect") { github.disconnect() }.controlSize(.small)
                     default:
                         Button("Connect") { github.connect() }.controlSize(.small)

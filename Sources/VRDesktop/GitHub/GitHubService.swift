@@ -120,6 +120,9 @@ final class GitHubService: ObservableObject {
 
     func stopPolling() { pollTimer?.invalidate(); pollTimer = nil; nextRefreshAt = nil }
 
+    /// Manual "refresh now" trigger.
+    func refreshNow() { scheduleNext(); Task { await refresh() } }
+
     private func scheduleNext() { nextRefreshAt = Date().addingTimeInterval(TimeInterval(pollSeconds)) }
 
     private func refresh() async {

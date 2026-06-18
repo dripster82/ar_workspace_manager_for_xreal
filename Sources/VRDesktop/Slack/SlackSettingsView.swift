@@ -45,6 +45,7 @@ struct SlackSettingsView: View {
                         ProgressView().controlSize(.small)
                         Text("Waiting for sign-in…").font(.caption)
                     case .connected:
+                        Button("Refresh now") { slack.refreshNow() }.controlSize(.small)
                         Button("Disconnect") { slack.disconnect() }.controlSize(.small)
                     default:
                         Button("Connect") { slack.connect() }.controlSize(.small)

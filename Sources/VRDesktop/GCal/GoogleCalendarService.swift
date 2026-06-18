@@ -154,6 +154,9 @@ final class GoogleCalendarService: ObservableObject {
 
     func stopPolling() { pollTimer?.invalidate(); pollTimer = nil; nextRefreshAt = nil }
 
+    /// Manual "refresh now" trigger.
+    func refreshNow() { scheduleNext(); Task { await refresh() } }
+
     private func scheduleNext() { nextRefreshAt = Date().addingTimeInterval(TimeInterval(pollSeconds)) }
 
     private func refresh() async {
@@ -174,6 +177,8 @@ final class GoogleCalendarService: ObservableObject {
             guard let text = String(data: data, encoding: .utf8) else { state = .error("Bad feed encoding."); return }
             let now = Date()
             events = ICS.parseEvents(text, windowStart: now, windowEnd: now.addingTimeInterval(7 * 86400))
+            let n = events.count, bytes = data.count
+            DebugLog.shared.log("gcal: feed \(bytes)B, parsed \(n) upcoming events")
             let name = ICS.calendarName(text) ?? "Calendar"
             UserDefaults.standard.set(name, forKey: "gcalAccount")
             state = .connected(account: name)

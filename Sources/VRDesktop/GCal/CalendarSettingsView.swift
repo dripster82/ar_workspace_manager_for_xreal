@@ -39,6 +39,7 @@ struct CalendarSettingsView: View {
                     case .connecting:
                         ProgressView().controlSize(.small); Text("Loading…").font(.caption)
                     case .connected:
+                        Button("Refresh now") { calendar.refreshNow() }.controlSize(.small)
                         Button("Disconnect") { calendar.disconnect() }.controlSize(.small)
                     default:
                         Button("Connect") { calendar.connect() }.controlSize(.small)
