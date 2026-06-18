@@ -43,7 +43,7 @@ final class GoogleCalendarService: ObservableObject {
 
     // MARK: Meeting alarms
     static let leadOptions: [(label: String, minutes: Int)] = [
-        ("Off", -1), ("At time", 0), ("5 min before", 5), ("15 min before", 15),
+        ("Off", -1), ("At time", 0), ("5 min before", 5), ("10 min before", 10), ("15 min before", 15),
         ("30 min before", 30), ("1 hr before", 60), ("2 hrs before", 120), ("1 day before", 1440),
     ]
     @Published var alarmsEnabled: Bool = UserDefaults.standard.bool(forKey: "gcalAlarmsEnabled") {
