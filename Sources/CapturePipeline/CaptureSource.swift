@@ -3,6 +3,7 @@ import Foundation
 import ScreenCaptureKit
 import Metal
 import CoreVideo
+import QuartzCore
 
 /// Captures one display via ScreenCaptureKit and exposes the latest frame as a Metal texture.
 public final class CaptureSource: NSObject, @unchecked Sendable {
@@ -18,6 +19,11 @@ public final class CaptureSource: NSObject, @unchecked Sendable {
     private let lock = NSLock()
     // Keep the CVMetalTexture alive while its MTLTexture may be in flight.
     private var latest: (texture: MTLTexture, backing: CVMetalTexture)?
+    // Recovery state: whether we intend to be capturing, last delivered-sample time (the stream
+    // delivers idle frames too, so this tracks "stream alive"), and a restart guard.
+    private var wantCapture = false
+    private var lastSampleAt: CFTimeInterval = CACurrentMediaTime()
+    private var restarting = false
 
     public init(displayID: CGDirectDisplayID, device: MTLDevice) {
         self.displayID = displayID
@@ -60,12 +66,41 @@ public final class CaptureSource: NSObject, @unchecked Sendable {
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: outputQueue)
         try await stream.startCapture()
         self.stream = stream
+        lock.lock(); wantCapture = true; lastSampleAt = CACurrentMediaTime(); restarting = false; lock.unlock()
     }
 
     public func stop() async {
+        lock.lock(); wantCapture = false; lock.unlock()
         try? await stream?.stopCapture()
         stream = nil
         clearLatest()
+    }
+
+    /// Seconds since the stream last delivered a sample. While alive the stream delivers frames
+    /// (incl. idle ones), so a large value means it has frozen — e.g. after sleep / display reconfig.
+    public var secondsSinceLastSample: Double {
+        lock.lock(); defer { lock.unlock() }
+        return CACurrentMediaTime() - lastSampleAt
+    }
+
+    /// Tear down and re-create the stream (recovery). No-op if we don't want capture or a restart
+    /// is already in flight. Safe to call repeatedly from the stall watchdog.
+    public func restartCapture() {
+        lock.lock()
+        let skip = restarting || !wantCapture
+        if !skip { restarting = true; lastSampleAt = CACurrentMediaTime() } // reset so the watchdog waits
+        lock.unlock()
+        guard !skip else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            try? await self.stream?.stopCapture()
+            self.stream = nil
+            do { try await self.start() }
+            catch {
+                NSLog("CaptureSource(\(self.displayID)) restart failed: \(error.localizedDescription)")
+                self.lock.lock(); self.restarting = false; self.lock.unlock()
+            }
+        }
     }
 
     private func clearLatest() {
@@ -75,6 +110,8 @@ public final class CaptureSource: NSObject, @unchecked Sendable {
 
 extension CaptureSource: SCStreamOutput, SCStreamDelegate {
     public func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
+        // Mark the stream alive on every callback (including idle frames) for the stall watchdog.
+        lock.lock(); lastSampleAt = CACurrentMediaTime(); lock.unlock()
         guard type == .screen,
               sampleBuffer.isValid,
               let pixelBuffer = sampleBuffer.imageBuffer else { return }
@@ -93,6 +130,7 @@ extension CaptureSource: SCStreamOutput, SCStreamDelegate {
 
     public func stream(_ stream: SCStream, didStopWithError error: Error) {
         NSLog("CaptureSource(\(displayID)) stopped: \(error.localizedDescription)")
+        restartCapture() // auto-recover if we still want to be capturing (sleep / display reconfig)
     }
 }
 

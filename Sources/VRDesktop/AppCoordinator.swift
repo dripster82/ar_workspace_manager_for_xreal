@@ -333,6 +333,17 @@ final class AppCoordinator: ObservableObject {
                 rate, fps, disp, path, e.yaw, e.pitch, e.roll, arState, stereoState, look))
         }
 
+        // Capture stall watchdog: SCStream can freeze after sleep / display reconfiguration — the
+        // last frame stays on screen looking like the capture died. If a stream hasn't delivered a
+        // sample (idle frames included) for a few seconds while AR runs, restart it.
+        if arActive {
+            for capture in captures.values where capture.secondsSinceLastSample > 5 {
+                DebugLog.shared.log(String(format: "capture %u stalled %.1fs — restarting",
+                                           capture.displayID, capture.secondsSinceLastSample))
+                capture.restartCapture()
+            }
+        }
+
         // CRITICAL: while AR is active, do NOT write the live @Published UI readouts below. Each
         // write re-evaluates the entire Control Panel (a persistent NSHostingView) on the main
         // thread — ~45ms — which starves the render display link and produces the ~2Hz head-
