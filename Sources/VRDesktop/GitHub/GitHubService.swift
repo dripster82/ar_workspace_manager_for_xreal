@@ -127,13 +127,14 @@ final class GitHubService: ObservableObject {
         refreshing = true
         defer { refreshing = false }
         do {
-            // sort:updated-desc omitted — it's a UI-only sort, not a REST search qualifier, and
-            // doesn't affect total_count.
-            let needsReview = try await searchCount("is:pr user-review-requested:@me state:open archived:false")
-            let teamReview = try await searchCount("is:pr team-review-requested-user:@me state:open archived:false")
-            let changes = try await searchCount("is:pr author:@me state:open review:changes_requested archived:false -is:draft")
-            let failing = try await searchCount("is:pr author:@me state:open status:failure archived:false -is:draft")
-            let ready = try await searchCount("is:pr author:@me state:open -is:draft review:approved -review:changes_requested -status:failure -is:queued archived:false")
+            // Ignore PRs not touched in the last month, and omit sort:updated-desc (a UI-only sort,
+            // not a REST search qualifier — it doesn't affect total_count).
+            let fresh = "updated:>=\(Self.oneMonthAgo())"
+            let needsReview = try await searchCount("is:pr user-review-requested:@me state:open archived:false \(fresh)")
+            let teamReview = try await searchCount("is:pr team-review-requested-user:@me state:open archived:false \(fresh)")
+            let changes = try await searchCount("is:pr author:@me state:open review:changes_requested archived:false -is:draft \(fresh)")
+            let failing = try await searchCount("is:pr author:@me state:open status:failure archived:false -is:draft \(fresh)")
+            let ready = try await searchCount("is:pr author:@me state:open -is:draft review:approved -review:changes_requested -status:failure -is:queued archived:false \(fresh)")
             counts = GitHubCounts(needsReview: needsReview, teamReview: teamReview,
                                   changesRequested: changes, failingChecks: failing, readyToMerge: ready)
         } catch GHError.unauthorized {
@@ -151,6 +152,15 @@ final class GitHubService: ObservableObject {
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         guard let login = json?["login"] as? String else { throw GHError.api("no login") }
         return login
+    }
+
+    /// Date a month ago as YYYY-MM-DD (UTC), for `updated:>=` filtering.
+    private static func oneMonthAgo() -> String {
+        let cutoff = Calendar.current.date(byAdding: .month, value: -1, to: Date()) ?? Date()
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM-dd"
+        fmt.timeZone = TimeZone(identifier: "UTC")
+        return fmt.string(from: cutoff)
     }
 
     private func searchCount(_ query: String) async throws -> Int {
