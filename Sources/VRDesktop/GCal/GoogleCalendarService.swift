@@ -55,6 +55,45 @@ final class GoogleCalendarService: ObservableObject {
         ("1 min", 60), ("5 min", 300), ("15 min", 900), ("30 min", 1800),
     ]
 
+    // MARK: Meeting alarms
+    static let leadOptions: [(label: String, minutes: Int)] = [
+        ("Off", -1), ("At time", 0), ("5 min before", 5), ("15 min before", 15),
+        ("30 min before", 30), ("1 hr before", 60), ("2 hrs before", 120), ("1 day before", 1440),
+    ]
+    @Published var alarmsEnabled: Bool = UserDefaults.standard.bool(forKey: "gcalAlarmsEnabled") {
+        didSet { UserDefaults.standard.set(alarmsEnabled, forKey: "gcalAlarmsEnabled") }
+    }
+    @Published var alarm1Lead: Int = UserDefaults.standard.object(forKey: "gcalAlarm1") as? Int ?? 5 {
+        didSet { UserDefaults.standard.set(alarm1Lead, forKey: "gcalAlarm1") }
+    }
+    @Published var alarm2Lead: Int = UserDefaults.standard.object(forKey: "gcalAlarm2") as? Int ?? -1 {
+        didSet { UserDefaults.standard.set(alarm2Lead, forKey: "gcalAlarm2") }
+    }
+    /// Called when a meeting alarm becomes due: (event, lead minutes).
+    var onAlarm: ((CalEvent, Int) -> Void)?
+    private var firedAlarms: Set<String> = []
+    private var alarmTimer: Timer?
+
+    /// Fire any alarms whose time has just arrived (checked frequently; tolerant window so a coarse
+    /// tick never misses one, de-duplicated per event+lead).
+    private func checkAlarms() {
+        guard alarmsEnabled, let onAlarm else { return }
+        let now = Date()
+        // Drop fired keys for events no longer in the window so the set doesn't grow unbounded.
+        let liveKeys = Set(events.flatMap { e in [alarm1Lead, alarm2Lead].map { "\(e.id)#\($0)" } })
+        firedAlarms.formIntersection(liveKeys)
+        for event in events {
+            for lead in [alarm1Lead, alarm2Lead] where lead >= 0 {
+                let at = event.start.addingTimeInterval(-Double(lead * 60))
+                let key = "\(event.id)#\(lead)"
+                if now >= at, now < at.addingTimeInterval(120), !firedAlarms.contains(key) {
+                    firedAlarms.insert(key)
+                    onAlarm(event, lead)
+                }
+            }
+        }
+    }
+
     private let session = URLSession(configuration: .ephemeral)
     private var pollTimer: Timer?
     private var refreshing = false
@@ -71,6 +110,12 @@ final class GoogleCalendarService: ObservableObject {
             state = .connected(account: UserDefaults.standard.string(forKey: "gcalAccount") ?? "Calendar")
             startPolling()
         }
+        // Frequent alarm check (independent of the slow event poll).
+        let at = Timer(timeInterval: 20, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.checkAlarms() }
+        }
+        RunLoop.main.add(at, forMode: .common)
+        alarmTimer = at
     }
 
     func connect() {

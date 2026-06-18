@@ -26,6 +26,14 @@ struct CalendarSettingsView: View {
                     Spacer()
                 }
 
+                Divider()
+                Toggle("Meeting alarms (audio + centre-FOV, Esc to dismiss)", isOn: $calendar.alarmsEnabled)
+                    .font(.caption)
+                if calendar.alarmsEnabled {
+                    leadPicker("Alarm 1", $calendar.alarm1Lead)
+                    leadPicker("Alarm 2", $calendar.alarm2Lead)
+                }
+
                 HStack(spacing: 10) {
                     switch calendar.state {
                     case .connecting:
@@ -61,6 +69,16 @@ struct CalendarSettingsView: View {
                 .font(.caption2).foregroundStyle(.orange).lineLimit(1)
         case .disconnected:
             Text("not connected").font(.caption2).foregroundStyle(.secondary)
+        }
+    }
+
+    private func leadPicker(_ label: String, _ selection: Binding<Int>) -> some View {
+        HStack {
+            Text(label).font(.caption).frame(width: 92, alignment: .leading)
+            Picker("", selection: selection) {
+                ForEach(GoogleCalendarService.leadOptions, id: \.minutes) { Text($0.label).tag($0.minutes) }
+            }.labelsHidden().fixedSize()
+            Spacer()
         }
     }
 

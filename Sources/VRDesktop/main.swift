@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var helpOverlay: HelpOverlayController!
     var cursorInfoOverlay: CursorInfoOverlayController!
     var brightnessHUD: BrightnessHUDController!
+    var alarmController: AlarmController!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let icon = NSImage(named: "AppIcon") { NSApp.applicationIconImage = icon }
@@ -25,6 +26,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         cursorInfoOverlay = CursorInfoOverlayController(coordinator: coordinator)
         brightnessHUD = BrightnessHUDController(coordinator: coordinator)
         coordinator.onBrightnessChanged = { [weak self] in self?.brightnessHUD.flash() }
+        alarmController = AlarmController(coordinator: coordinator)
+        alarmController.escArmer = { [weak self] on in
+            if on { self?.registerEscDismiss() } else { self?.unregisterEscDismiss() }
+        }
+        coordinator.calendar.onAlarm = { [weak self] event, lead in
+            self?.alarmController.fire(event: event, leadMinutes: lead)
+        }
 
         window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 520, height: 680),
@@ -61,6 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var quitHotKeyRef: EventHotKeyRef?
     private var cursorInfoHotKeyRef: EventHotKeyRef?
     private var cursorToGazeHotKeyRef: EventHotKeyRef?
+    private var escDismissHotKeyRef: EventHotKeyRef?
     private static let recenterHotKeyID: UInt32 = 1
     private static let stopARHotKeyID: UInt32 = 2
     private static let helpHotKeyID: UInt32 = 3
@@ -69,6 +78,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private static let quitHotKeyID: UInt32 = 6
     private static let cursorInfoHotKeyID: UInt32 = 7
     private static let cursorToGazeHotKeyID: UInt32 = 8
+    private static let escDismissHotKeyID: UInt32 = 9
 
     private func registerGlobalRecenterHotKey() {
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
@@ -91,6 +101,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     delegate.coordinator.setStereo(!delegate.coordinator.stereoEnabled)
                 case AppDelegate.cursorInfoHotKeyID: delegate.cursorInfoOverlay.toggle()
                 case AppDelegate.cursorToGazeHotKeyID: delegate.coordinator.moveCursorToGaze()
+                case AppDelegate.escDismissHotKeyID: delegate.alarmController.dismiss()
                 case AppDelegate.quitHotKeyID: NSApp.terminate(nil)
                 default: break
                 }
@@ -115,6 +126,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         register(kVK_ANSI_Q, AppDelegate.quitHotKeyID, &quitHotKeyRef)
         register(kVK_ANSI_C, AppDelegate.cursorInfoHotKeyID, &cursorInfoHotKeyRef)
         register(kVK_ANSI_X, AppDelegate.cursorToGazeHotKeyID, &cursorToGazeHotKeyRef)
+    }
+
+    /// Esc-to-dismiss: a plain Escape hotkey registered only while an alarm is showing (so it
+    /// doesn't swallow Esc the rest of the time), routed through the same dispatcher.
+    @MainActor func registerEscDismiss() {
+        guard escDismissHotKeyRef == nil else { return }
+        let id = EventHotKeyID(signature: AppDelegate.hotKeySignature, id: AppDelegate.escDismissHotKeyID)
+        RegisterEventHotKey(UInt32(kVK_Escape), 0, id, GetEventDispatcherTarget(), 0, &escDismissHotKeyRef)
+    }
+
+    @MainActor func unregisterEscDismiss() {
+        if let ref = escDismissHotKeyRef { UnregisterEventHotKey(ref); escDismissHotKeyRef = nil }
     }
 
     // MARK: Menu bar
