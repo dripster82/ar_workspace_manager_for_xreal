@@ -37,14 +37,7 @@ struct SlackSettingsView: View {
                     Spacer()
                 }
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Always check (top priority)").font(.caption)
-                    TextField("e.g. Derek, dev-interviewing, HR", text: $slack.priorityText)
-                        .textFieldStyle(.roundedBorder).font(.caption)
-                    Text("Comma-separated names of people / channels to check every refresh, "
-                         + "instead of waiting for the rotation.")
-                        .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                }
+                priorityPicker
 
                 HStack(spacing: 10) {
                     switch slack.state {
@@ -68,6 +61,46 @@ struct SlackSettingsView: View {
                 statusBadge
             }
         }
+    }
+
+    @State private var priorityOpen = false
+
+    @ViewBuilder private var priorityPicker: some View {
+        DisclosureGroup(isExpanded: $priorityOpen) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Checked every refresh, regardless of rotation. Starred channels are always "
+                     + "included automatically.")
+                    .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                if slack.loadingPicker && slack.pickerOptions.isEmpty {
+                    HStack { ProgressView().controlSize(.small); Text("Loading…").font(.caption) }
+                }
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach([SlackService.ConvoOption.Kind.dm, .groupDM, .channel], id: \.self) { kind in
+                            let items = slack.pickerOptions.filter { $0.kind == kind }
+                            if !items.isEmpty {
+                                Text(kind.rawValue).font(.caption2.bold()).foregroundStyle(.secondary)
+                                ForEach(items) { opt in
+                                    Toggle(opt.label, isOn: Binding(
+                                        get: { slack.priorityIDs.contains(opt.id) },
+                                        set: { slack.setPriority(opt.id, on: $0) }))
+                                        .font(.caption).toggleStyle(.checkbox)
+                                }
+                            }
+                        }
+                    }
+                }
+                .frame(maxHeight: 220)
+            }
+            .padding(.leading, 8)
+        } label: {
+            HStack {
+                Text("Priority conversations").font(.caption)
+                Spacer()
+                Text("\(slack.priorityIDs.count) selected").font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        .onChange(of: priorityOpen) { open in if open { slack.loadPickerOptions() } }
     }
 
     @ViewBuilder private var statusBadge: some View {
