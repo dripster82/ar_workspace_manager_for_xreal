@@ -2,6 +2,7 @@ import AppKit
 import DisplayManager
 import GlassesDriver
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ControlPanelView: View {
     @ObservedObject var coordinator: AppCoordinator
@@ -443,17 +444,18 @@ struct ControlPanelView: View {
                     StackRow(initial: stack,
                              onChange: { coordinator.updateStack($0) },
                              onRemove: { coordinator.removeStack(id: stack.id) })
-                        .dropDestination(for: String.self) { items, _ in drop(items, toStack: stack.id, before: nil) }
+                        .onDrop(of: [.plainText], isTargeted: nil) { dropProviders($0, toStack: stack.id, before: nil) }
                     ForEach(coordinator.widgets.filter { $0.stackID == stack.id }) { w in
                         widgetRow(w).padding(.leading, 16)
                     }
                 }
                 let loose = coordinator.widgets.filter { $0.stackID == nil }
                 if !coordinator.stacks.isEmpty {
-                    Text("Unstacked")
-                        .font(.caption2.bold()).foregroundStyle(.secondary).padding(.top, 4)
+                    Text("Unstacked — drop here to remove from a stack")
+                        .font(.caption2.bold()).foregroundStyle(.secondary).padding(.vertical, 4)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .dropDestination(for: String.self) { items, _ in drop(items, toStack: nil, before: nil) }
+                        .contentShape(Rectangle())
+                        .onDrop(of: [.plainText], isTargeted: nil) { dropProviders($0, toStack: nil, before: nil) }
                 }
                 ForEach(loose) { w in widgetRow(w) }
             }
@@ -482,19 +484,24 @@ struct ControlPanelView: View {
     private func widgetRow(_ w: HUDWidget) -> some View {
         HStack(alignment: .top, spacing: 4) {
             Image(systemName: "line.3.horizontal")
-                .font(.caption).foregroundStyle(.secondary).padding(.top, 6)
-                .draggable(w.id.uuidString)
+                .font(.body).foregroundStyle(.secondary)
+                .frame(width: 22, height: 24).contentShape(Rectangle())
+                .onDrag { NSItemProvider(object: w.id.uuidString as NSString) }
                 .help("Drag to reorder, or onto a stack to add it")
             WidgetRow(initial: w, stacks: coordinator.stacks,
                       onChange: { coordinator.updateWidget($0) },
                       onRemove: { coordinator.removeWidget(id: w.id) })
         }
-        .dropDestination(for: String.self) { items, _ in drop(items, toStack: w.stackID, before: w.id) }
+        .onDrop(of: [.plainText], isTargeted: nil) { dropProviders($0, toStack: w.stackID, before: w.id) }
     }
 
-    private func drop(_ ids: [String], toStack stackID: UUID?, before beforeID: UUID?) -> Bool {
-        guard let s = ids.first, let id = UUID(uuidString: s) else { return false }
-        coordinator.moveWidget(id, toStack: stackID, before: beforeID)
+    /// Load the dragged widget id from the providers and move it. Reliable cross-version macOS DnD.
+    private func dropProviders(_ providers: [NSItemProvider], toStack stackID: UUID?, before beforeID: UUID?) -> Bool {
+        guard let p = providers.first(where: { $0.canLoadObject(ofClass: NSString.self) }) else { return false }
+        _ = p.loadObject(ofClass: NSString.self) { obj, _ in
+            guard let s = obj as? String, let id = UUID(uuidString: s) else { return }
+            DispatchQueue.main.async { coordinator.moveWidget(id, toStack: stackID, before: beforeID) }
+        }
         return true
     }
 
