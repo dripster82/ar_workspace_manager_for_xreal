@@ -58,6 +58,18 @@ final class GlassesRecorder: NSObject, @unchecked Sendable, AVCaptureAudioDataOu
             session.addInput(input)
         }
         if session.canAddOutput(audioOutput) {
+            // Pin a concrete interleaved PCM format so the AAC writer input gets a predictable
+            // buffer — without this the device delivers e.g. non-interleaved float and the
+            // transcode produces static.
+            audioOutput.audioSettings = [
+                AVFormatIDKey: kAudioFormatLinearPCM,
+                AVSampleRateKey: 44100,
+                AVNumberOfChannelsKey: 1,
+                AVLinearPCMBitDepthKey: 16,
+                AVLinearPCMIsFloatKey: false,
+                AVLinearPCMIsBigEndianKey: false,
+                AVLinearPCMIsNonInterleaved: false,
+            ]
             audioOutput.setSampleBufferDelegate(self, queue: queue)
             session.addOutput(audioOutput)
         }
