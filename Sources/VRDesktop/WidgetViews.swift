@@ -139,6 +139,15 @@ struct CalendarWidgetView: View {
         let f = DateFormatter(); f.dateFormat = "EEEE d"; return f.string(from: date)
     }
 
+    /// Meeting length, e.g. "15m", "1hr", "1h30m".
+    private func durationLabel(_ e: CalEvent) -> String {
+        let mins = Int(e.end.timeIntervalSince(e.start) / 60)
+        guard mins > 0 else { return "" }
+        if mins < 60 { return "\(mins)m" }
+        let h = mins / 60, m = mins % 60
+        return m == 0 ? "\(h)hr" : "\(h)h\(m)m"
+    }
+
     var body: some View {
         let items = upcoming
         return WidgetPill(style: style) {
@@ -160,10 +169,14 @@ struct CalendarWidgetView: View {
                             Text(dayLabel(e.start)).font(.system(size: 12, weight: .bold, design: .rounded))
                                 .foregroundStyle(.secondary).padding(.top, idx == 0 ? 2 : 6)
                         }
-                        HStack(spacing: 8) {
+                        HStack(spacing: 6) {
                             Text(e.allDay ? "all-day" : Self.timeFmt.string(from: e.start))
                                 .font(.system(size: 13, weight: .medium, design: .rounded).monospacedDigit())
-                                .frame(width: 52, alignment: .leading).opacity(0.8)
+                                .frame(width: 42, alignment: .leading).opacity(0.8)
+                            if !e.allDay, case let d = durationLabel(e), !d.isEmpty {
+                                Text("(\(d))").font(.system(size: 11, weight: .medium, design: .rounded))
+                                    .frame(width: 46, alignment: .leading).opacity(0.55)
+                            }
                             Text(e.title).font(.system(size: 15, weight: isNext ? .semibold : .medium))
                                 .lineLimit(1)
                             Spacer(minLength: 8)
