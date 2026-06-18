@@ -20,25 +20,10 @@ struct GitHubCounts: Equatable {
 
 private enum GHError: Error { case unauthorized; case api(String) }
 
-/// Minimal Keychain string store for the GitHub token.
+/// GitHub token, stored in the shared single-item SecretStore (keys prefixed "github.").
 private enum GHKeychain {
-    private static let service = "VRDesktop.GitHub"
-    static func set(_ value: String?, for key: String) {
-        let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
-                                    kSecAttrService as String: service, kSecAttrAccount as String: key]
-        SecItemDelete(base as CFDictionary)
-        guard let value, let data = value.data(using: .utf8) else { return }
-        var add = base; add[kSecValueData as String] = data
-        SecItemAdd(add as CFDictionary, nil)
-    }
-    static func get(_ key: String) -> String? {
-        let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
-                                kSecAttrService as String: service, kSecAttrAccount as String: key,
-                                kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
-        var out: CFTypeRef?
-        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let d = out as? Data else { return nil }
-        return String(data: d, encoding: .utf8)
-    }
+    static func set(_ value: String?, for key: String) { SecretStore.set("github.\(key)", value) }
+    static func get(_ key: String) -> String? { SecretStore.get("github.\(key)") }
 }
 
 /// Polls the GitHub Search API for PR-triage counts. Auth is a personal access token (classic:
@@ -57,6 +42,26 @@ final class GitHubService: ObservableObject {
     static let pollOptions: [(label: String, seconds: Int)] = [
         ("30s", 30), ("1 min", 60), ("2 min", 120), ("5 min", 300),
     ]
+
+    /// Editable search queries, one per row. `{fresh}` expands to `updated:>=<one month ago>`;
+    /// the Org field is appended automatically. Defaults match the verified GitHub queries.
+    static let queryDefs: [(key: String, label: String, def: String)] = [
+        ("needsReview", "Needs your review", "is:pr user-review-requested:@me state:open archived:false {fresh}"),
+        ("teamReview", "Team review", "is:pr team-review-requested-user:@me state:open archived:false {fresh}"),
+        ("changesRequested", "Changes requested", "is:pr author:@me state:open review:changes_requested archived:false -is:draft {fresh}"),
+        ("failingChecks", "Failing checks", "is:pr author:@me state:open status:failure archived:false -is:draft {fresh}"),
+        ("readyToMerge", "Ready to merge", "is:pr author:@me state:open -is:draft review:approved -review:changes_requested -status:failure -is:queued archived:false {fresh}"),
+    ]
+    func query(_ key: String) -> String {
+        UserDefaults.standard.string(forKey: "ghQ_\(key)") ?? Self.queryDefs.first { $0.key == key }?.def ?? ""
+    }
+    func setQuery(_ key: String, _ value: String) {
+        UserDefaults.standard.set(value, forKey: "ghQ_\(key)"); objectWillChange.send()
+    }
+    func resetQueries() {
+        Self.queryDefs.forEach { UserDefaults.standard.removeObject(forKey: "ghQ_\($0.key)") }
+        objectWillChange.send()
+    }
 
     private let session = URLSession(configuration: .ephemeral)
     private var pollTimer: Timer?
@@ -130,16 +135,16 @@ final class GitHubService: ObservableObject {
         refreshing = true
         defer { refreshing = false }
         do {
-            // Ignore PRs not touched in the last month, and omit sort:updated-desc (a UI-only sort,
-            // not a REST search qualifier — it doesn't affect total_count).
+            // {fresh} → ignore PRs not touched in the last month. Queries are user-editable.
             let fresh = "updated:>=\(Self.oneMonthAgo())"
-            let needsReview = try await searchCount("is:pr user-review-requested:@me state:open archived:false \(fresh)")
-            let teamReview = try await searchCount("is:pr team-review-requested-user:@me state:open archived:false \(fresh)")
-            let changes = try await searchCount("is:pr author:@me state:open review:changes_requested archived:false -is:draft \(fresh)")
-            let failing = try await searchCount("is:pr author:@me state:open status:failure archived:false -is:draft \(fresh)")
-            let ready = try await searchCount("is:pr author:@me state:open -is:draft review:approved -review:changes_requested -status:failure -is:queued archived:false \(fresh)")
-            counts = GitHubCounts(needsReview: needsReview, teamReview: teamReview,
-                                  changesRequested: changes, failingChecks: failing, readyToMerge: ready)
+            func run(_ key: String) async throws -> Int {
+                try await searchCount(query(key).replacingOccurrences(of: "{fresh}", with: fresh))
+            }
+            counts = GitHubCounts(needsReview: try await run("needsReview"),
+                                  teamReview: try await run("teamReview"),
+                                  changesRequested: try await run("changesRequested"),
+                                  failingChecks: try await run("failingChecks"),
+                                  readyToMerge: try await run("readyToMerge"))
         } catch GHError.unauthorized {
             state = .error("Token expired — reconnect.")
             stopPolling()

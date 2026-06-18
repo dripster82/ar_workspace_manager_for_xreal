@@ -9,36 +9,10 @@ extension CharacterSet {
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 }
 
-/// Minimal Keychain string store for Slack secrets (client secret + user token).
+/// Slack secrets, stored in the shared single-item SecretStore (keys prefixed "slack.").
 enum SlackKeychain {
-    private static let service = "VRDesktop.Slack"
-
-    static func set(_ value: String?, for key: String) {
-        let base: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
-        ]
-        SecItemDelete(base as CFDictionary)
-        guard let value, let data = value.data(using: .utf8) else { return }
-        var add = base
-        add[kSecValueData as String] = data
-        SecItemAdd(add as CFDictionary, nil)
-    }
-
-    static func get(_ key: String) -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var out: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &out) == errSecSuccess,
-              let data = out as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
+    static func set(_ value: String?, for key: String) { SecretStore.set("slack.\(key)", value) }
+    static func get(_ key: String) -> String? { SecretStore.get("slack.\(key)") }
 }
 
 /// Opens the system browser for an OAuth authorize URL and catches the redirect on a one-shot

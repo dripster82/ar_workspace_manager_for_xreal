@@ -129,11 +129,19 @@ struct CalendarWidgetView: View {
 
     private var upcoming: [CalEvent] {
         let now = Date()
-        return events.filter { $0.end > now }.prefix(3).map { $0 }
+        return events.filter { $0.end > now }.prefix(4).map { $0 }
+    }
+
+    private func dayLabel(_ date: Date) -> String {
+        let cal = Calendar.current
+        if cal.isDateInToday(date) { return "Today" }
+        if cal.isDateInTomorrow(date) { return "Tomorrow" }
+        let f = DateFormatter(); f.dateFormat = "EEEE d"; return f.string(from: date)
     }
 
     var body: some View {
-        WidgetPill(style: style) {
+        let items = upcoming
+        return WidgetPill(style: style) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     Image(systemName: "calendar").font(.system(size: 15))
@@ -141,11 +149,17 @@ struct CalendarWidgetView: View {
                 }
                 if !connected {
                     Text("Not connected").font(.system(size: 14)).opacity(0.7)
-                } else if upcoming.isEmpty {
+                } else if items.isEmpty {
                     Text("No upcoming events").font(.system(size: 14)).opacity(0.7)
                 } else {
-                    ForEach(Array(upcoming.enumerated()), id: \.element.id) { idx, e in
+                    ForEach(Array(items.enumerated()), id: \.element.id) { idx, e in
+                        let cal = Calendar.current
+                        let newDay = idx == 0 || !cal.isDate(items[idx - 1].start, inSameDayAs: e.start)
                         let isNext = idx == 0
+                        if newDay {
+                            Text(dayLabel(e.start)).font(.system(size: 12, weight: .bold, design: .rounded))
+                                .foregroundStyle(.secondary).padding(.top, idx == 0 ? 2 : 6)
+                        }
                         HStack(spacing: 8) {
                             Text(e.allDay ? "all-day" : Self.timeFmt.string(from: e.start))
                                 .font(.system(size: 13, weight: .medium, design: .rounded).monospacedDigit())
@@ -159,7 +173,7 @@ struct CalendarWidgetView: View {
                                     .foregroundStyle(r == "now" ? .green : style.tint.color.opacity(0.85))
                             }
                         }
-                        .opacity(isNext ? 1 : 0.75)
+                        .opacity(isNext ? 1 : 0.8)
                     }
                 }
             }

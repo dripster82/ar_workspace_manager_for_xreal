@@ -39,6 +39,8 @@ struct GitHubSettingsView: View {
                     }
                     Spacer()
                 }
+
+                queryEditor
             }
             .padding(.leading, 8)
         } label: {
@@ -49,6 +51,33 @@ struct GitHubSettingsView: View {
                 statusBadge
             }
         }
+    }
+
+    @State private var queriesOpen = false
+
+    @ViewBuilder private var queryEditor: some View {
+        DisclosureGroup("Edit search queries", isExpanded: $queriesOpen) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("One GitHub search per row. {fresh} expands to a recent-activity filter; the Org "
+                     + "above is appended automatically.")
+                    .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                ForEach(GitHubService.queryDefs, id: \.key) { def in
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(def.label).font(.caption2).foregroundStyle(.secondary)
+                        TextField(def.def, text: Binding(
+                            get: { github.query(def.key) },
+                            set: { github.setQuery(def.key, $0) }))
+                            .textFieldStyle(.roundedBorder).font(.system(.caption, design: .monospaced))
+                    }
+                }
+                HStack {
+                    Button("Reset to defaults") { github.resetQueries() }.controlSize(.small)
+                    Spacer()
+                }
+            }
+            .padding(.leading, 8)
+        }
+        .font(.caption)
     }
 
     @ViewBuilder private var statusBadge: some View {

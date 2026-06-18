@@ -18,24 +18,10 @@ struct CalEvent: Identifiable, Equatable {
     let allDay: Bool
 }
 
+/// Calendar secret (iCal URL), stored in the shared single-item SecretStore (keys prefixed "gcal.").
 private enum GCalKeychain {
-    private static let service = "VRDesktop.GoogleCalendar"
-    static func set(_ value: String?, for key: String) {
-        let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
-                                    kSecAttrService as String: service, kSecAttrAccount as String: key]
-        SecItemDelete(base as CFDictionary)
-        guard let value, let data = value.data(using: .utf8) else { return }
-        var add = base; add[kSecValueData as String] = data
-        SecItemAdd(add as CFDictionary, nil)
-    }
-    static func get(_ key: String) -> String? {
-        let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
-                                kSecAttrService as String: service, kSecAttrAccount as String: key,
-                                kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
-        var out: CFTypeRef?
-        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let d = out as? Data else { return nil }
-        return String(data: d, encoding: .utf8)
-    }
+    static func set(_ value: String?, for key: String) { SecretStore.set("gcal.\(key)", value) }
+    static func get(_ key: String) -> String? { SecretStore.get("gcal.\(key)") }
 }
 
 /// Reads a Google Calendar via its private iCal (.ics) URL — no Google Cloud project or OAuth.
