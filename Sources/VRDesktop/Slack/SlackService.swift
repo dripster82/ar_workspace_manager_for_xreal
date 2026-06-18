@@ -48,9 +48,10 @@ final class SlackService: ObservableObject {
     /// Conversation ids the user marked as top priority (always checked every sweep). Persisted.
     @Published private(set) var priorityIDs: Set<String> =
         Set(UserDefaults.standard.stringArray(forKey: "slackPriorityIDs") ?? [])
-    /// Options for the priority picker (loaded on demand) and a loading flag for the UI.
+    /// Options for the priority picker (loaded on demand, cached) and a loading flag for the UI.
     @Published private(set) var pickerOptions: [ConvoOption] = []
     @Published private(set) var loadingPicker = false
+    @Published private(set) var pickerLoaded = false
 
     func setPriority(_ id: String, on: Bool) {
         if on { priorityIDs.insert(id) } else { priorityIDs.remove(id) }
@@ -58,27 +59,35 @@ final class SlackService: ObservableObject {
     }
 
     /// Load the list of DMs, group DMs and channels for the picker (resolves DM names on demand).
-    func loadPickerOptions() {
+    /// Cached after the first load — pass `force: true` to re-fetch. During a refresh the cached
+    /// list stays visible (no flash); on the first load it fills in gradually.
+    func loadPickerOptions(force: Bool = false) {
         guard !loadingPicker, let token else { return }
+        if pickerLoaded && !force { return }   // use the cache
         loadingPicker = true
+        let firstLoad = pickerOptions.isEmpty
+        let sortByLabel: (ConvoOption, ConvoOption) -> Bool = { $0.label.lowercased() < $1.label.lowercased() }
         Task {
-            defer { loadingPicker = false }
+            defer { loadingPicker = false; pickerLoaded = true }
             guard let convos = try? await listConversations(token: token) else { return }
-            // Channels and group DMs have cheap names; show them immediately.
             var opts: [ConvoOption] = convos.compactMap { c in
                 guard !c.isIM else { return nil }
                 return ConvoOption(id: c.id,
                                    label: c.isMpim ? mpimLabel(c.name) : (c.name ?? "channel"),
                                    kind: c.isMpim ? .groupDM : .channel)
             }
-            pickerOptions = opts.sorted { $0.label.lowercased() < $1.label.lowercased() }
-            // DMs need a name lookup — fill them in gradually.
+            // First load: show channels/group DMs immediately and fill DMs gradually. Refresh:
+            // keep the old list visible and replace once at the end so nothing disappears.
+            if firstLoad { pickerOptions = opts.sorted(by: sortByLabel) }
             for c in convos where c.isIM {
                 let name = (await resolveUserName(c.userID, token: token)) ?? "Direct message"
                 opts.append(ConvoOption(id: c.id, label: name, kind: .dm))
-                pickerOptions = opts.sorted { $0.label.lowercased() < $1.label.lowercased() }
-                try? await Task.sleep(nanoseconds: 350_000_000)
+                if firstLoad {
+                    pickerOptions = opts.sorted(by: sortByLabel)
+                    try? await Task.sleep(nanoseconds: 350_000_000)
+                }
             }
+            pickerOptions = opts.sorted(by: sortByLabel)
         }
     }
 

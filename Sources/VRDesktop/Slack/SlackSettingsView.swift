@@ -69,11 +69,21 @@ struct SlackSettingsView: View {
     @ViewBuilder private var priorityPicker: some View {
         DisclosureGroup(isExpanded: $priorityOpen) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Checked every refresh, regardless of rotation. Starred channels are always "
-                     + "included automatically.")
-                    .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                if slack.loadingPicker && slack.pickerOptions.isEmpty {
-                    HStack { ProgressView().controlSize(.small); Text("Loading…").font(.caption) }
+                HStack {
+                    Text("Checked every refresh, regardless of rotation. Starred channels are always "
+                         + "included automatically.")
+                        .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    Button("Refresh list") { slack.loadPickerOptions(force: true) }
+                        .controlSize(.small).disabled(slack.loadingPicker)
+                }
+                if slack.loadingPicker {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text(slack.pickerOptions.isEmpty ? "Loading conversations…"
+                             : "Refreshing… new people/channels may still be appearing")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
                 }
                 ScrollView {
                     VStack(alignment: .leading, spacing: 8) {
