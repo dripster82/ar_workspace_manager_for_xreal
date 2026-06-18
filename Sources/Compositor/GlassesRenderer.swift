@@ -832,8 +832,14 @@ public final class GlassesRenderer: NSObject {
             }
         }
 
-        drawHelpOverlay(commandBuffer: commandBuffer, drawable: drawable)
-        drawBrightnessOverlay(commandBuffer: commandBuffer, drawable: drawable)
+        drawHelpOverlay(commandBuffer: commandBuffer, target: drawable.texture)
+        drawBrightnessOverlay(commandBuffer: commandBuffer, target: drawable.texture)
+        // For a debug dump, also composite the HUD overlays into the readable scene target so the
+        // captured image matches what's on screen (the drawable is framebuffer-only / unreadable).
+        if dumpDir != nil {
+            drawHelpOverlay(commandBuffer: commandBuffer, target: sceneTarget)
+            drawBrightnessOverlay(commandBuffer: commandBuffer, target: sceneTarget)
+        }
 
         commandBuffer.present(drawable)
         commandBuffer.commit()
@@ -870,28 +876,28 @@ public final class GlassesRenderer: NSObject {
 
     private enum OverlayAnchor { case center; case bottom(marginNDC: Float) }
 
-    /// Draw the centred help/cursor HUD as an alpha-blended quad on top of the final frame.
-    private func drawHelpOverlay(commandBuffer: MTLCommandBuffer, drawable: CAMetalDrawable) {
+    /// Draw the centred help/cursor HUD as an alpha-blended quad on top of the given target.
+    private func drawHelpOverlay(commandBuffer: MTLCommandBuffer, target: MTLTexture) {
         guard showHelp, let tex = helpTexture else { return }
-        drawOverlay(tex, commandBuffer: commandBuffer, drawable: drawable,
+        drawOverlay(tex, commandBuffer: commandBuffer, target: target,
                     heightFraction: 0.6, maxWidthFraction: 0.8, anchor: .center)
     }
 
     /// Draw the brightness HUD as a small bar anchored to the bottom-centre of each eye.
-    private func drawBrightnessOverlay(commandBuffer: MTLCommandBuffer, drawable: CAMetalDrawable) {
+    private func drawBrightnessOverlay(commandBuffer: MTLCommandBuffer, target: MTLTexture) {
         guard showBrightness, let tex = brightnessTexture else { return }
-        drawOverlay(tex, commandBuffer: commandBuffer, drawable: drawable,
+        drawOverlay(tex, commandBuffer: commandBuffer, target: target,
                     heightFraction: 0.12, maxWidthFraction: 0.55, anchor: .bottom(marginNDC: 0.16))
     }
 
     /// Shared alpha-blended overlay quad, drawn in each eye half when stereo. `heightFraction` is
     /// the panel height as a fraction of the eye height; the anchor places it centred or pinned to
     /// the bottom (marginNDC above the bottom edge).
-    private func drawOverlay(_ tex: MTLTexture, commandBuffer: MTLCommandBuffer, drawable: CAMetalDrawable,
+    private func drawOverlay(_ tex: MTLTexture, commandBuffer: MTLCommandBuffer, target: MTLTexture,
                              heightFraction: Float, maxWidthFraction: Float, anchor: OverlayAnchor) {
         guard let pipe = overlayPipeline else { return }
         let pass = MTLRenderPassDescriptor()
-        pass.colorAttachments[0].texture = drawable.texture
+        pass.colorAttachments[0].texture = target
         pass.colorAttachments[0].loadAction = .load
         pass.colorAttachments[0].storeAction = .store
         guard let enc = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
@@ -899,7 +905,7 @@ public final class GlassesRenderer: NSObject {
         enc.setFragmentSamplerState(linearSampler, index: 0)
         enc.setFragmentTexture(tex, index: 0)
 
-        let W = drawable.texture.width, H = drawable.texture.height
+        let W = target.width, H = target.height
         let regions: [(x: Int, w: Int)] = stereoEnabled ? [(0, W / 2), (W / 2, W / 2)] : [(0, W)]
         let texAspect = Float(tex.width) / Float(max(1, tex.height))
         for region in regions {
