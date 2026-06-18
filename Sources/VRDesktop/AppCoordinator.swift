@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import CapturePipeline
 import Compositor
 import CoreGraphics
@@ -204,6 +205,7 @@ final class AppCoordinator: ObservableObject {
         widgetManager?.slack = slack
         widgetManager?.github = github
         widgetManager?.calendar = calendar
+        recorder.preferredMicID = selectedMicID.isEmpty ? nil : selectedMicID
         IMUService.shared.stateChanged = { [weak self] state in
             Task { @MainActor in
                 self?.glassesState = state
@@ -638,6 +640,27 @@ final class AppCoordinator: ObservableObject {
     @Published var mirroringActive = false
     @Published var hasScreenRecordingPermission = CGPreflightScreenCaptureAccess()
     @Published var hasAccessibilityPermission = BrightnessHotKey.accessibilityTrusted(prompt: false)
+    @Published var hasMicrophonePermission = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+
+    /// Selected mic for recording: "" = system default, else an AVCaptureDevice uniqueID.
+    @Published var selectedMicID: String = UserDefaults.standard.string(forKey: "micDeviceID") ?? "" {
+        didSet { UserDefaults.standard.set(selectedMicID, forKey: "micDeviceID")
+                 recorder.preferredMicID = selectedMicID.isEmpty ? nil : selectedMicID }
+    }
+
+    /// Available audio input devices, plus the implicit "System default" first.
+    func availableMicrophones() -> [(id: String, name: String)] {
+        let session = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.microphone, .external], mediaType: .audio, position: .unspecified)
+        return [("", "System default")] + session.devices.map { ($0.uniqueID, $0.localizedName) }
+    }
+
+    func requestMicrophonePermission() {
+        AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
+            Task { @MainActor in self?.hasMicrophonePermission = granted }
+        }
+        statusMessage = "Allow Microphone in the prompt (or Privacy settings)"
+    }
 
     /// Refresh cached permission flags off the main thread. CGPreflightScreenCaptureAccess does
     /// synchronous XPC (tens of ms) — calling it inline on the 0.5s stats tick starved the render
@@ -646,9 +669,11 @@ final class AppCoordinator: ObservableObject {
         DispatchQueue.global(qos: .utility).async {
             let screen = CGPreflightScreenCaptureAccess()
             let ax = BrightnessHotKey.accessibilityTrusted(prompt: false)
+            let mic = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
             Task { @MainActor [weak self] in
                 self?.hasScreenRecordingPermission = screen
                 self?.hasAccessibilityPermission = ax
+                self?.hasMicrophonePermission = mic
             }
         }
     }

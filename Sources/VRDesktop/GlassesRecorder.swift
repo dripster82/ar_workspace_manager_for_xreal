@@ -18,6 +18,8 @@ final class GlassesRecorder: NSObject, @unchecked Sendable, AVCaptureAudioDataOu
 
     /// Mute the mic (the audio track stays continuous — samples are zeroed) — toggle any time.
     var micMuted = false
+    /// Preferred mic uniqueID, or nil for the system default.
+    var preferredMicID: String?
 
     /// Begin recording. The writer is created lazily from the first frame's size. Returns the
     /// planned output URL.
@@ -53,8 +55,8 @@ final class GlassesRecorder: NSObject, @unchecked Sendable, AVCaptureAudioDataOu
 
     private func setupMic() {
         session.beginConfiguration()
-        if let dev = AVCaptureDevice.default(for: .audio),
-           let input = try? AVCaptureDeviceInput(device: dev), session.canAddInput(input) {
+        let dev = preferredMicID.flatMap { AVCaptureDevice(uniqueID: $0) } ?? AVCaptureDevice.default(for: .audio)
+        if let dev, let input = try? AVCaptureDeviceInput(device: dev), session.canAddInput(input) {
             session.addInput(input)
         }
         if session.canAddOutput(audioOutput) {

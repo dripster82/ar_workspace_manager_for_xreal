@@ -143,6 +143,12 @@ struct ControlPanelView: View {
                 detail: "Use ⌃⌥+brightness keys to dim the glasses",
                 granted: coordinator.hasAccessibilityPermission,
                 grant: { coordinator.requestAccessibilityPermission() })
+            Divider()
+            permissionRow(
+                title: "Microphone",
+                detail: "Record your voice when capturing the glasses view (⌃⌥R)",
+                granted: coordinator.hasMicrophonePermission,
+                grant: { coordinator.requestMicrophonePermission() })
             Text("Grants take effect after relaunching.")
                 .font(.caption2).foregroundStyle(.secondary)
         }
@@ -514,6 +520,14 @@ struct ControlPanelView: View {
                 .font(.caption)
             Toggle("Keep cursor off the AR screen", isOn: $coordinator.confineCursor)
                 .font(.caption)
+            HStack {
+                Text("Recording microphone").font(.caption)
+                Spacer()
+                Picker("", selection: $coordinator.selectedMicID) {
+                    ForEach(coordinator.availableMicrophones(), id: \.id) { Text($0.name).tag($0.id) }
+                }.labelsHidden().fixedSize()
+            }
+            .help("Which mic is used when recording the glasses view (⌃⌥R). Mute live with ⌃⌥M.")
             HStack {
                 Text("Restore windows on start").font(.caption)
                 Spacer()
