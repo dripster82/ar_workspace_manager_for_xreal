@@ -71,11 +71,6 @@ struct SlackWidgetView: View {
                 HStack(spacing: 6) {
                     Image(systemName: "message.badge.fill").font(.system(size: 16))
                     Text("Slack").font(.system(size: 16, weight: .semibold, design: .rounded))
-                    Spacer(minLength: 12)
-                    if let nextIn, connected {
-                        Label("\(nextIn)s", systemImage: "arrow.clockwise")
-                            .font(.system(size: 11, weight: .medium)).opacity(0.6)
-                    }
                 }
                 if !connected {
                     Text("Not connected").font(.system(size: 14)).opacity(0.7)
@@ -84,19 +79,26 @@ struct SlackWidgetView: View {
                 } else {
                     ForEach(unreads.prefix(8)) { item in
                         HStack(spacing: 8) {
-                            Image(systemName: item.isChannel ? "number" : "person.fill")
+                            Image(systemName: item.symbol)
                                 .font(.system(size: 12)).opacity(0.7).frame(width: 14)
                             Text(item.name).font(.system(size: 16, weight: .medium)).lineLimit(1)
                             Spacer(minLength: 8)
-                            if item.isChannel {
-                                // Starred channel: just highlight that it has unread (no count).
-                                Circle().frame(width: 8, height: 8)
-                            } else {
+                            if item.showsCount {
                                 Text(countLabel(item.count))
                                     .font(.system(size: 15, weight: .bold, design: .rounded).monospacedDigit())
+                            } else {
+                                Circle().frame(width: 8, height: 8) // unread highlight, no count
                             }
                         }
                     }
+                }
+                if connected {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.clockwise").font(.system(size: 10))
+                        Text(nextIn.map { "next in \($0)s" } ?? "refreshing…")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .opacity(0.55).padding(.top, 2)
                 }
             }
             .frame(minWidth: 150, alignment: .leading)

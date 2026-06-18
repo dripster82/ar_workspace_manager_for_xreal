@@ -8,12 +8,13 @@ enum SlackConnState: Equatable {
     case error(String)
 }
 
-/// One unread conversation for the Slack widget (a person DM or a starred channel).
+/// One unread conversation for the Slack widget (a DM, a group DM, or a starred channel).
 struct SlackUnread: Identifiable, Equatable {
     let id: String
     let name: String
-    let count: Int
-    let isChannel: Bool
+    let count: Int          // unread count (DMs); 0 when only a boolean highlight is available
+    let showsCount: Bool    // true = show the number, false = show an unread dot
+    let symbol: String      // SF Symbol for the row
 }
 
 private enum SlackError: Error, LocalizedError {
@@ -40,7 +41,7 @@ final class SlackService: ObservableObject {
 
     static let redirectPort: UInt16 = 53682
     static var redirectURI: String { "http://localhost:\(redirectPort)/oauth/callback" }
-    static let scopes = "channels:read,groups:read,im:read,mpim:read,users:read,channels:history,groups:history"
+    static let scopes = "channels:read,groups:read,im:read,mpim:read,users:read,channels:history,groups:history,mpim:history"
 
     /// When the next poll tick is scheduled — drives the widget's "next update" countdown.
     @Published private(set) var nextRefreshAt: Date?
@@ -60,6 +61,10 @@ final class SlackService: ObservableObject {
     private var starredChannels: Set<String> = []
     private var channelStarChecked: Set<String> = []
     private let maxStarDiscoveryPerSweep = 6
+    /// Group DMs (mpims) report no unread count and `updated` is unreliable, so we rotate through
+    /// them a batch per sweep, checking each via conversations.history.
+    private var mpimCursor = 0
+    private let mpimBatchPerSweep = 8
 
     // MARK: Stored credentials
 
@@ -178,23 +183,46 @@ final class SlackService: ObservableObject {
             let recent = dms.sorted { $0.updated > $1.updated }.prefix(maxScanPerSweep)
             var dmCandidates: [Convo] = recent.filter { $0.updated > (seenUpdated[$0.id] ?? -1) }
             let dmIDs = Set(dmCandidates.map { $0.id })
-            dmCandidates += dms.filter { unreadByID[$0.id]?.isChannel == false && !dmIDs.contains($0.id) }
+            dmCandidates += dms.filter { unreadByID[$0.id]?.showsCount == true && !dmIDs.contains($0.id) }
 
             for c in dmCandidates {
                 guard let info = try await conversationInfo(id: c.id, token: token) else { continue }
                 seenUpdated[c.id] = c.updated
                 if info.unread > 0 {
                     let name = await resolveUserName(c.userID, token: token) ?? "Direct message"
-                    unreadByID[c.id] = SlackUnread(id: c.id, name: name, count: info.unread, isChannel: false)
+                    unreadByID[c.id] = SlackUnread(id: c.id, name: name, count: info.unread, showsCount: true, symbol: "person.fill")
                 } else {
                     unreadByID[c.id] = nil
                 }
                 try? await Task.sleep(nanoseconds: 1_200_000_000) // ~1.2s spacing → stay under ~50/min
             }
 
+            // --- Group DMs (mpims): no unread count and `updated` is unreliable, so rotate through a
+            // batch per sweep (eventually covering all) + always re-check currently-unread ones.
+            // Unread is a boolean via conversations.history (needs mpim:history).
+            let mpims = convos.filter { $0.isMpim }
+            var mpimBatch: [Convo] = []
+            if !mpims.isEmpty {
+                for i in 0..<min(mpimBatchPerSweep, mpims.count) {
+                    mpimBatch.append(mpims[(mpimCursor + i) % mpims.count])
+                }
+                mpimCursor = (mpimCursor + mpimBatchPerSweep) % mpims.count
+            }
+            let currentMpims = mpims.filter { unreadByID[$0.id]?.symbol == "person.2.fill" }
+            var mProbed = Set<String>()
+            for c in mpimBatch + currentMpims where mProbed.insert(c.id).inserted {
+                guard let info = try await conversationInfo(id: c.id, token: token) else { continue }
+                var unread = info.unread > 0
+                if !unread { unread = await channelHasUnread(id: c.id, lastRead: info.lastRead, token: token) }
+                unreadByID[c.id] = unread
+                    ? SlackUnread(id: c.id, name: mpimLabel(info.name ?? c.name), count: 0, showsCount: false, symbol: "person.2.fill")
+                    : nil
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+            }
+
             // --- Starred channels: highlight unread (boolean, no count). Discover star status a few
             // channels per sweep (cached), then each sweep re-check known starred channels.
-            let channels = convos.filter { !$0.isIM }
+            let channels = convos.filter { !$0.isIM && !$0.isMpim }
             let discover = channels.filter { !channelStarChecked.contains($0.id) }.prefix(maxStarDiscoveryPerSweep)
             let knownStarred = channels.filter { starredChannels.contains($0.id) }
             var probed = Set<String>()
@@ -206,7 +234,7 @@ final class SlackService: ObservableObject {
                     var unread = info.unread > 0
                     if !unread { unread = await channelHasUnread(id: c.id, lastRead: info.lastRead, token: token) }
                     unreadByID[c.id] = unread
-                        ? SlackUnread(id: c.id, name: info.name ?? c.name ?? "channel", count: 0, isChannel: true)
+                        ? SlackUnread(id: c.id, name: info.name ?? c.name ?? "channel", count: 0, showsCount: false, symbol: "number")
                         : nil
                 } else {
                     starredChannels.remove(c.id)
@@ -215,11 +243,12 @@ final class SlackService: ObservableObject {
                 try? await Task.sleep(nanoseconds: 1_200_000_000)
             }
             let starredCount = starredChannels.count, unreadTotal = unreadByID.count
-            DebugLog.shared.log("slack refresh: \(dms.count) DMs, \(starredCount) starred ch, \(unreadTotal) unread")
+            DebugLog.shared.log("slack refresh: \(dms.count) DMs, \(mpims.count) mpims, \(starredCount) starred ch, \(unreadTotal) unread")
 
             unreads = unreadByID.values.sorted {
-                if $0.isChannel != $1.isChannel { return !$0.isChannel } // DMs first
-                return $0.count > $1.count
+                if $0.showsCount != $1.showsCount { return $0.showsCount } // counted DMs first
+                if $0.showsCount { return $0.count > $1.count }
+                return $0.name < $1.name
             }
         } catch SlackError.api(let msg) where msg == "invalid_auth" || msg == "token_revoked" || msg == "account_inactive" {
             state = .error("Slack token expired — reconnect.")
@@ -231,7 +260,7 @@ final class SlackService: ObservableObject {
 
     // MARK: API
 
-    private struct Convo { let id: String; let isIM: Bool; let name: String?; let userID: String?; let updated: Double }
+    private struct Convo { let id: String; let isIM: Bool; let isMpim: Bool; let name: String?; let userID: String?; let updated: Double }
     private struct Info { let unread: Int; let name: String?; let isStarred: Bool; let lastRead: Double? }
 
     private func listConversations(token: String) async throws -> [Convo] {
@@ -244,6 +273,7 @@ final class SlackService: ObservableObject {
         return channels.map { ch in
             Convo(id: ch["id"] as? String ?? "",
                   isIM: (ch["is_im"] as? Bool) ?? false,
+                  isMpim: (ch["is_mpim"] as? Bool) ?? false,
                   name: ch["name"] as? String,
                   userID: ch["user"] as? String,
                   updated: (ch["updated"] as? Double) ?? 0)
@@ -257,6 +287,15 @@ final class SlackService: ObservableObject {
         let lastRead = (ch["last_read"] as? String).flatMap(Double.init) ?? (ch["last_read"] as? Double)
         return Info(unread: unread, name: ch["name"] as? String,
                     isStarred: (ch["is_starred"] as? Bool) ?? false, lastRead: lastRead)
+    }
+
+    /// Turn a group-DM name ("mpdm-paulk--rich--alexp-1") into a readable label ("paulk, rich, alexp").
+    private func mpimLabel(_ raw: String?) -> String {
+        guard var s = raw, !s.isEmpty else { return "Group DM" }
+        if s.hasPrefix("mpdm-") { s.removeFirst(5) }
+        if let r = s.range(of: "-[0-9]+$", options: .regularExpression) { s.removeSubrange(r) }
+        let parts = s.components(separatedBy: "--").filter { !$0.isEmpty }
+        return parts.isEmpty ? "Group DM" : parts.joined(separator: ", ")
     }
 
     /// Channels don't report an unread count under read scopes, so test for any message newer than
