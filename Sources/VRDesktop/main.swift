@@ -100,6 +100,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var cursorToGazeHotKeyRef: EventHotKeyRef?
     private var escDismissHotKeyRef: EventHotKeyRef?
     private var screenshotHotKeyRef: EventHotKeyRef?
+    private var recordHotKeyRef: EventHotKeyRef?
+    private var micMuteHotKeyRef: EventHotKeyRef?
     private static let recenterHotKeyID: UInt32 = 1
     private static let stopARHotKeyID: UInt32 = 2
     private static let helpHotKeyID: UInt32 = 3
@@ -110,6 +112,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private static let cursorToGazeHotKeyID: UInt32 = 8
     private static let escDismissHotKeyID: UInt32 = 9
     private static let screenshotHotKeyID: UInt32 = 10
+    private static let recordHotKeyID: UInt32 = 11
+    private static let micMuteHotKeyID: UInt32 = 12
 
     private func registerGlobalRecenterHotKey() {
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
@@ -134,6 +138,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 case AppDelegate.cursorToGazeHotKeyID: delegate.coordinator.moveCursorToGaze()
                 case AppDelegate.escDismissHotKeyID: delegate.alarmController.dismiss()
                 case AppDelegate.screenshotHotKeyID: delegate.coordinator.takeGlassesScreenshot()
+                case AppDelegate.recordHotKeyID: delegate.coordinator.toggleRecording()
+                case AppDelegate.micMuteHotKeyID: delegate.coordinator.toggleMicMute()
                 case AppDelegate.quitHotKeyID: NSApp.terminate(nil)
                 default: break
                 }
@@ -159,6 +165,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         register(kVK_ANSI_C, AppDelegate.cursorInfoHotKeyID, &cursorInfoHotKeyRef)
         register(kVK_ANSI_X, AppDelegate.cursorToGazeHotKeyID, &cursorToGazeHotKeyRef)
         register(kVK_ANSI_P, AppDelegate.screenshotHotKeyID, &screenshotHotKeyRef)
+        register(kVK_ANSI_R, AppDelegate.recordHotKeyID, &recordHotKeyRef)
+        register(kVK_ANSI_M, AppDelegate.micMuteHotKeyID, &micMuteHotKeyRef)
     }
 
     /// Esc-to-dismiss: a plain Escape hotkey registered only while an alarm is showing (so it

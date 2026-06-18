@@ -1,4 +1,6 @@
 import AppKit
+import CoreMedia
+import CoreVideo
 import GlassesDriver
 import Metal
 import MetalKit
@@ -61,6 +63,8 @@ public final class GlassesRenderer: NSObject {
     public var showHelp = false
     private var brightnessTexture: MTLTexture?
     public var showBrightness = false
+    private var recordingTexture: MTLTexture?
+    public var showRecording = false
 
     // Head-locked HUD widgets: small alpha-blended quads drawn always-on-top in view space.
     private var widgetPipeline: MTLRenderPipelineState!
@@ -111,6 +115,51 @@ public final class GlassesRenderer: NSObject {
     public var screenshotRequest: URL?
     /// Called (off the main thread) after a screenshot, with success and the URL.
     public var onScreenshotComplete: ((Bool, URL) -> Void)?
+
+    /// While set, each rendered frame (left eye when stereo, ~30fps) is delivered here as a pixel
+    /// buffer for recording. Set to nil to stop.
+    public var recordingSink: ((CVPixelBuffer, CMTime) -> Void)?
+    private var recordPool: CVPixelBufferPool?
+    private var recordCache: CVMetalTextureCache?
+    private var recordSize: (w: Int, h: Int) = (0, 0)
+    private var lastRecordTime: CFTimeInterval = 0
+    private let recordFPS: Double = 30
+
+    private func emitRecordingFrame(from src: MTLTexture) {
+        let now = CACurrentMediaTime()
+        guard now - lastRecordTime >= 1.0 / recordFPS else { return }
+        lastRecordTime = now
+        let w = stereoEnabled ? src.width / 2 : src.width, h = src.height
+        if recordPool == nil || recordSize != (w, h) {
+            recordSize = (w, h)
+            let attrs: [String: Any] = [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                kCVPixelBufferWidthKey as String: w, kCVPixelBufferHeightKey as String: h,
+                kCVPixelBufferMetalCompatibilityKey as String: true,
+            ]
+            var pool: CVPixelBufferPool?
+            CVPixelBufferPoolCreate(nil, nil, attrs as CFDictionary, &pool)
+            recordPool = pool
+            if recordCache == nil { CVMetalTextureCacheCreate(nil, nil, device, nil, &recordCache) }
+        }
+        guard let pool = recordPool, let cache = recordCache else { return }
+        var pbOut: CVPixelBuffer?
+        guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &pbOut) == kCVReturnSuccess, let pb = pbOut else { return }
+        var cvtex: CVMetalTexture?
+        CVMetalTextureCacheCreateTextureFromImage(nil, cache, pb, nil, .bgra8Unorm, w, h, 0, &cvtex)
+        guard let cvtex, let dst = CVMetalTextureGetTexture(cvtex),
+              let cb = commandQueue.makeCommandBuffer(), let blit = cb.makeBlitCommandEncoder() else { return }
+        blit.copy(from: src, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                  sourceSize: MTLSize(width: w, height: h, depth: 1),
+                  to: dst, destinationSlice: 0, destinationLevel: 0, destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
+        blit.endEncoding()
+        let time = CMClockGetTime(CMClockGetHostTimeClock())
+        cb.addCompletedHandler { [weak self] _ in
+            _ = cvtex // hold the CVMetalTexture until the GPU is done
+            self?.recordingSink?(pb, time)
+        }
+        cb.commit()
+    }
 
     public private(set) var framesPerSecond: Double = 0
     private var frameCount = 0
@@ -254,6 +303,17 @@ public final class GlassesRenderer: NSObject {
     }
 
     public func clearBrightness() { showBrightness = false }
+
+    /// Set the top-centre recording indicator (e.g. "● REC").
+    @discardableResult
+    public func setRecordingImage(_ cgImage: CGImage) -> Bool {
+        guard let tex = makeOverlayTexture(cgImage) else { return false }
+        recordingTexture = tex
+        showRecording = true
+        return true
+    }
+
+    public func clearRecording() { showRecording = false }
 
     /// Build a premultiplied BGRA texture from a CGImage for the alpha-blended overlays.
     private func makeOverlayTexture(_ cgImage: CGImage) -> MTLTexture? {
@@ -832,7 +892,8 @@ public final class GlassesRenderer: NSObject {
         // OR when a debug dump is pending (the drawable is framebufferOnly and can't be read).
         let dumpDir = debugDumpDir
         let shotURL = screenshotRequest
-        let offscreen = supersample || dumpDir != nil || shotURL != nil
+        let recording = recordingSink != nil
+        let offscreen = supersample || dumpDir != nil || shotURL != nil || recording
         let sceneTarget: MTLTexture
         if offscreen {
             guard let ss = ssColor(width: rw, height: rh) else { return }
@@ -876,11 +937,13 @@ public final class GlassesRenderer: NSObject {
 
         drawHelpOverlay(commandBuffer: commandBuffer, target: drawable.texture)
         drawBrightnessOverlay(commandBuffer: commandBuffer, target: drawable.texture)
+        drawRecordingOverlay(commandBuffer: commandBuffer, target: drawable.texture)
         // For a debug dump or screenshot, also composite the HUD overlays into the readable scene
         // target so the captured image matches what's on screen (the drawable is unreadable).
-        if dumpDir != nil || shotURL != nil {
+        if dumpDir != nil || shotURL != nil || recording {
             drawHelpOverlay(commandBuffer: commandBuffer, target: sceneTarget)
             drawBrightnessOverlay(commandBuffer: commandBuffer, target: sceneTarget)
+            // Note: recording indicator intentionally NOT composited into the recorded frame.
         }
 
         commandBuffer.present(drawable)
@@ -892,6 +955,7 @@ public final class GlassesRenderer: NSObject {
             screenshotRequest = nil
             onScreenshotComplete?(ok, shotURL)
         }
+        if recording { emitRecordingFrame(from: sceneTarget) }
 
         // Debug dump: wait for the frame to finish, then write the merged atlas (stage2) and the
         // final curved scene (stage3) to disk. Cleared so it only fires once per request.
@@ -923,7 +987,14 @@ public final class GlassesRenderer: NSObject {
         }
     }
 
-    private enum OverlayAnchor { case center; case bottom(marginNDC: Float) }
+    private enum OverlayAnchor { case center; case bottom(marginNDC: Float); case top(marginNDC: Float) }
+
+    /// Draw the recording indicator (small, top-centre of each eye).
+    private func drawRecordingOverlay(commandBuffer: MTLCommandBuffer, target: MTLTexture) {
+        guard showRecording, let tex = recordingTexture else { return }
+        drawOverlay(tex, commandBuffer: commandBuffer, target: target,
+                    heightFraction: 0.07, maxWidthFraction: 0.4, anchor: .top(marginNDC: 0.1))
+    }
 
     /// Draw the centred help/cursor HUD as an alpha-blended quad on top of the given target.
     private func drawHelpOverlay(commandBuffer: MTLCommandBuffer, target: MTLTexture) {
@@ -967,6 +1038,7 @@ public final class GlassesRenderer: NSObject {
             switch anchor {
             case .center: cy = 0
             case .bottom(let m): cy = -1 + m + nh / 2  // NDC: bottom edge is -1
+            case .top(let m): cy = 1 - m - nh / 2       // NDC: top edge is +1
             }
             enc.setViewport(MTLViewport(originX: Double(region.x), originY: 0,
                                         width: Double(region.w), height: Double(H),

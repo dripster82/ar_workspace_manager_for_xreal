@@ -1569,6 +1569,51 @@ final class AppCoordinator: ObservableObject {
         renderer.screenshotRequest = url
     }
 
+    // MARK: Recording the glasses view (⌃⌥R), mic mute (⌃⌥M)
+
+    let recorder = GlassesRecorder()
+    @Published private(set) var isRecording = false
+    @Published var micMuted = false {
+        didSet { recorder.micMuted = micMuted; if isRecording { updateRecordingIndicator() } }
+    }
+
+    func toggleRecording() {
+        guard let renderer, arActive else {
+            statusMessage = "Start AR first to record the glasses view"; return
+        }
+        if isRecording {
+            renderer.recordingSink = nil
+            renderer.clearRecording()
+            isRecording = false
+            recorder.stop { [weak self] url in
+                NSSound(named: NSSound.Name("Pop"))?.play()
+                if let url {
+                    NSWorkspace.shared.activateFileViewerSelecting([url])
+                    self?.statusMessage = "Recording saved to Movies/VRDesktop"
+                } else {
+                    self?.statusMessage = "Recording failed"
+                }
+            }
+        } else {
+            guard recorder.start() != nil else { statusMessage = "Couldn't start recording"; return }
+            recorder.micMuted = micMuted
+            let rec = recorder
+            renderer.recordingSink = { pb, t in rec.appendVideo(pb, time: t) }
+            updateRecordingIndicator()
+            isRecording = true
+            NSSound(named: NSSound.Name("Pop"))?.play()
+            statusMessage = "Recording the glasses view…"
+        }
+    }
+
+    func toggleMicMute() { micMuted.toggle() }
+
+    private func updateRecordingIndicator() {
+        let r = ImageRenderer(content: RecordingIndicatorView(muted: micMuted))
+        r.scale = 2; r.isOpaque = false
+        if let img = r.cgImage { renderer?.setRecordingImage(img) }
+    }
+
     func captureDebugStages() {
         guard let renderer, arActive else {
             statusMessage = "Start AR first to capture debug stages"; return
@@ -1964,6 +2009,7 @@ final class AppCoordinator: ObservableObject {
     func stopAR(snapshotLayout: Bool = true) {
         guard arActive else { return }
         DebugLog.shared.log("stopAR(snapshotLayout: \(snapshotLayout))")
+        if isRecording { toggleRecording() } // finalise any in-progress recording
         // Record which apps are on which screen BEFORE the virtual displays are destroyed
         // (destroying them makes macOS scatter their windows onto other displays).
         if snapshotLayout { snapshotWindowLayout() }

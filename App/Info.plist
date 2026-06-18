@@ -22,6 +22,8 @@
     <true/>
     <key>NSScreenCaptureUsageDescription</key>
     <string>VR Desktop captures your displays so they can be shown inside your AR glasses.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>VR Desktop records your microphone when you record the glasses view (you can mute it with ⌃⌥M).</string>
     <key>NSHumanReadableCopyright</key>
     <string>Personal use. Includes MIT-licensed code from nrealAirLinuxDriver/xrealair-sdk-macos, xioTechnologies Fusion, and BSD-licensed hidapi.</string>
 </dict>

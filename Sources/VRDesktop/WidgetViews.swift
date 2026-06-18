@@ -182,6 +182,22 @@ struct CalendarWidgetView: View {
     }
 }
 
+/// The in-FOV recording indicator (top-centre). Not composited into the recorded video.
+struct RecordingIndicatorView: View {
+    let muted: Bool
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle().fill(.red).frame(width: 14, height: 14)
+            Text("REC").font(.system(size: 18, weight: .bold, design: .rounded))
+            if muted { Image(systemName: "mic.slash.fill").font(.system(size: 15)) }
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 18).padding(.vertical, 8)
+        .background(Color.black.opacity(0.55), in: Capsule())
+        .overlay(Capsule().strokeBorder(.white.opacity(0.15)))
+    }
+}
+
 struct GitHubWidgetView: View {
     let style: WidgetStyle
     let connected: Bool

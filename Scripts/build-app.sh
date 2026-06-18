@@ -3,6 +3,29 @@
 # Usage: Scripts/build-app.sh [debug|release]
 set -euo pipefail
 
+HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "nogit")
+# "dirty" = uncommitted changes, ignoring the generated BuildInfo.swift itself.
+if [ -n "$(git status --porcelain -uno -- . ':!Sources/VRDesktop/BuildInfo.swift' 2>/dev/null)" ]; then
+    DIRTY="+dirty"
+else
+    DIRTY=""
+fi
+COMMIT="$HASH$DIRTY"
+DATE="$(date '+%Y-%m-%d %H:%M')"
+STAMP="$COMMIT · $DATE"
+
+cat > Sources/VRDesktop/BuildInfo.swift <<EOF
+/// Build identity, stamped by Scripts/build.sh. Do not edit by hand.
+enum BuildInfo {
+    static let commit = "$COMMIT"
+    static let date = "$DATE"
+    static let version = "$STAMP"
+}
+EOF
+
+echo "==> stamped BuildInfo = $STAMP"
+
+
 CONFIG="${1:-debug}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"

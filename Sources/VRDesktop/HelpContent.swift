@@ -24,6 +24,8 @@ enum HelpContent {
             Shortcut(keys: "⌃⌥C", action: "Find the cursor (looking-at / cursor screen + arrow)"),
             Shortcut(keys: "⌃⌥X", action: "Move cursor to where you're looking"),
             Shortcut(keys: "⌃⌥P", action: "Screenshot the glasses view → Desktop"),
+            Shortcut(keys: "⌃⌥R", action: "Record the glasses view → Movies"),
+            Shortcut(keys: "⌃⌥M", action: "Mute / unmute the recording mic"),
             Shortcut(keys: "⌃⌥Q", action: "Quit VR Desktop"),
         ]),
     ]
