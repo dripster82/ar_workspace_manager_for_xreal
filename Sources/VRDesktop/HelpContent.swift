@@ -23,6 +23,7 @@ enum HelpContent {
             Shortcut(keys: "⌃⌥H", action: "Show / hide this help"),
             Shortcut(keys: "⌃⌥C", action: "Find the cursor (looking-at / cursor screen + arrow)"),
             Shortcut(keys: "⌃⌥X", action: "Move cursor to where you're looking"),
+            Shortcut(keys: "⌃⌥P", action: "Screenshot the glasses view → Desktop"),
             Shortcut(keys: "⌃⌥Q", action: "Quit VR Desktop"),
         ]),
     ]

@@ -99,6 +99,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var cursorInfoHotKeyRef: EventHotKeyRef?
     private var cursorToGazeHotKeyRef: EventHotKeyRef?
     private var escDismissHotKeyRef: EventHotKeyRef?
+    private var screenshotHotKeyRef: EventHotKeyRef?
     private static let recenterHotKeyID: UInt32 = 1
     private static let stopARHotKeyID: UInt32 = 2
     private static let helpHotKeyID: UInt32 = 3
@@ -108,6 +109,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private static let cursorInfoHotKeyID: UInt32 = 7
     private static let cursorToGazeHotKeyID: UInt32 = 8
     private static let escDismissHotKeyID: UInt32 = 9
+    private static let screenshotHotKeyID: UInt32 = 10
 
     private func registerGlobalRecenterHotKey() {
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
@@ -131,6 +133,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 case AppDelegate.cursorInfoHotKeyID: delegate.cursorInfoOverlay.toggle()
                 case AppDelegate.cursorToGazeHotKeyID: delegate.coordinator.moveCursorToGaze()
                 case AppDelegate.escDismissHotKeyID: delegate.alarmController.dismiss()
+                case AppDelegate.screenshotHotKeyID: delegate.coordinator.takeGlassesScreenshot()
                 case AppDelegate.quitHotKeyID: NSApp.terminate(nil)
                 default: break
                 }
@@ -155,6 +158,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         register(kVK_ANSI_Q, AppDelegate.quitHotKeyID, &quitHotKeyRef)
         register(kVK_ANSI_C, AppDelegate.cursorInfoHotKeyID, &cursorInfoHotKeyRef)
         register(kVK_ANSI_X, AppDelegate.cursorToGazeHotKeyID, &cursorToGazeHotKeyRef)
+        register(kVK_ANSI_P, AppDelegate.screenshotHotKeyID, &screenshotHotKeyRef)
     }
 
     /// Esc-to-dismiss: a plain Escape hotkey registered only while an alarm is showing (so it

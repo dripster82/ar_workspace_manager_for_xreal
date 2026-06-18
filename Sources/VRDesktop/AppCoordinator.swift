@@ -1546,6 +1546,29 @@ final class AppCoordinator: ObservableObject {
     /// Debug: write the wide-canvas pipeline stages to ~/Desktop/VRDesktop-debug so the merge can
     /// be inspected — stage1_*.jpg = each raw screen capture (pre-merge), stage2.jpg = the single
     /// merged flat atlas (before curve), stage3.jpg = the final curved frame sent to the glasses.
+    /// Save a PNG of what the glasses are showing (left eye when stereo) to the Desktop. ⌃⌥P.
+    func takeGlassesScreenshot() {
+        guard let renderer, arActive else {
+            statusMessage = "Start AR first to screenshot the glasses view"; return
+        }
+        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Desktop/Glasses \(f.string(from: Date())).png")
+        renderer.onScreenshotComplete = { [weak self] ok, savedURL in
+            Task { @MainActor in
+                guard let self else { return }
+                if ok {
+                    NSSound(named: NSSound.Name("Pop"))?.play()
+                    NSWorkspace.shared.activateFileViewerSelecting([savedURL])
+                    self.statusMessage = "Screenshot saved to Desktop"
+                } else {
+                    self.statusMessage = "Screenshot failed"
+                }
+            }
+        }
+        renderer.screenshotRequest = url
+    }
+
     func captureDebugStages() {
         guard let renderer, arActive else {
             statusMessage = "Start AR first to capture debug stages"; return

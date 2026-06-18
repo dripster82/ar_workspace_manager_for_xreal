@@ -107,6 +107,11 @@ public final class GlassesRenderer: NSObject {
     /// Called (off the main thread) after a debug dump, with the list of files written.
     public var onDebugDumpComplete: (([String]) -> Void)?
 
+    /// Set to capture the next frame (left eye when stereo) as a PNG at this URL; cleared after.
+    public var screenshotRequest: URL?
+    /// Called (off the main thread) after a screenshot, with success and the URL.
+    public var onScreenshotComplete: ((Bool, URL) -> Void)?
+
     public private(set) var framesPerSecond: Double = 0
     private var frameCount = 0
     private var lastFPSUpdate = CACurrentMediaTime()
@@ -321,6 +326,42 @@ public final class GlassesRenderer: NSObject {
         let rep = NSBitmapImageRep(cgImage: cg)
         guard let jpeg = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.9]) else { return false }
         do { try jpeg.write(to: url); return true } catch { return false }
+    }
+
+    /// Read a texture region into a CGImage. `cropLeftHalf` takes only the left eye (for SBS).
+    public func cgImage(from src: MTLTexture, cropLeftHalf: Bool) -> CGImage? {
+        let w = cropLeftHalf ? src.width / 2 : src.width
+        let h = src.height
+        guard w > 0, h > 0 else { return nil }
+        let desc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm, width: w, height: h, mipmapped: false)
+        desc.usage = .shaderRead; desc.storageMode = .shared
+        guard let dst = device.makeTexture(descriptor: desc),
+              let cb = commandQueue.makeCommandBuffer(),
+              let blit = cb.makeBlitCommandEncoder() else { return nil }
+        blit.copy(from: src, sourceSlice: 0, sourceLevel: 0,
+                  sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                  sourceSize: MTLSize(width: w, height: h, depth: 1),
+                  to: dst, destinationSlice: 0, destinationLevel: 0,
+                  destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
+        blit.endEncoding(); cb.commit(); cb.waitUntilCompleted()
+
+        let bytesPerRow = w * 4
+        var data = [UInt8](repeating: 0, count: bytesPerRow * h)
+        dst.getBytes(&data, bytesPerRow: bytesPerRow, from: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0)
+        let bitmapInfo = CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+        guard let ctx = CGContext(data: &data, width: w, height: h, bitsPerComponent: 8,
+                                  bytesPerRow: bytesPerRow, space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: bitmapInfo) else { return nil }
+        return ctx.makeImage()
+    }
+
+    /// Write a texture (left eye when stereo) to a PNG. Used by the screenshot hotkey.
+    private func savePNG(_ src: MTLTexture, to url: URL) -> Bool {
+        guard let cg = cgImage(from: src, cropLeftHalf: stereoEnabled) else { return false }
+        let rep = NSBitmapImageRep(cgImage: cg)
+        guard let png = rep.representation(using: .png, properties: [:]) else { return false }
+        do { try png.write(to: url); return true } catch { return false }
     }
 
     /// Set supersample factor (1.0 off, up to 2.0).
@@ -790,7 +831,8 @@ public final class GlassesRenderer: NSObject {
         // buffer we then blit into the drawable. We force the offscreen path when supersampling
         // OR when a debug dump is pending (the drawable is framebufferOnly and can't be read).
         let dumpDir = debugDumpDir
-        let offscreen = supersample || dumpDir != nil
+        let shotURL = screenshotRequest
+        let offscreen = supersample || dumpDir != nil || shotURL != nil
         let sceneTarget: MTLTexture
         if offscreen {
             guard let ss = ssColor(width: rw, height: rh) else { return }
@@ -834,15 +876,22 @@ public final class GlassesRenderer: NSObject {
 
         drawHelpOverlay(commandBuffer: commandBuffer, target: drawable.texture)
         drawBrightnessOverlay(commandBuffer: commandBuffer, target: drawable.texture)
-        // For a debug dump, also composite the HUD overlays into the readable scene target so the
-        // captured image matches what's on screen (the drawable is framebuffer-only / unreadable).
-        if dumpDir != nil {
+        // For a debug dump or screenshot, also composite the HUD overlays into the readable scene
+        // target so the captured image matches what's on screen (the drawable is unreadable).
+        if dumpDir != nil || shotURL != nil {
             drawHelpOverlay(commandBuffer: commandBuffer, target: sceneTarget)
             drawBrightnessOverlay(commandBuffer: commandBuffer, target: sceneTarget)
         }
 
         commandBuffer.present(drawable)
         commandBuffer.commit()
+
+        if let shotURL {
+            commandBuffer.waitUntilCompleted()
+            let ok = savePNG(sceneTarget, to: shotURL)
+            screenshotRequest = nil
+            onScreenshotComplete?(ok, shotURL)
+        }
 
         // Debug dump: wait for the frame to finish, then write the merged atlas (stage2) and the
         // final curved scene (stage3) to disk. Cleared so it only fires once per request.
