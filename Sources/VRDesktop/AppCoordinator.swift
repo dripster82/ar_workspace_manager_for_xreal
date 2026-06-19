@@ -92,6 +92,13 @@ final class AppCoordinator: ObservableObject {
     private var statsTimer: Timer?
     private var lastSampleCount: UInt64 = 0
     private let cursorConfiner = CursorConfiner()
+    /// The screen currently focused (⌃⌥F): rendered alone, head-locked, filling the FOV. Render-only
+    /// — no virtual displays are created/destroyed and the OS display arrangement is untouched.
+    @Published var focusedScreenID: UUID?
+    /// Global cursor position captured on entering focus, restored on exit.
+    private var preFocusCursor: CGPoint?
+    /// Distance (m) of the focused screen; its angular size depends only on width/distance.
+    private let focusDistanceMeters: Float = 1.0
     // Held while AR runs: prevents App Nap / timer coalescing from throttling the render
     // display link (the glasses window is never frontmost, so the app looks "idle" to macOS).
     private var arActivity: NSObjectProtocol?
@@ -883,11 +890,25 @@ final class AppCoordinator: ObservableObject {
     var arOutputDisplayID: CGDirectDisplayID? { arActive ? glassesDisplayID : nil }
 
     private func updateCursorConfinement() {
-        if arActive, confineCursor, glassesDisplayID != 0 {
-            cursorConfiner.start(arDisplayID: glassesDisplayID)
+        guard arActive, confineCursor else { cursorConfiner.stop(); return }
+        // Focused: confine the cursor INSIDE the focused display. Otherwise keep it OFF the glasses.
+        if let id = focusedScreenID, let displayID = displayID(forScreenID: id), displayID != 0 {
+            cursorConfiner.start(mode: .confineTo(displayID))
+        } else if glassesDisplayID != 0 {
+            cursorConfiner.start(mode: .offDisplay(glassesDisplayID))
         } else {
             cursorConfiner.stop()
         }
+    }
+
+    /// The macOS display ID an AR screen (by config id) currently maps to — virtual or physical.
+    private func displayID(forScreenID id: UUID) -> CGDirectDisplayID? {
+        if let d = virtualDisplays.displayID(for: id) { return d }
+        if let ws = workspaceStore.activeWorkspace,
+           let entry = ws.physicalInAR.first(where: { $0.value.id == id }) {
+            return Self.resolvePhysicalDisplay(uuidString: entry.key)
+        }
+        return nil
     }
 
     /// Pick the screen whose centre is closest to the head's forward direction.
@@ -1212,6 +1233,39 @@ final class AppCoordinator: ObservableObject {
 
     /// Build the placement geometry for a single screen (its own distance/scale/curve), reusing
     /// an existing capture. Wide-canvas merging is handled separately in `makeCanvasSceneScreen`.
+    /// FOV-fit width (metres) for a screen of `contentAspect` placed head-locked at
+    /// `focusDistanceMeters`, sized so its edges land on the glasses' FOV edges. fovY 23°, eye
+    /// aspect 16:9 (true for every supported glasses mode) → fovX ≈ 39.8°. A flat quad then maps
+    /// exactly to the FOV edges. `fill` leaves a hair of margin so rounding never clips an edge.
+    private func focusFitWidthMeters(contentAspect: Float) -> Float {
+        let fovY: Float = 23.0 * .pi / 180
+        let fovX: Float = 2 * atan(tan(fovY / 2) * (16.0 / 9.0))
+        let d = focusDistanceMeters
+        let maxHalfW = d * tan(fovX / 2)
+        let maxHalfH = d * tan(fovY / 2)
+        let fill: Float = 0.98
+        // Width-limited when the content is wider than the FOV box, else height-limited.
+        let halfW = contentAspect >= maxHalfW / maxHalfH
+            ? maxHalfW * fill
+            : maxHalfH * fill * contentAspect
+        return 2 * halfW
+    }
+
+    /// The focused screen: head-locked, centred, flat, sized to fill the FOV. Render-only — the
+    /// underlying virtual display and its capture are untouched.
+    private func focusedSceneScreen(config: VirtualScreenConfig, capture: CaptureSource) -> SceneScreen {
+        let aspect = Float(config.width) / Float(max(1, config.height))
+        return SceneScreen(
+            id: config.id,
+            yaw: 0, pitch: 0,
+            distance: focusDistanceMeters,
+            widthMeters: focusFitWidthMeters(contentAspect: aspect),
+            aspect: aspect,
+            curveH: 0, autoCurveH: false,
+            headLocked: true,
+            textureProvider: { [weak capture] in capture?.latestTexture })
+    }
+
     private func sceneScreen(config: VirtualScreenConfig, capture: CaptureSource) -> SceneScreen {
         // Apparent width: ~1.6m per 1920px at scale 1, 2m away.
         let baseWidth = Float(config.width) / 1920.0 * 1.6 * Float(config.scale)
@@ -1320,6 +1374,14 @@ final class AppCoordinator: ObservableObject {
     /// Assemble the renderer's scene from (config, capture) pairs. In wide-canvas mono mode the
     /// anchored screens are merged into one curved canvas; floating screens stay separate.
     private func assembleScene(_ pairs: [(config: VirtualScreenConfig, capture: CaptureSource)]) -> [SceneScreen] {
+        // Focus mode: render only the focused screen, head-locked and filling the FOV. Pure render
+        // change — the other displays still exist, we just don't draw them.
+        if let id = focusedScreenID {
+            if let p = pairs.first(where: { $0.config.id == id }) {
+                return [focusedSceneScreen(config: p.config, capture: p.capture)]
+            }
+            focusedScreenID = nil // focused screen no longer present (removed / toggled off-AR)
+        }
         guard wideCanvas, !stereoEnabled else {
             return pairs.map { sceneScreen(config: $0.config, capture: $0.capture) }
         }
@@ -1335,6 +1397,15 @@ final class AppCoordinator: ObservableObject {
     /// reusing existing captures so a slider drag updates the AR view in real time.
     /// (Adding/removing screens or toggling "show in AR" still needs a Start/Stop.)
     func liveUpdateScreens() {
+        applyRenderedScene()
+        // Re-sync the OS arrangement if the screens' left→right / row order changed.
+        arrangeDisplaysToMatchGUI(force: false)
+    }
+
+    /// Rebuild ONLY what the compositor renders, from the current captures. Deliberately does NOT
+    /// touch virtual displays or the OS display arrangement, so it's safe to call for focus
+    /// toggling — no display reconfiguration, no flicker, no ColorSync churn.
+    private func applyRenderedScene() {
         guard let renderer, arActive,
               let workspace = workspaceStore.activeWorkspace else { return }
         var pairs: [(config: VirtualScreenConfig, capture: CaptureSource)] = []
@@ -1345,8 +1416,39 @@ final class AppCoordinator: ObservableObject {
             if let capture = captures[config.id] { pairs.append((config, capture)) }
         }
         renderer.setScreens(assembleScene(pairs))
-        // Re-sync the OS arrangement if the screens' left→right / row order changed.
-        arrangeDisplaysToMatchGUI(force: false)
+    }
+
+    // MARK: Focus mode (⌃⌥F)
+
+    /// Toggle focus on the screen you're looking at: render it alone, head-locked, filling the FOV,
+    /// and confine the cursor to it. Render-only — no virtual displays or OS display config change.
+    func toggleFocus() {
+        guard arActive else { statusMessage = "Start AR to use focus"; return }
+        if focusedScreenID != nil { dropFocus(); return }
+        guard let cfg = lookedAtConfig() else {
+            statusMessage = "Look at a screen to focus it"
+            return
+        }
+        preFocusCursor = CGEvent(source: nil)?.location
+        focusedScreenID = cfg.id
+        applyRenderedScene()        // draw the focused screen alone (no display reconfig)
+        moveCursorToGaze()          // drop the cursor onto it
+        updateCursorConfinement()   // confine the cursor inside the focused display
+        statusMessage = "Focused on \(cfg.name) — ⌃⌥F to exit"
+    }
+
+    /// Exit focus: restore the full layout, free the cursor, and put it back where it was.
+    private func dropFocus() {
+        guard focusedScreenID != nil else { return }
+        focusedScreenID = nil
+        applyRenderedScene()
+        updateCursorConfinement()
+        if let p = preFocusCursor {
+            CGWarpMouseCursorPosition(p)
+            CGAssociateMouseAndMouseCursorPosition(1)
+            preFocusCursor = nil
+        }
+        statusMessage = "Focus off"
     }
 
     // MARK: OS display arrangement
@@ -2085,6 +2187,8 @@ final class AppCoordinator: ObservableObject {
         // Put the user's real desktop arrangement back the way it was before AR moved things.
         restoreDisplayArrangement()
         widgetManager?.stop()
+        focusedScreenID = nil // never let a session restart focused
+        preFocusCursor = nil
         glassesDisplayID = 0
         arActive = false
         lastArrangementSignature = []

@@ -27,6 +27,7 @@ enum HelpContent {
             Shortcut(keys: "⌃⌥R", action: "Record the glasses view → Movies"),
             Shortcut(keys: "⌃⌥M", action: "Mute / unmute the recording mic"),
             Shortcut(keys: "⌃⌥I", action: "Show / hide the HUD widgets"),
+            Shortcut(keys: "⌃⌥F", action: "Focus the screen you're looking at (toggle)"),
             Shortcut(keys: "⌃⌥Q", action: "Quit VR Desktop"),
         ]),
     ]

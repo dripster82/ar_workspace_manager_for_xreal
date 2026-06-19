@@ -1,18 +1,27 @@
 import AppKit
 
-/// Keeps the mouse cursor off the AR output display while AR is running: if the cursor
-/// wanders onto that display, it's warped back to its last position on an allowed screen.
+/// Keeps the mouse cursor constrained relative to a display while AR is running. Two modes:
+/// `offDisplay` warps the cursor back if it wanders onto the AR output (default); `confineTo`
+/// keeps it *inside* one display (focus mode), clamping to the edge if it tries to leave.
 final class CursorConfiner {
+    enum Mode: Equatable {
+        case offDisplay(CGDirectDisplayID)   // keep the cursor OFF this display (AR output)
+        case confineTo(CGDirectDisplayID)    // keep the cursor INSIDE this display (focus mode)
+    }
+
     private var monitors: [Any] = []
-    private var arDisplayID: CGDirectDisplayID = 0
+    private var mode: Mode?
     private var lastAllowed: CGPoint = .zero
 
     var isActive: Bool { !monitors.isEmpty }
 
-    func start(arDisplayID: CGDirectDisplayID) {
-        stop()
-        self.arDisplayID = arDisplayID
+    /// Start (or re-target) confinement. Switching mode while already running just updates the
+    /// target — the event monitors stay installed, so there's no gap.
+    func start(mode: Mode) {
+        let wasActive = !monitors.isEmpty
+        self.mode = mode
         lastAllowed = toCG(NSEvent.mouseLocation)
+        guard !wasActive else { return }
 
         let mask: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged,
                                            .rightMouseDragged, .otherMouseDragged]
@@ -32,20 +41,36 @@ final class CursorConfiner {
     func stop() {
         monitors.forEach { NSEvent.removeMonitor($0) }
         monitors.removeAll()
-        arDisplayID = 0
+        mode = nil
+    }
+
+    private func frame(of displayID: CGDirectDisplayID) -> CGRect? {
+        NSScreen.screens.first(where: {
+            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) == displayID
+        })?.frame
     }
 
     private func enforce() {
-        guard arDisplayID != 0,
-              let frame = NSScreen.screens.first(where: {
-                  ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) == arDisplayID
-              })?.frame else { return }
+        guard let mode else { return }
         let location = NSEvent.mouseLocation
-        if frame.contains(location) {
-            CGWarpMouseCursorPosition(lastAllowed)
-            CGAssociateMouseAndMouseCursorPosition(1) // resync hardware delta after warp
-        } else {
-            lastAllowed = toCG(location)
+        switch mode {
+        case .offDisplay(let id):
+            guard let frame = frame(of: id) else { return }
+            if frame.contains(location) {
+                CGWarpMouseCursorPosition(lastAllowed)
+                CGAssociateMouseAndMouseCursorPosition(1) // resync hardware delta after warp
+            } else {
+                lastAllowed = toCG(location)
+            }
+        case .confineTo(let id):
+            guard let frame = frame(of: id) else { return }
+            // Clamp to just inside the display's edges so dragging to an edge sticks naturally.
+            if !frame.contains(location) {
+                let x = min(max(location.x, frame.minX + 1), frame.maxX - 1)
+                let y = min(max(location.y, frame.minY + 1), frame.maxY - 1)
+                CGWarpMouseCursorPosition(toCG(NSPoint(x: x, y: y)))
+                CGAssociateMouseAndMouseCursorPosition(1)
+            }
         }
     }
 

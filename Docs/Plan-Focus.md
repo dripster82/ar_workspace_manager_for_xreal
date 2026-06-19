@@ -6,6 +6,27 @@ Conventions, hardware constraints, and current state are in those docs.
 
 ---
 
+## ✅ Implemented (v1)
+
+Shipped as a **render-only** feature, with these decisions (some refine the plan below):
+
+- **No display reconfiguration.** Focus must never create/destroy virtual displays or change the OS
+  arrangement — that would cause flicker as macOS re-sorts displays (and risk re-triggering the
+  ColorSync churn we just fixed). So focus toggling goes through a new `applyRenderedScene()` that
+  only calls `renderer.setScreens(...)` — it does **not** call `arrangeDisplaysToMatchGUI`. The
+  other virtual displays and their captures stay live; we simply don't draw them.
+- **Instant snap** (no eased transition) — lowest risk, no display involvement.
+- **HUD widgets are left alone** during focus; ⌃⌥I already toggles them, so the user controls that.
+- **Cursor:** `CursorConfiner` gained a `.confineTo(displayID)` mode (clamps the cursor inside the
+  focused display); `.offDisplay` is the existing AR-output rule. On exit the cursor is restored.
+- Files: `CursorConfiner.swift` (modes), `AppCoordinator.swift` (`focusedScreenID`, `toggleFocus`/
+  `dropFocus`, `applyRenderedScene`, `focusedSceneScreen`/`focusFitWidthMeters`, focus branch in
+  `assembleScene`, confinement + `stopAR` clear), `main.swift` (⌃⌥F = hotkey id 14), `HelpContent`.
+
+The sections below are the original plan; the bullets above note where the build differs.
+
+---
+
 ## Goal
 
 Press **⌃⌥F** and the screen you're currently looking at becomes a **focused** screen: it snaps
