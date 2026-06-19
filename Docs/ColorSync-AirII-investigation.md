@@ -77,6 +77,16 @@ and the default Air 2 profile applied (dropping the custom "Air 2 Calibrated"),
 WindowServer dropped to ~5%. The mismatched custom calibration against the Air 2's changing UUID was
 the trigger; the default profile restores cleanly in one pass.
 
+### Residual: intermittent bursts during AR (acceptable)
+
+With the Air 2 on the default profile, running AR still produces **intermittent** ColorSync bursts
+(~30–53% peaks every ~4–5 s, decaying to 0) — WindowServer periodically re-evaluating the
+profile-less *virtual* displays via the same mechanism. Confirmed **not** caused by app timers
+(widget refresh 1 s, system-load 3 s, stats 0.5 s — none touch display colour). It's OS-side and
+mild: no longer a continuously-pinned core, so it doesn't lock up input the way the Air 2 wedge did.
+Assigning the virtual displays a profile via `ColorSyncDeviceSetCustomProfiles` did not take, so
+there's no clean in-app fix; left as-is.
+
 ## Fixes / workarounds for the Air 2 loop
 
 1. **Reset the Air 2 colour profile** — System Settings → Displays → Air 2 → Color → select the
