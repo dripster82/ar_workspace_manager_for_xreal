@@ -21,6 +21,7 @@ enum HelpContent {
             Shortcut(keys: "⌃⌥Space", action: "Recenter the view"),
             Shortcut(keys: "⌃⌥D", action: "Depth — Stereo (SBS) on / off"),
             Shortcut(keys: "⌃⌥F", action: "Focus the screen you're looking at (toggle)"),
+            Shortcut(keys: "⌃⌥V", action: "Passthrough — hide / show the screens (HUD stays)"),
         ]),
         Section(title: "Cursor", column: 0, shortcuts: [
             Shortcut(keys: "⌃⌥C", action: "Find the cursor (screen + arrow)"),

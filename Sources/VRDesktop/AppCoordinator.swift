@@ -99,6 +99,9 @@ final class AppCoordinator: ObservableObject {
     private var preFocusCursor: CGPoint?
     /// Distance (m) of the focused screen; its angular size depends only on width/distance.
     private let focusDistanceMeters: Float = 1.0
+    /// Passthrough (⌃⌥V): hide only the screens so you see the real world; HUD widgets stay
+    /// (they're controlled separately by ⌃⌥I). Render-only — virtual displays are left untouched.
+    @Published var screensHidden = false
     // Held while AR runs: prevents App Nap / timer coalescing from throttling the render
     // display link (the glasses window is never frontmost, so the app looks "idle" to macOS).
     private var arActivity: NSObjectProtocol?
@@ -1408,6 +1411,8 @@ final class AppCoordinator: ObservableObject {
     private func applyRenderedScene() {
         guard let renderer, arActive,
               let workspace = workspaceStore.activeWorkspace else { return }
+        // Passthrough: draw no screens (the HUD widgets, pushed separately, stay).
+        if screensHidden { renderer.setScreens([]); return }
         var pairs: [(config: VirtualScreenConfig, capture: CaptureSource)] = []
         for config in workspace.virtualScreens where config.showInAR {
             if let capture = captureForConfig(config) { pairs.append((config, capture)) }
@@ -1416,6 +1421,15 @@ final class AppCoordinator: ObservableObject {
             if let capture = captures[config.id] { pairs.append((config, capture)) }
         }
         renderer.setScreens(assembleScene(pairs))
+    }
+
+    /// Passthrough (⌃⌥V): hide / show the screens only. HUD widgets are unaffected (⌃⌥I toggles
+    /// those). Render-only — no virtual displays or OS display config change.
+    func togglePassthrough() {
+        guard arActive else { statusMessage = "Start AR to use passthrough"; return }
+        screensHidden.toggle()
+        applyRenderedScene()
+        statusMessage = screensHidden ? "Passthrough — screens hidden (HUD stays)" : "Screens shown"
     }
 
     // MARK: Focus mode (⌃⌥F)
@@ -2189,6 +2203,7 @@ final class AppCoordinator: ObservableObject {
         widgetManager?.stop()
         focusedScreenID = nil // never let a session restart focused
         preFocusCursor = nil
+        screensHidden = false
         glassesDisplayID = 0
         arActive = false
         lastArrangementSignature = []

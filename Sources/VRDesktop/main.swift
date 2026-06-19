@@ -104,6 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var micMuteHotKeyRef: EventHotKeyRef?
     private var toggleHUDHotKeyRef: EventHotKeyRef?
     private var toggleFocusHotKeyRef: EventHotKeyRef?
+    private var passthroughHotKeyRef: EventHotKeyRef?
     private static let recenterHotKeyID: UInt32 = 1
     private static let stopARHotKeyID: UInt32 = 2
     private static let helpHotKeyID: UInt32 = 3
@@ -118,6 +119,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private static let micMuteHotKeyID: UInt32 = 12
     private static let toggleHUDHotKeyID: UInt32 = 13
     private static let toggleFocusHotKeyID: UInt32 = 14
+    private static let passthroughHotKeyID: UInt32 = 15
 
     private func registerGlobalRecenterHotKey() {
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
@@ -146,6 +148,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 case AppDelegate.micMuteHotKeyID: delegate.coordinator.toggleMicMute()
                 case AppDelegate.toggleHUDHotKeyID: delegate.coordinator.toggleHUD()
                 case AppDelegate.toggleFocusHotKeyID: delegate.coordinator.toggleFocus()
+                case AppDelegate.passthroughHotKeyID: delegate.coordinator.togglePassthrough()
                 case AppDelegate.quitHotKeyID: NSApp.terminate(nil)
                 default: break
                 }
@@ -175,6 +178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         register(kVK_ANSI_M, AppDelegate.micMuteHotKeyID, &micMuteHotKeyRef)
         register(kVK_ANSI_I, AppDelegate.toggleHUDHotKeyID, &toggleHUDHotKeyRef)
         register(kVK_ANSI_F, AppDelegate.toggleFocusHotKeyID, &toggleFocusHotKeyRef)
+        register(kVK_ANSI_V, AppDelegate.passthroughHotKeyID, &passthroughHotKeyRef)
     }
 
     /// Esc-to-dismiss: a plain Escape hotkey registered only while an alarm is showing (so it
