@@ -30,13 +30,13 @@ enum ScreenBackgroundApplier {
         var options: [NSWorkspace.DesktopImageOptionKey: Any] = [:]
         switch background.kind {
         case .image:
-            // A user-chosen image: point macOS straight at the file and scale to fill the display.
+            // A user-chosen image: set it as-is and stretch it to fill the whole screen.
             guard let path = background.imagePath, FileManager.default.fileExists(atPath: path) else {
                 NSLog("ScreenBackgroundApplier: image missing for display \(displayID): \(background.imagePath ?? "nil")")
                 return
             }
             url = URL(fileURLWithPath: path)
-            options = [.imageScaling: NSImageScaling.scaleProportionallyUpOrDown.rawValue,
+            options = [.imageScaling: NSImageScaling.scaleAxesIndependently.rawValue,
                        .allowClipping: true]
         case .transparent:
             url = imageURL(forHex: "#000000")
