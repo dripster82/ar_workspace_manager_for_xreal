@@ -47,6 +47,8 @@ final class WidgetManager {
     private var widgets: [HUDWidget] = []
     private var stacks: [HUDStack] = []
     private var timer: Timer?
+    /// When true the HUD is hidden: nothing is pushed to the renderer (toggled by ⌃⌥I).
+    private(set) var hidden = false
     /// Apparent width (metres) of a standalone widget card at scale 1; height follows the aspect.
     private let baseWidthMeters: Float = 0.225
     /// Metres per logical point for content-sized stacks (so a stack grows with its contents).
@@ -79,8 +81,15 @@ final class WidgetManager {
         renderer?.setWidgets([])
     }
 
+    /// Hide / show the HUD widgets in the AR scene (⌃⌥I). Pushes immediately so it takes effect.
+    func toggleHidden() {
+        hidden.toggle()
+        push()
+    }
+
     private func push() {
         guard let renderer else { return }
+        guard !hidden else { renderer.setWidgets([]); return }
         let date = Date()
         let power = PowerMonitor.current()
         var placements: [GlassesRenderer.WidgetPlacement] = []

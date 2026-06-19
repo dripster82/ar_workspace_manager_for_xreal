@@ -9,6 +9,33 @@ public enum ScreenPlacement: String, Codable, Sendable {
     case floating  // fixed in the field of view (head-locked; travels with the head)
 }
 
+/// The desktop background applied to a (virtual) screen. Because the screen content is the
+/// captured macOS desktop — opaque, and in the glasses' additive optics black reads as
+/// transparent — the only way to change what shows behind your windows is to set that virtual
+/// display's macOS wallpaper. `transparent` = pure black, so the desktop area shows through the
+/// glasses and only your windows float.
+public enum ScreenBackgroundKind: String, Codable, Sendable {
+    case `default`     // leave the macOS wallpaper untouched
+    case color         // solid colour (see `hex`)
+    case transparent   // pure black → see-through in the glasses
+    case image         // an image file (see `imagePath`)
+}
+
+public struct ScreenBackground: Codable, Hashable, Sendable {
+    public var kind: ScreenBackgroundKind
+    /// "#RRGGBB" — used when `kind == .color`.
+    public var hex: String
+    /// Absolute path to an image file — used when `kind == .image`.
+    public var imagePath: String?
+
+    public init(kind: ScreenBackgroundKind = .default, hex: String = "#1E1E2E",
+                imagePath: String? = nil) {
+        self.kind = kind
+        self.hex = hex
+        self.imagePath = imagePath
+    }
+}
+
 /// A virtual screen definition the user configures.
 public struct VirtualScreenConfig: Codable, Identifiable, Hashable, Sendable {
     public var id: UUID
@@ -32,13 +59,16 @@ public struct VirtualScreenConfig: Codable, Identifiable, Hashable, Sendable {
     public var mirrorOfVirtual: UUID?
     /// Anchored (world-fixed) or floating (head-locked).
     public var placement: ScreenPlacement
+    /// Desktop background applied to this (virtual) screen's macOS wallpaper.
+    public var background: ScreenBackground
 
     public init(id: UUID = UUID(), name: String, width: Int, height: Int, hiDPI: Bool = false,
                 yawDegrees: Double = 0, pitchDegrees: Double = 0, distanceMeters: Double = 2.0,
                 scale: Double = 1.0, curvatureRadius: Double = 0,
                 autoCurveH: Bool = false, showInAR: Bool = true,
                 mirrorToPhysical: String? = nil, mirrorOfVirtual: UUID? = nil,
-                placement: ScreenPlacement = .anchored) {
+                placement: ScreenPlacement = .anchored,
+                background: ScreenBackground = ScreenBackground()) {
         self.id = id
         self.name = name
         self.width = width
@@ -54,6 +84,7 @@ public struct VirtualScreenConfig: Codable, Identifiable, Hashable, Sendable {
         self.mirrorToPhysical = mirrorToPhysical
         self.mirrorOfVirtual = mirrorOfVirtual
         self.placement = placement
+        self.background = background
     }
 
     // Custom decoding so older saved workspaces (without the newer fields) still load.
@@ -76,6 +107,7 @@ public struct VirtualScreenConfig: Codable, Identifiable, Hashable, Sendable {
         mirrorToPhysical = try c.decodeIfPresent(String.self, forKey: .mirrorToPhysical)
         mirrorOfVirtual = try c.decodeIfPresent(UUID.self, forKey: .mirrorOfVirtual)
         placement = try c.decodeIfPresent(ScreenPlacement.self, forKey: .placement) ?? .anchored
+        background = try c.decodeIfPresent(ScreenBackground.self, forKey: .background) ?? ScreenBackground()
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -95,12 +127,13 @@ public struct VirtualScreenConfig: Codable, Identifiable, Hashable, Sendable {
         try c.encodeIfPresent(mirrorToPhysical, forKey: .mirrorToPhysical)
         try c.encodeIfPresent(mirrorOfVirtual, forKey: .mirrorOfVirtual)
         try c.encode(placement, forKey: .placement)
+        try c.encode(background, forKey: .background)
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, width, height, hiDPI, yawDegrees, pitchDegrees, distanceMeters
         case scale, curvatureRadius, autoCurve, autoCurveH, showInAR, mirrorToPhysical
-        case mirrorOfVirtual, placement
+        case mirrorOfVirtual, placement, background
     }
 
     /// Default placement values (position/size/curve), independent of identity & resolution.

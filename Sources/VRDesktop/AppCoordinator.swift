@@ -1177,12 +1177,24 @@ final class AppCoordinator: ObservableObject {
             renderer.startOutput(on: target)
             self.outputScreenName = target.localizedName
             self.applyConfiguredMirrors() // restore any virtual→physical mirrors
+            self.applyAllScreenBackgrounds() // set each virtual display's desktop wallpaper
             self.updateCursorConfinement()
             self.statusMessage = "AR active on \(target.localizedName) \(Int(target.frame.width))×\(Int(target.frame.height)) at (\(Int(target.frame.origin.x)),\(Int(target.frame.origin.y))) with \(screenCount) screen(s)"
             // Let the OS arrangement settle, then offer to put windows back on their screens.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
                 guard let self, self.arActive else { return }
                 self.maybeRestoreWindowLayout()
+            }
+        }
+    }
+
+    /// Apply each virtual screen's configured desktop background to its macOS display. Called once
+    /// displays have settled after AR starts (the NSScreens must exist for the wallpaper to take).
+    private func applyAllScreenBackgrounds() {
+        guard let workspace = workspaceStore.activeWorkspace else { return }
+        for config in workspace.virtualScreens where config.background.kind != .default {
+            if let displayID = virtualDisplays.displayID(for: config.id) {
+                ScreenBackgroundApplier.apply(config.background, toDisplayID: displayID)
             }
         }
     }
@@ -1907,6 +1919,9 @@ final class AppCoordinator: ObservableObject {
         commitWidgets(ws)
     }
 
+    /// Hide / show the head-locked HUD widgets in the AR scene (⌃⌥I).
+    func toggleHUD() { widgetManager?.toggleHidden() }
+
     private func commitWidgets(_ ws: Workspace) {
         workspaceStore.activeWorkspace = ws
         workspaceStore.save()
@@ -1977,6 +1992,15 @@ final class AppCoordinator: ObservableObject {
             } else if !config.showInAR, let capture = captures.removeValue(forKey: config.id) {
                 Task { await capture.stop() }
             }
+        }
+
+        // Apply the desktop background live when it (or the resolution, which recreates the
+        // display and drops the wallpaper) changed. Guarded so a slider drag doesn't re-set it
+        // every step. Physical screens have no virtual display, so this naturally skips them.
+        let backgroundChanged = existing?.background != config.background
+        if arActive, physicalKey == nil, backgroundChanged || resolutionChanged,
+           let displayID = virtualDisplays.displayID(for: config.id) {
+            ScreenBackgroundApplier.apply(config.background, toDisplayID: displayID)
         }
 
         liveUpdateScreens()

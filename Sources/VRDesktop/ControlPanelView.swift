@@ -897,6 +897,18 @@ struct ScreenRow: View {
         else { nameField = cfg.name }
     }
 
+    private func chooseBackgroundImage() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.prompt = "Use as Background"
+        if panel.runModal() == .OK, let url = panel.url {
+            // Copy into the app's support folder so the workspace is self-contained.
+            cfg.background.imagePath = ScreenBackgroundApplier.importImage(from: url) // persists via onChange(of: cfg)
+        }
+    }
+
     var body: some View {
         DisclosureGroup(isExpanded: $expanded) {
             VStack(alignment: .leading, spacing: 6) {
@@ -923,6 +935,34 @@ struct ScreenRow: View {
                 }
                 .pickerStyle(.segmented)
                 .help("Anchored: fixed in space. Floating: stays in view (yaw/pitch/distance are the offset).")
+                if !isPhysical {
+                    HStack(spacing: 6) {
+                        Picker("Background", selection: $cfg.background.kind) {
+                            Text("Default").tag(ScreenBackgroundKind.default)
+                            Text("Solid colour").tag(ScreenBackgroundKind.color)
+                            Text("Image").tag(ScreenBackgroundKind.image)
+                            Text("Transparent").tag(ScreenBackgroundKind.transparent)
+                        }
+                        .font(.caption)
+                        if cfg.background.kind == .color {
+                            ColorPicker("", selection: Binding(
+                                get: { Color(nsColor: ScreenBackgroundApplier.nsColor(fromHex: cfg.background.hex) ?? .black) },
+                                set: { cfg.background.hex = ScreenBackgroundApplier.hex(from: NSColor($0)) }
+                            ))
+                            .labelsHidden()
+                        }
+                    }
+                    .help("Sets this screen's macOS desktop wallpaper. Transparent fills it black, "
+                          + "which the glasses' optics render see-through — so only your windows show.")
+                    if cfg.background.kind == .image {
+                        HStack(spacing: 6) {
+                            Button("Choose Image…") { chooseBackgroundImage() }
+                            Text(cfg.background.imagePath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "No image")
+                                .font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                        }
+                        .controlSize(.small)
+                    }
+                }
                 if isPhysical {
                     Text("Resolution: \(cfg.width)×\(cfg.height)")
                         .font(.caption2).foregroundStyle(.secondary)

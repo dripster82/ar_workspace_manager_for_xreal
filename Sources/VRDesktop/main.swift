@@ -102,6 +102,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var screenshotHotKeyRef: EventHotKeyRef?
     private var recordHotKeyRef: EventHotKeyRef?
     private var micMuteHotKeyRef: EventHotKeyRef?
+    private var toggleHUDHotKeyRef: EventHotKeyRef?
     private static let recenterHotKeyID: UInt32 = 1
     private static let stopARHotKeyID: UInt32 = 2
     private static let helpHotKeyID: UInt32 = 3
@@ -114,6 +115,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private static let screenshotHotKeyID: UInt32 = 10
     private static let recordHotKeyID: UInt32 = 11
     private static let micMuteHotKeyID: UInt32 = 12
+    private static let toggleHUDHotKeyID: UInt32 = 13
 
     private func registerGlobalRecenterHotKey() {
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
@@ -140,6 +142,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 case AppDelegate.screenshotHotKeyID: delegate.coordinator.takeGlassesScreenshot()
                 case AppDelegate.recordHotKeyID: delegate.coordinator.toggleRecording()
                 case AppDelegate.micMuteHotKeyID: delegate.coordinator.toggleMicMute()
+                case AppDelegate.toggleHUDHotKeyID: delegate.coordinator.toggleHUD()
                 case AppDelegate.quitHotKeyID: NSApp.terminate(nil)
                 default: break
                 }
@@ -167,6 +170,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         register(kVK_ANSI_P, AppDelegate.screenshotHotKeyID, &screenshotHotKeyRef)
         register(kVK_ANSI_R, AppDelegate.recordHotKeyID, &recordHotKeyRef)
         register(kVK_ANSI_M, AppDelegate.micMuteHotKeyID, &micMuteHotKeyRef)
+        register(kVK_ANSI_I, AppDelegate.toggleHUDHotKeyID, &toggleHUDHotKeyRef)
     }
 
     /// Esc-to-dismiss: a plain Escape hotkey registered only while an alarm is showing (so it
