@@ -69,6 +69,14 @@ can't be fixed in VR Desktop. The private `CGVirtualDisplay` API exposes no colo
 assigning an sRGB profile via `ColorSyncDeviceSetCustomProfiles` had no effect (that attempt was
 reverted).
 
+## ✅ Resolution (confirmed 2026-06-19)
+
+**Resetting the Air 2 to its default colour profile stopped the loop.** With the glasses plugged in
+and the default Air 2 profile applied (dropping the custom "Air 2 Calibrated"),
+`colorsync.displayservices` settled to **0%** (one brief blip on the profile change, then flat) and
+WindowServer dropped to ~5%. The mismatched custom calibration against the Air 2's changing UUID was
+the trigger; the default profile restores cleanly in one pass.
+
 ## Fixes / workarounds for the Air 2 loop
 
 1. **Reset the Air 2 colour profile** — System Settings → Displays → Air 2 → Color → select the
