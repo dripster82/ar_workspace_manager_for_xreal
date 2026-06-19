@@ -206,18 +206,27 @@ public final class VirtualDisplayService {
     /// a 2× backing wider than this fails, so fall back to 1× for very wide screens.
     private static let maxHiDPIBackingWidth = 6144
 
-    @discardableResult
-    /// Deterministic 32-bit serial from a screen's UUID (FNV-1a), stable across launches so the
-    /// virtual display keeps one identity — and one reused ColorSync profile — instead of a new
-    /// one every session.
-    private static func stableSerial(for id: UUID) -> UInt32 {
-        var hash: UInt32 = 2166136261
-        let b = id.uuid
-        for byte in [b.0, b.1, b.2, b.3, b.4, b.5, b.6, b.7,
-                     b.8, b.9, b.10, b.11, b.12, b.13, b.14, b.15] {
-            hash = (hash ^ UInt32(byte)) &* 16777619
-        }
-        return hash
+    /// Base for slot-based serial numbers ("VR" = 0x5652). Each active virtual display gets the
+    /// lowest free slot, so its serial — and therefore the CGDisplay UUID macOS derives from
+    /// vendor/product/serial — comes from a small bounded pool (slot 0, 1, 2, …) instead of being
+    /// unique per screen.
+    private static let serialBase: UInt32 = 0x56520000
+    /// Slot index reserved for each active screen id, freed on destroy so the pool stays compact.
+    private var slotForID: [UUID: UInt32] = [:]
+
+    /// Reserve (or reuse) the lowest free slot for `id`. Why slots and not a per-screen hash:
+    /// WindowServer persists a saved arrangement (`DisplaySets`) for every distinct *combination*
+    /// of display UUIDs it sees and never prunes them. Hashing each screen's UUID gave every screen
+    /// ever created a unique identity, so the registry grew without bound (hundreds of stale
+    /// configs → colorsync.displayservices re-parsing a huge plist at ~75% CPU). Bounding identities
+    /// to slot 0…N means the same display-set recurs each session and WindowServer reuses one config.
+    private func reserveSlot(for id: UUID) -> UInt32 {
+        if let slot = slotForID[id] { return slot }
+        let used = Set(slotForID.values)
+        var slot: UInt32 = 0
+        while used.contains(slot) { slot += 1 }
+        slotForID[id] = slot
+        return slot
     }
 
     public func create(_ config: VirtualScreenConfig) -> CGDirectDisplayID? {
@@ -235,13 +244,10 @@ public final class VirtualDisplayService {
         // Approximate physical size at ~100 ppi so macOS picks sensible default scaling.
         descriptor.sizeInMillimeters = CGSize(width: Double(config.width) * 0.254,
                                               height: Double(config.height) * 0.254)
-        // Stable per-screen identity. config.id.hashValue is randomised every process launch, so
-        // each session the virtual display looked like a brand-new monitor — macOS then generated
-        // a fresh ColorSync profile each time and piled up hundreds in
-        // /Library/ColorSync/Profiles/Displays/. Deriving the serial deterministically from the
-        // screen's UUID (FNV-1a over its 16 bytes) keeps the identity stable across launches, so
-        // macOS reuses one profile per screen instead of accumulating new ones.
-        descriptor.serialNum = Self.stableSerial(for: config.id)
+        // Bounded slot-based identity (see reserveSlot): the serial — and the CGDisplay UUID macOS
+        // derives from it — is drawn from a small pool reused across screens and sessions, so
+        // WindowServer's display registry doesn't accumulate a new saved arrangement per screen.
+        descriptor.serialNum = Self.serialBase &+ reserveSlot(for: config.id)
         descriptor.productID = 0x5652 // "VR"
         descriptor.vendorID = 0x4444
         descriptor.queue = DispatchQueue.main
@@ -271,10 +277,12 @@ public final class VirtualDisplayService {
 
     public func destroy(_ id: UUID) {
         active.removeValue(forKey: id) // releasing the object removes the display
+        slotForID.removeValue(forKey: id) // free the slot for reuse
     }
 
     public func destroyAll() {
         active.removeAll()
+        slotForID.removeAll()
     }
 
     public func displayID(for id: UUID) -> CGDirectDisplayID? {
