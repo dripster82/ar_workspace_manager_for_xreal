@@ -166,7 +166,7 @@ struct CalendarWidgetView: View {
                         let newDay = idx == 0 || !cal.isDate(items[idx - 1].start, inSameDayAs: e.start)
                         let isNext = idx == 0
                         if newDay {
-                            Text(dayLabel(e.start)).font(.system(size: 12, weight: .bold, design: .rounded))
+                            Text(dayLabel(e.start)).font(.system(size: 15, weight: .bold, design: .rounded))
                                 .foregroundStyle(.secondary).padding(.top, idx == 0 ? 2 : 6)
                         }
                         HStack(spacing: 6) {

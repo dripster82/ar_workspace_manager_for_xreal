@@ -89,7 +89,7 @@ struct HelpView: View {
     private func sectionView(_ section: HelpContent.Section) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(section.title)
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
             ForEach(section.shortcuts) { sc in
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     Text(sc.keys)
