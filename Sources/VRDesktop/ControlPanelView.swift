@@ -13,6 +13,7 @@ struct ControlPanelView: View {
     @State private var route: PanelRoute = .dashboard
     @State private var settingsTab: SettingsTab = .general
     @State private var selectedHUDID: UUID?
+    @State private var selectedDisplayID: UUID?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -50,11 +51,7 @@ struct ControlPanelView: View {
     @ViewBuilder private var detail: some View {
         switch route {
         case .dashboard: dashboardPage
-        case .workspace:
-            VStack(spacing: 14) {
-                card("Layout", "square.on.square.dashed") { PlacementMapView(coordinator: coordinator) }
-                card("Workspace & displays", "square.grid.2x2") { workspaceSection }
-            }
+        case .workspace: workspacePage
         case .hudWidgets: hudWidgetsPage
         case .windowRules:
             ComingSoon(title: "Window Rules",
@@ -114,6 +111,107 @@ struct ControlPanelView: View {
                 }
             }
         }
+    }
+
+    // MARK: Workspace — layout-centric (selectors, layout map, selected display detail)
+
+    private var workspacePage: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            workspaceBar
+            card("Layout", "square.on.square.dashed") {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Button { addDisplay(width: 2560, height: 1440) } label: {
+                            Label("Add display (16:9)", systemImage: "plus.rectangle")
+                        }
+                        Button { addDisplay(width: 3840, height: 1080) } label: {
+                            Label("Add ultrawide", systemImage: "plus.rectangle.on.rectangle")
+                        }
+                        Spacer()
+                    }
+                    .controlSize(.small)
+                    PlacementMapView(coordinator: coordinator, selection: $selectedDisplayID)
+                }
+            }
+            selectedDisplayDetail
+        }
+    }
+
+    private var workspaceBar: some View {
+        card("Workspace", "rectangle.3.group") {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Text("Workspace").font(.caption).foregroundStyle(.secondary).frame(width: 80, alignment: .leading)
+                    Picker("", selection: Binding(
+                        get: { coordinator.workspaceStore.activeWorkspaceID },
+                        set: { coordinator.selectWorkspace($0); selectedDisplayID = nil }
+                    )) {
+                        ForEach(coordinator.workspaceStore.workspaces) { ws in
+                            Text(ws.name).tag(UUID?.some(ws.id))
+                        }
+                    }
+                    .labelsHidden().frame(minWidth: 150)
+                    TextField("Name", text: $workspaceName)
+                        .textFieldStyle(.roundedBorder).frame(width: 150)
+                        .onSubmit { coordinator.renameActiveWorkspace(workspaceName) }
+                        .onAppear { syncWorkspaceName() }
+                        .onChange(of: coordinator.workspaceStore.activeWorkspaceID) { _ in syncWorkspaceName() }
+                    Button { coordinator.addWorkspace(); syncWorkspaceName() } label: { Image(systemName: "plus") }
+                        .help("New workspace")
+                    Button(role: .destructive) { coordinator.deleteActiveWorkspace(); syncWorkspaceName() } label: {
+                        Image(systemName: "trash")
+                    }
+                    .help("Delete workspace").disabled(coordinator.workspaceStore.workspaces.count <= 1)
+                    Spacer()
+                }
+                HStack(spacing: 8) {
+                    Text("HUD Profile").font(.caption).foregroundStyle(.secondary).frame(width: 80, alignment: .leading)
+                    Picker("", selection: Binding(
+                        get: { coordinator.activeHUDProfileID },
+                        set: { coordinator.selectHUDProfile($0) }
+                    )) {
+                        ForEach(coordinator.hudProfiles) { p in Text(p.name).tag(Optional(p.id)) }
+                    }
+                    .labelsHidden().frame(minWidth: 150)
+                    Text("Edit widgets on the HUD Widgets page.").font(.caption2).foregroundStyle(.secondary)
+                    Spacer()
+                }
+            }
+            .controlSize(.small)
+        }
+    }
+
+    @ViewBuilder private var selectedDisplayDetail: some View {
+        if let id = selectedDisplayID, let screen = coordinator.editableScreens().first(where: { $0.id == id }) {
+            card("Display · \(screen.name)", "display") {
+                VStack(alignment: .leading, spacing: 8) {
+                    ScreenRow(initial: screen, isPhysical: isPhysical(id),
+                              wideCanvasMode: coordinator.wideCanvas,
+                              lookedAt: coordinator.lookedAtScreenID == id, startExpanded: true,
+                              onChange: { coordinator.updateScreen($0) },
+                              onRemove: { coordinator.removeScreen(id: id); selectedDisplayID = nil })
+                        .id(id)
+                    if !isPhysical(id) {
+                        virtualMirrorMenu(for: screen)
+                        if screen.mirrorOfVirtual == nil { mirrorMenu(for: screen) }
+                    }
+                }
+            }
+        } else {
+            card("Display", "display") {
+                Text("Click a screen in the layout above to edit it, or add a display.")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
+            }
+        }
+    }
+
+    private func addDisplay(width: Int, height: Int) {
+        let n = (coordinator.workspaceStore.activeWorkspace?.virtualScreens.count ?? 0) + 1
+        let cfg = VirtualScreenConfig(name: "Screen \(n)", width: width, height: height,
+                                      hiDPI: width <= 3840)
+        coordinator.addVirtualScreen(cfg)
+        selectedDisplayID = cfg.id
     }
 
     // MARK: HUD Widgets — three-column (Available / Active / Settings)
@@ -1150,7 +1248,7 @@ struct ScreenRow: View {
     @State private var nameField: String
 
     init(initial: VirtualScreenConfig, isPhysical: Bool = false, wideCanvasMode: Bool = false,
-         lookedAt: Bool = false,
+         lookedAt: Bool = false, startExpanded: Bool = false,
          onChange: @escaping (VirtualScreenConfig) -> Void = { _ in },
          onRemove: @escaping () -> Void = {}) {
         self.initial = initial
@@ -1161,6 +1259,7 @@ struct ScreenRow: View {
         self.onRemove = onRemove
         _cfg = State(initialValue: initial)
         _nameField = State(initialValue: initial.name)
+        _expanded = State(initialValue: startExpanded)
     }
 
     private func commitName() {
@@ -1310,8 +1409,14 @@ struct ScreenRow: View {
         HStack {
             Text(label).frame(width: 60, alignment: .leading).font(.caption)
             Slider(value: value, in: range)
-            Text(String(format: "%.1f%@", value.wrappedValue, unit))
-                .frame(width: 52).font(.caption).monospacedDigit()
+            // Editable value: type an exact number (clamped to range), or drag the slider.
+            TextField("", value: Binding(
+                get: { value.wrappedValue },
+                set: { value.wrappedValue = min(range.upperBound, max(range.lowerBound, $0)) }
+            ), format: .number.precision(.fractionLength(0...1)))
+                .textFieldStyle(.roundedBorder).frame(width: 52)
+                .font(.caption).monospacedDigit().multilineTextAlignment(.trailing)
+            Text(unit).font(.caption2).foregroundStyle(.secondary).frame(width: 12, alignment: .leading)
         }
     }
 
@@ -1338,6 +1443,8 @@ struct ScreenRow: View {
 /// screen is a box you drag to set its yaw (horizontal) and pitch (vertical).
 struct PlacementMapView: View {
     @ObservedObject var coordinator: AppCoordinator
+    /// Optional click-to-select of a screen (used by the Workspace editor).
+    var selection: Binding<UUID?>? = nil
     @State private var zoomAnchored = 1.0
     @State private var zoomFloating = 1.0
 
@@ -1421,6 +1528,8 @@ struct PlacementMapView: View {
                                       coordinateSpace: spaceName, accent: boxAccent, pxPerDeg: ppd,
                                       yawRange: baseYaw, pitchRange: basePitch,
                                       lookedAt: coordinator.lookedAtScreenID == cfg.id,
+                                      selected: selection?.wrappedValue == cfg.id,
+                                      onSelect: { selection?.wrappedValue = cfg.id },
                                       onChange: { coordinator.updateScreen($0) })
                         }
                         // Head-locked HUD widgets/stacks live in the field of view → floating only.
@@ -1460,13 +1569,16 @@ private struct ScreenBox: View {
     let yawRange: Double
     let pitchRange: Double
     let lookedAt: Bool
+    var selected: Bool = false
+    var onSelect: () -> Void = {}
     var onChange: (VirtualScreenConfig) -> Void
 
     @State private var cfg: VirtualScreenConfig
 
     init(initial: VirtualScreenConfig, area: CGSize, coordinateSpace: String, accent: Color,
          pxPerDeg: CGFloat, yawRange: Double, pitchRange: Double,
-         lookedAt: Bool, onChange: @escaping (VirtualScreenConfig) -> Void) {
+         lookedAt: Bool, selected: Bool = false, onSelect: @escaping () -> Void = {},
+         onChange: @escaping (VirtualScreenConfig) -> Void) {
         self.initial = initial
         self.area = area
         self.coordinateSpace = coordinateSpace
@@ -1475,6 +1587,8 @@ private struct ScreenBox: View {
         self.yawRange = yawRange
         self.pitchRange = pitchRange
         self.lookedAt = lookedAt
+        self.selected = selected
+        self.onSelect = onSelect
         self.onChange = onChange
         _cfg = State(initialValue: initial)
     }
@@ -1491,6 +1605,11 @@ private struct ScreenBox: View {
         cfg.yawDegrees = min(yawRange, max(-yawRange, yaw))
         cfg.pitchDegrees = min(pitchRange, max(-pitchRange, pitch))
         onChange(cfg)
+    }
+
+    private var borderColor: Color {
+        if selected { return PanelTheme.accent }
+        return lookedAt ? .yellow : .white.opacity(0.5)
     }
 
     // Apparent width in metres — must match AppCoordinator.sceneScreen.
@@ -1513,12 +1632,13 @@ private struct ScreenBox: View {
                 Text(cfg.name).font(.system(size: 9)).lineLimit(1)
                     .padding(.horizontal, 3).foregroundStyle(.white))
             .overlay(RoundedRectangle(cornerRadius: 4)
-                .strokeBorder(lookedAt ? Color.yellow : .white.opacity(0.5), lineWidth: lookedAt ? 2 : 1))
+                .strokeBorder(borderColor, lineWidth: selected ? 2.5 : (lookedAt ? 2 : 1)))
             .frame(width: w, height: h)
             .position(point())
+            .onTapGesture { onSelect() }
             .gesture(
                 DragGesture(coordinateSpace: .named(coordinateSpace))
-                    .onChanged { apply(location: $0.location) }
+                    .onChanged { onSelect(); apply(location: $0.location) }
             )
             .onChange(of: initial) { newValue in if newValue != cfg { cfg = newValue } }
     }
