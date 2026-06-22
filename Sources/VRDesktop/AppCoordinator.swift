@@ -1131,6 +1131,22 @@ final class AppCoordinator: ObservableObject {
 
     // MARK: AR session
 
+    /// UI-friendly AR toggle: stop if running, else start on the glasses (or the first non-main
+    /// display as a stand-in). Used by the control-panel top bar / sidebar.
+    /// Name of the active workspace, for the panel's top bar / sidebar.
+    var activeWorkspaceName: String { workspaceStore.activeWorkspace?.name ?? "—" }
+
+    func toggleAR() {
+        if arActive { stopAR(); return }
+        let id = glassesScreenID()
+            ?? NSScreen.screens.first(where: { $0 != NSScreen.main }).map { Self.screenDisplayID($0) }
+        if let id, let screen = NSScreen.screens.first(where: { Self.screenDisplayID($0) == id }) {
+            startAR(on: screen)
+        } else {
+            statusMessage = "No glasses / output display found"
+        }
+    }
+
     func startAR(on screen: NSScreen) {
         guard !arActive else { return }
         let targetID = Self.screenDisplayID(screen)

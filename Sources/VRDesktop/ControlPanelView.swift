@@ -10,42 +10,138 @@ struct ControlPanelView: View {
     @State private var moveX = ""
     @State private var moveY = ""
     @State private var showDiagnostics = false
+    @State private var route: PanelRoute = .dashboard
+    @State private var settingsTab: SettingsTab = .general
 
     var body: some View {
-        ScrollView {
+        HStack(spacing: 0) {
+            SidebarView(coordinator: coordinator, route: $route).frame(width: 212)
+            Divider().overlay(PanelTheme.border)
+            VStack(spacing: 0) {
+                topBar
+                Divider().overlay(PanelTheme.border)
+                ScrollView {
+                    detail.padding(20).frame(maxWidth: .infinity, alignment: .leading)
+                }
+                bottomBar
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(PanelTheme.bg)
+        }
+        .frame(minWidth: 940, idealWidth: 1040, minHeight: 640, idealHeight: 720)
+        .preferredColorScheme(.dark)
+        .tint(PanelTheme.accent)
+    }
+
+    private var topBar: some View {
+        HStack(alignment: .center) {
+            PageHeader(title: route.title, subtitle: route.subtitle)
+            Spacer()
+            Button { coordinator.toggleAR() } label: {
+                Label(coordinator.arActive ? "Stop AR" : "Start AR",
+                      systemImage: coordinator.arActive ? "stop.fill" : "play.fill")
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .padding(.horizontal, 20).padding(.vertical, 14)
+    }
+
+    @ViewBuilder private var detail: some View {
+        switch route {
+        case .dashboard: dashboardPage
+        case .workspaces:
+            card("Workspace", "square.grid.2x2") { workspaceSection }
+        case .displays:
             VStack(spacing: 14) {
-                statusCard
                 card("AR Output", "display") { outputSection }
                 card("Layout", "square.on.square.dashed") { PlacementMapView(coordinator: coordinator) }
-                card("HUD Widgets", "square.text.square") { widgetsSection }
-                card("Workspace", "square.grid.2x2") { workspaceSection }
-                card("Tracking & Testing", "gauge.with.dots.needle.33percent") { testSection }
-                card("Permissions", "lock.shield") { permissionsSection }
-                card("General", "gearshape") { generalSection }
             }
-            .padding(16)
-            .frame(maxWidth: .infinity)
+        case .hudWidgets:
+            card("HUD Widgets", "square.text.square") { widgetsSection }
+        case .windowRules:
+            ComingSoon(title: "Window Rules",
+                       detail: "Automatically place apps on screens. The rule editor is coming; for "
+                             + "now use ⌃⌥W to move a window to the screen you're looking at.")
+        case .voiceCommands:
+            ComingSoon(title: "Voice Commands", detail: "Hands-free control — coming soon.")
+        case .settings: settingsPage
         }
-        .frame(minWidth: 460, idealWidth: 540, minHeight: 420, idealHeight: 720)
-        .background(Color(nsColor: .windowBackgroundColor))
-        .safeAreaInset(edge: .bottom) {
-            HStack(spacing: 8) {
-                if !coordinator.statusMessage.isEmpty {
-                    Text(coordinator.statusMessage)
-                        .font(.caption).foregroundStyle(.secondary)
-                        .lineLimit(1).truncationMode(.tail)
+    }
+
+    private var dashboardPage: some View {
+        VStack(spacing: 14) {
+            statusCard
+            card("Quick actions", "bolt") {
+                HStack(spacing: 10) {
+                    quickAction("Recenter", "scope") { coordinator.recenter() }
+                    quickAction("Focus", "viewfinder") { coordinator.toggleFocus() }
+                    quickAction("Passthrough", "eye") { coordinator.togglePassthrough() }
+                    quickAction("Labels", "tag") { coordinator.toggleLabels() }
+                    quickAction("Screenshot", "camera") { coordinator.takeGlassesScreenshot() }
+                    quickAction("Record", "record.circle") { coordinator.toggleRecording() }
+                    Spacer()
                 }
-                Spacer(minLength: 8)
-                Label("\(BuildInfo.commit) · \(BuildInfo.date)", systemImage: "hammer")
-                    .font(.caption2).foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                    .help("Running build (commit · date), stamped by Scripts/build.sh. "
-                          + "'dev' means it was built with a bare swift build.")
             }
-            .padding(.horizontal, 16).padding(.vertical, 6)
-            .frame(maxWidth: .infinity)
-            .background(.thinMaterial)
         }
+    }
+
+    private var settingsPage: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Picker("", selection: $settingsTab) {
+                ForEach(SettingsTab.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented).labelsHidden()
+            switch settingsTab {
+            case .general: card("General", "gearshape") { generalSection }
+            case .glasses:
+                card("Glasses", "eyeglasses") {
+                    Text("Brightness is on the Dashboard; display mode, refresh rate and stereo are "
+                         + "under Displays › AR Output. These move here in a later update.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+            case .performance: card("Performance", "gauge.with.dots.needle.33percent") { testSection }
+            case .permissions: card("Permissions", "lock.shield") { permissionsSection }
+            case .shortcuts: card("Shortcuts", "keyboard") { HelpView() }
+            case .about:
+                card("About", "info.circle") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Spatial Workspace").font(.headline)
+                        Text("Build \(BuildInfo.commit) · \(BuildInfo.date)")
+                            .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                    }
+                }
+            }
+        }
+    }
+
+    private func quickAction(_ title: String, _ icon: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 6) {
+                Image(systemName: icon).font(.title3)
+                Text(title).font(.caption2)
+            }
+            .frame(width: 80, height: 62)
+            .background(PanelTheme.card, in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(PanelTheme.border))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var bottomBar: some View {
+        HStack(spacing: 8) {
+            if !coordinator.statusMessage.isEmpty {
+                Text(coordinator.statusMessage)
+                    .font(.caption).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.tail)
+            }
+            Spacer(minLength: 8)
+            Label("\(BuildInfo.commit) · \(BuildInfo.date)", systemImage: "hammer")
+                .font(.caption2).foregroundStyle(.secondary)
+                .textSelection(.enabled)
+        }
+        .padding(.horizontal, 20).padding(.vertical, 6)
+        .frame(maxWidth: .infinity)
+        .background(PanelTheme.sidebar)
     }
 
     /// A titled card container for a section.
