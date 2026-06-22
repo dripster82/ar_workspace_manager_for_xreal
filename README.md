@@ -1,7 +1,7 @@
 # VR Desktop
 
 Personal macOS app that renders head-tracked virtual desktops into XREAL Air 2 glasses.
-Plan and milestones: see [PLAN.md](PLAN.md).
+Feature list: see [Docs/Features.md](Docs/Features.md). Plan and milestones: see [PLAN.md](PLAN.md).
 
 ## Build & run
 
