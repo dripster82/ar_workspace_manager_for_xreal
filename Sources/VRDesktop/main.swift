@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let brightnessHotKey = BrightnessHotKey()
     var helpOverlay: HelpOverlayController!
     var cursorInfoOverlay: CursorInfoOverlayController!
+    var windowPicker: WindowPickerController!
     var brightnessHUD: BrightnessHUDController!
     var alarmController: AlarmController!
 
@@ -24,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         coordinator = AppCoordinator()
         helpOverlay = HelpOverlayController(coordinator: coordinator)
         cursorInfoOverlay = CursorInfoOverlayController(coordinator: coordinator)
+        windowPicker = WindowPickerController(coordinator: coordinator)
         brightnessHUD = BrightnessHUDController(coordinator: coordinator)
         coordinator.onBrightnessChanged = { [weak self] in self?.brightnessHUD.flash() }
         alarmController = AlarmController(coordinator: coordinator)
@@ -106,6 +108,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var toggleFocusHotKeyRef: EventHotKeyRef?
     private var passthroughHotKeyRef: EventHotKeyRef?
     private var labelsHotKeyRef: EventHotKeyRef?
+    private var windowPickerHotKeyRef: EventHotKeyRef?
     private static let recenterHotKeyID: UInt32 = 1
     private static let stopARHotKeyID: UInt32 = 2
     private static let helpHotKeyID: UInt32 = 3
@@ -122,6 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private static let toggleFocusHotKeyID: UInt32 = 14
     private static let passthroughHotKeyID: UInt32 = 15
     private static let labelsHotKeyID: UInt32 = 16
+    private static let windowPickerHotKeyID: UInt32 = 17
 
     private func registerGlobalRecenterHotKey() {
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
@@ -152,6 +156,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 case AppDelegate.toggleFocusHotKeyID: delegate.coordinator.toggleFocus()
                 case AppDelegate.passthroughHotKeyID: delegate.coordinator.togglePassthrough()
                 case AppDelegate.labelsHotKeyID: delegate.coordinator.toggleLabels()
+                case AppDelegate.windowPickerHotKeyID: delegate.windowPicker.toggle()
                 case AppDelegate.quitHotKeyID: NSApp.terminate(nil)
                 default: break
                 }
@@ -183,6 +188,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         register(kVK_ANSI_F, AppDelegate.toggleFocusHotKeyID, &toggleFocusHotKeyRef)
         register(kVK_ANSI_V, AppDelegate.passthroughHotKeyID, &passthroughHotKeyRef)
         register(kVK_ANSI_L, AppDelegate.labelsHotKeyID, &labelsHotKeyRef)
+        register(kVK_ANSI_W, AppDelegate.windowPickerHotKeyID, &windowPickerHotKeyRef)
     }
 
     /// Esc-to-dismiss: a plain Escape hotkey registered only while an alarm is showing (so it

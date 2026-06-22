@@ -65,6 +65,8 @@ public final class GlassesRenderer: NSObject {
     public var showBrightness = false
     private var recordingTexture: MTLTexture?
     public var showRecording = false
+    private var pickerTexture: MTLTexture?
+    public var showPicker = false
 
     // Head-locked HUD widgets: small alpha-blended quads drawn always-on-top in view space.
     private var widgetPipeline: MTLRenderPipelineState!
@@ -319,6 +321,17 @@ public final class GlassesRenderer: NSObject {
     }
 
     public func clearRecording() { showRecording = false }
+
+    /// Set the centred window-picker overlay (⌃⌥W). Large, centred — same upload path as the help HUD.
+    @discardableResult
+    public func setPickerImage(_ cgImage: CGImage) -> Bool {
+        guard let tex = makeOverlayTexture(cgImage) else { return false }
+        pickerTexture = tex
+        showPicker = true
+        return true
+    }
+
+    public func clearPicker() { showPicker = false }
 
     /// Build a premultiplied BGRA texture from a CGImage for the alpha-blended overlays.
     private func makeOverlayTexture(_ cgImage: CGImage) -> MTLTexture? {
@@ -941,12 +954,14 @@ public final class GlassesRenderer: NSObject {
         }
 
         drawHelpOverlay(commandBuffer: commandBuffer, target: drawable.texture)
+        drawPickerOverlay(commandBuffer: commandBuffer, target: drawable.texture)
         drawBrightnessOverlay(commandBuffer: commandBuffer, target: drawable.texture)
         drawRecordingOverlay(commandBuffer: commandBuffer, target: drawable.texture)
         // For a debug dump or screenshot, also composite the HUD overlays into the readable scene
         // target so the captured image matches what's on screen (the drawable is unreadable).
         if dumpDir != nil || shotURL != nil || recording {
             drawHelpOverlay(commandBuffer: commandBuffer, target: sceneTarget)
+            drawPickerOverlay(commandBuffer: commandBuffer, target: sceneTarget)
             drawBrightnessOverlay(commandBuffer: commandBuffer, target: sceneTarget)
             // Note: recording indicator intentionally NOT composited into the recorded frame.
         }
@@ -1006,6 +1021,13 @@ public final class GlassesRenderer: NSObject {
         guard showHelp, let tex = helpTexture else { return }
         drawOverlay(tex, commandBuffer: commandBuffer, target: target,
                     heightFraction: 0.6, maxWidthFraction: 0.8, anchor: .center)
+    }
+
+    /// Draw the window picker (large, centred) on top of everything.
+    private func drawPickerOverlay(commandBuffer: MTLCommandBuffer, target: MTLTexture) {
+        guard showPicker, let tex = pickerTexture else { return }
+        drawOverlay(tex, commandBuffer: commandBuffer, target: target,
+                    heightFraction: 0.85, maxWidthFraction: 0.95, anchor: .center)
     }
 
     /// Draw the brightness HUD as a small bar anchored to the bottom-centre of each eye.

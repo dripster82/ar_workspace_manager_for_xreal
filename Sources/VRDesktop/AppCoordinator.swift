@@ -141,6 +141,12 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
+    /// When moving a window to a screen (⌃⌥W), also resize it to fill that screen. Default on.
+    @Published var fillScreenOnMove: Bool = UserDefaults.standard.object(forKey: "fillScreenOnMove") == nil
+        ? true : UserDefaults.standard.bool(forKey: "fillScreenOnMove") {
+        didSet { UserDefaults.standard.set(fillScreenOnMove, forKey: "fillScreenOnMove") }
+    }
+
     /// Write detailed troubleshooting info to debug.log.
     @Published var debugLogging: Bool = UserDefaults.standard.bool(forKey: "debugLogging") {
         didSet {
@@ -1455,6 +1461,25 @@ final class AppCoordinator: ObservableObject {
             if let capture = captures[config.id] { pairs.append((config, capture)) }
         }
         renderer.setScreens(assembleScene(pairs))
+    }
+
+    /// Result of a window-move attempt (⌃⌥W picker).
+    enum WindowMoveResult { case moved(String), noTarget, failed(String) }
+
+    /// Name of the screen the user is currently looking at (the ⌃⌥W move destination), or nil.
+    func lookedAtTargetName() -> String? { lookedAtConfig()?.name }
+
+    /// Move `item`'s window to the screen the user is looking at (filling it when `fillScreenOnMove`).
+    func moveWindowToLookedAtScreen(_ item: WinItem) -> WindowMoveResult {
+        guard let cfg = lookedAtConfig(), let displayID = displayID(forScreenID: cfg.id), displayID != 0 else {
+            return .noTarget
+        }
+        if WindowMover.move(item, toDisplay: displayID, fill: fillScreenOnMove) {
+            statusMessage = "Moved \(item.displayName) → \(cfg.name)"
+            return .moved(cfg.name)
+        }
+        statusMessage = "Couldn't move \(item.appName) (it may resist being moved)"
+        return .failed(item.appName)
     }
 
     /// Whether per-screen corner name labels are shown (⌃⌥L).

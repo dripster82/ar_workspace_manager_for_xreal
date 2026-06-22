@@ -48,6 +48,9 @@ source; keep it in sync when adding features. See also [Roadmap.md](Roadmap.md) 
   and auto-enlarged cursor (⌃⌥C); **move cursor to gaze** (⌃⌥X)
 - **Window layout save/restore** — records window→screen positions (Accessibility) and restores
   them on AR start (Off / Always / Ask / Remember)
+- **Move window to screen** (⌃⌥W) — a 5×3 FOV grid of window thumbnails; arrow-keys to select,
+  Enter moves the chosen window to the screen you're looking at (fills it by default; General-card
+  toggle for reposition-only)
 
 ## HUD widgets (head-locked, 1 Hz refresh)
 - **Clock** (12/24h, seconds), **Power/battery**, **Slack** unreads, **GitHub** PR-triage,

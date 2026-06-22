@@ -520,6 +520,10 @@ struct ControlPanelView: View {
                 .font(.caption)
             Toggle("Keep cursor off the AR screen", isOn: $coordinator.confineCursor)
                 .font(.caption)
+            Toggle("Fill the screen when moving a window (⌃⌥W)", isOn: $coordinator.fillScreenOnMove)
+                .font(.caption)
+                .help("On: a window moved with ⌃⌥W resizes to fill the target screen. Off: it keeps "
+                      + "its size and just moves there.")
             HStack {
                 Text("Recording microphone").font(.caption)
                 Spacer()
