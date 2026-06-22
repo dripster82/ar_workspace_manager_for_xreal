@@ -15,7 +15,7 @@ enum PanelTheme {
 enum PanelRoute: String, CaseIterable, Identifiable {
     case dashboard, workspace, hudWidgets
     case windowRules, voiceCommands
-    case settings
+    case settings, diagnostics
     var id: String { rawValue }
 
     var title: String {
@@ -26,6 +26,7 @@ enum PanelRoute: String, CaseIterable, Identifiable {
         case .windowRules: return "Window Rules"
         case .voiceCommands: return "Voice Commands"
         case .settings: return "Settings"
+        case .diagnostics: return "Diagnostics"
         }
     }
     var subtitle: String {
@@ -36,6 +37,7 @@ enum PanelRoute: String, CaseIterable, Identifiable {
         case .windowRules: return "Automatically place apps on screens"
         case .voiceCommands: return "Hands-free control"
         case .settings: return "Preferences and advanced settings"
+        case .diagnostics: return "Logs and display diagnostics"
         }
     }
     var icon: String {
@@ -46,6 +48,7 @@ enum PanelRoute: String, CaseIterable, Identifiable {
         case .windowRules: return "wand.and.rays"
         case .voiceCommands: return "mic"
         case .settings: return "gearshape"
+        case .diagnostics: return "stethoscope"
         }
     }
 }
@@ -90,7 +93,7 @@ struct SidebarView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     group("MAIN", [.dashboard, .workspace, .hudWidgets])
                     group("AUTOMATION", [.windowRules, .voiceCommands])
-                    group("SYSTEM", [.settings])
+                    group("SYSTEM", [.settings, .diagnostics])
                 }
                 .padding(.horizontal, 10)
             }
@@ -141,25 +144,29 @@ private struct NavRow: View {
     let route: PanelRoute
     let selected: Bool
     let action: () -> Void
+    @State private var hovering = false
     var body: some View {
         Button(action: action) {
             HStack(spacing: 10) {
                 Image(systemName: route.icon).frame(width: 18)
                 Text(route.title).font(.callout)
-                Spacer()
+                Spacer(minLength: 0)
             }
             .foregroundStyle(selected ? Color.white : Color.secondary)
-            .padding(.horizontal, 10).padding(.vertical, 7)
-            .background(selected ? PanelTheme.accent.opacity(0.22) : .clear,
-                        in: RoundedRectangle(cornerRadius: 8))
-            .overlay(alignment: .leading) {
-                if selected {
-                    RoundedRectangle(cornerRadius: 2).fill(PanelTheme.accent)
-                        .frame(width: 3).padding(.vertical, 4)
-                }
-            }
+            .padding(.horizontal, 10).padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(rowFill, in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(selected ? PanelTheme.accent.opacity(0.5) : .clear))
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+    }
+
+    private var rowFill: Color {
+        if selected { return PanelTheme.accent.opacity(0.28) }
+        return hovering ? Color.white.opacity(0.08) : Color.white.opacity(0.04)
     }
 }
 

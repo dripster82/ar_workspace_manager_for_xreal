@@ -12,6 +12,7 @@ struct ControlPanelView: View {
     @State private var showDiagnostics = false
     @State private var route: PanelRoute = .dashboard
     @State private var settingsTab: SettingsTab = .general
+    @State private var selectedHUDID: UUID?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -54,8 +55,7 @@ struct ControlPanelView: View {
                 card("Layout", "square.on.square.dashed") { PlacementMapView(coordinator: coordinator) }
                 card("Workspace & displays", "square.grid.2x2") { workspaceSection }
             }
-        case .hudWidgets:
-            card("HUD Widgets", "square.text.square") { widgetsSection }
+        case .hudWidgets: hudWidgetsPage
         case .windowRules:
             ComingSoon(title: "Window Rules",
                        detail: "Automatically place apps on screens. The rule editor is coming; for "
@@ -63,6 +63,7 @@ struct ControlPanelView: View {
         case .voiceCommands:
             ComingSoon(title: "Voice Commands", detail: "Hands-free control — coming soon.")
         case .settings: settingsPage
+        case .diagnostics: diagnosticsSection
         }
     }
 
@@ -112,6 +113,116 @@ struct ControlPanelView: View {
                     }
                 }
             }
+        }
+    }
+
+    // MARK: HUD Widgets — three-column (Available / Active / Settings)
+
+    private var hudWidgetsPage: some View {
+        HStack(alignment: .top, spacing: 14) {
+            card("Available", "plus.app") { availableWidgetsColumn }.frame(width: 220)
+            card("Active", "square.stack.3d.up") { activeWidgetsColumn }.frame(width: 290)
+            card("Settings", "slider.horizontal.3") { hudDetailColumn }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+    }
+
+    private var availableWidgetsColumn: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(WidgetKind.allCases) { kind in
+                Button { coordinator.addWidget(kind: kind) } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: kind.symbol).frame(width: 18).foregroundStyle(.secondary)
+                        Text(kind.displayName).font(.callout)
+                        Spacer(minLength: 0)
+                        Image(systemName: "plus").font(.caption).foregroundStyle(PanelTheme.accent)
+                    }
+                    .padding(.horizontal, 8).padding(.vertical, 7)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            Divider().padding(.vertical, 2)
+            Button { coordinator.addStack() } label: {
+                Label("Add stack", systemImage: "rectangle.stack").font(.callout)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var activeWidgetsColumn: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text("HUD Profile · \(coordinator.activeWorkspaceName)")
+                .font(.caption2).foregroundStyle(.secondary)
+            if coordinator.widgets.isEmpty && coordinator.stacks.isEmpty {
+                Text("No widgets yet — add one from the left, then drag it into place in the "
+                     + "Workspace layout's floating zone.")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            ForEach(coordinator.stacks) { stack in
+                activeRow(id: stack.id, icon: "rectangle.stack", name: stack.name, draggable: false)
+                    .onDrop(of: [.plainText], isTargeted: nil) { dropProviders($0, toStack: stack.id, before: nil) }
+                ForEach(coordinator.widgets.filter { $0.stackID == stack.id }) { w in
+                    activeRow(id: w.id, icon: w.kind.symbol, name: w.kind.displayName, draggable: true)
+                        .padding(.leading, 16)
+                }
+            }
+            let loose = coordinator.widgets.filter { $0.stackID == nil }
+            if !coordinator.stacks.isEmpty && !loose.isEmpty {
+                Text("Unstacked — drop here to remove from a stack")
+                    .font(.caption2).foregroundStyle(.secondary).padding(.top, 4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .onDrop(of: [.plainText], isTargeted: nil) { dropProviders($0, toStack: nil, before: nil) }
+            }
+            ForEach(loose) { w in
+                activeRow(id: w.id, icon: w.kind.symbol, name: w.kind.displayName, draggable: true)
+            }
+        }
+    }
+
+    private func activeRow(id: UUID, icon: String, name: String, draggable: Bool) -> some View {
+        let selected = selectedHUDID == id
+        return HStack(spacing: 8) {
+            if draggable {
+                Image(systemName: "line.3.horizontal").foregroundStyle(.secondary).frame(width: 16)
+                    .contentShape(Rectangle())
+                    .onDrag { NSItemProvider(object: id.uuidString as NSString) }
+            } else {
+                Image(systemName: "rectangle.stack").foregroundStyle(.secondary).frame(width: 16)
+            }
+            Image(systemName: icon).foregroundStyle(.secondary)
+            Text(name).font(.callout)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8).padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(selected ? PanelTheme.accent.opacity(0.24) : Color.white.opacity(0.04),
+                    in: RoundedRectangle(cornerRadius: 8))
+        .contentShape(Rectangle())
+        .onTapGesture { selectedHUDID = id }
+    }
+
+    @ViewBuilder private var hudDetailColumn: some View {
+        if let id = selectedHUDID, let w = coordinator.widgets.first(where: { $0.id == id }) {
+            WidgetRow(initial: w, stacks: coordinator.stacks,
+                      calendar: w.kind == .calendar ? coordinator.calendar : nil,
+                      startExpanded: true,
+                      onChange: { coordinator.updateWidget($0) },
+                      onRemove: { coordinator.removeWidget(id: w.id); selectedHUDID = nil })
+                .id(w.id)
+        } else if let id = selectedHUDID, let s = coordinator.stacks.first(where: { $0.id == id }) {
+            StackRow(initial: s, startExpanded: true,
+                     onChange: { coordinator.updateStack($0) },
+                     onRemove: { coordinator.removeStack(id: s.id); selectedHUDID = nil })
+                .id(s.id)
+        } else {
+            Text("Select a widget or stack to edit it.")
+                .font(.callout).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, minHeight: 120, alignment: .center)
         }
     }
 
@@ -415,40 +526,41 @@ struct ControlPanelView: View {
                 }
             }
 
-            DisclosureGroup(isExpanded: $showDiagnostics) {
-                VStack(alignment: .leading, spacing: 3) {
-                    ForEach(coordinator.screenList, id: \.self) { line in
-                        Text(line).font(.system(.caption2, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                    }
-                    HStack(alignment: .firstTextBaseline) {
-                        Text(coordinator.outputWindowInfo)
-                            .font(.system(.caption2, design: .monospaced))
-                            .textSelection(.enabled)
-                        Button("Copy info") {
-                            let all = (coordinator.screenList + [coordinator.outputWindowInfo])
-                                .joined(separator: "\n")
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(all, forType: .string)
-                        }
-                        .controlSize(.small)
-                    }
-                    if coordinator.arActive {
-                        HStack {
-                            TextField("x", text: $moveX).frame(width: 64)
-                            TextField("y", text: $moveY).frame(width: 64)
-                            Button("Move window") {
-                                if let x = Double(moveX), let y = Double(moveY) {
-                                    coordinator.moveOutputWindow(x: x, y: y)
-                                }
-                            }
-                        }.font(.caption)
-                    }
+            Text("Display diagnostics are on the Diagnostics page.")
+                .font(.caption2).foregroundStyle(.secondary)
+        }
+    }
+
+    /// Live display info + window move (shown on the Diagnostics page).
+    private var diagnosticsInfo: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            ForEach(coordinator.screenList, id: \.self) { line in
+                Text(line).font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+            HStack(alignment: .firstTextBaseline) {
+                Text(coordinator.outputWindowInfo)
+                    .font(.system(.caption2, design: .monospaced))
+                    .textSelection(.enabled)
+                Button("Copy info") {
+                    let all = (coordinator.screenList + [coordinator.outputWindowInfo])
+                        .joined(separator: "\n")
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(all, forType: .string)
                 }
-                .padding(.top, 4)
-            } label: {
-                Text("Diagnostics").font(.caption).foregroundStyle(.secondary)
+                .controlSize(.small)
+            }
+            if coordinator.arActive {
+                HStack {
+                    TextField("x", text: $moveX).frame(width: 64)
+                    TextField("y", text: $moveY).frame(width: 64)
+                    Button("Move window") {
+                        if let x = Double(moveX), let y = Double(moveY) {
+                            coordinator.moveOutputWindow(x: x, y: y)
+                        }
+                    }
+                }.font(.caption)
             }
         }
     }
@@ -645,25 +757,36 @@ struct ControlPanelView: View {
                 .labelsHidden().fixedSize()
             }
             .help("When AR starts, put each app back on the screen/position it had when AR last stopped (needs Accessibility).")
-            Divider()
-            Toggle("Write debug log", isOn: $coordinator.debugLogging)
-                .font(.caption)
-                .help(coordinator.debugLogURL.path)
-            Toggle("Log raw IMU data (~60 Hz)", isOn: $coordinator.rawIMULogging)
-                .font(.caption)
-                .help("Logs raw vs filtered yaw/pitch/roll + angular speed for movement/calibration testing")
-            Toggle("Log system load (~3 s)", isOn: $coordinator.systemLoadLogging)
-                .font(.caption)
-                .help("Logs load average, thermal state, and top CPU processes (incl. Sophos / "
-                    + "WindowServer / colorsync) every ~3s, so we can correlate render stalls with "
-                    + "machine load. Sampled off the render thread.")
-            if coordinator.debugLogging || coordinator.rawIMULogging || coordinator.systemLoadLogging {
-                HStack {
-                    Button("Reveal log") { coordinator.revealDebugLog() }
-                    Button("Clear log") { coordinator.clearDebugLog() }
+            Text("Logging and display diagnostics moved to the Diagnostics page.")
+                .font(.caption2).foregroundStyle(.secondary)
+        }
+    }
+
+    /// Diagnostics page: debug logging + live display info.
+    private var diagnosticsSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            card("Logging", "doc.text") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle("Write debug log", isOn: $coordinator.debugLogging)
+                        .font(.caption).help(coordinator.debugLogURL.path)
+                    Toggle("Log raw IMU data (~60 Hz)", isOn: $coordinator.rawIMULogging)
+                        .font(.caption)
+                        .help("Logs raw vs filtered yaw/pitch/roll + angular speed for movement/calibration testing")
+                    Toggle("Log system load (~3 s)", isOn: $coordinator.systemLoadLogging)
+                        .font(.caption)
+                        .help("Logs load average, thermal state, and top CPU processes (incl. Sophos / "
+                            + "WindowServer / colorsync) every ~3s, so we can correlate render stalls with "
+                            + "machine load. Sampled off the render thread.")
+                    if coordinator.debugLogging || coordinator.rawIMULogging || coordinator.systemLoadLogging {
+                        HStack {
+                            Button("Reveal log") { coordinator.revealDebugLog() }
+                            Button("Clear log") { coordinator.clearDebugLog() }
+                        }
+                        .controlSize(.small)
+                    }
                 }
-                .controlSize(.small)
             }
+            card("Displays", "rectangle.on.rectangle") { diagnosticsInfo }
         }
     }
 
@@ -823,6 +946,7 @@ struct WidgetRow: View {
     @State private var expanded = false
 
     init(initial: HUDWidget, stacks: [HUDStack], calendar: GoogleCalendarService? = nil,
+         startExpanded: Bool = false,
          onChange: @escaping (HUDWidget) -> Void, onRemove: @escaping () -> Void) {
         self.initial = initial
         self.stacks = stacks
@@ -830,6 +954,7 @@ struct WidgetRow: View {
         self.onChange = onChange
         self.onRemove = onRemove
         _cfg = State(initialValue: initial)
+        _expanded = State(initialValue: startExpanded)
     }
 
     var body: some View {
@@ -913,9 +1038,11 @@ struct StackRow: View {
     @State private var cfg: HUDStack
     @State private var expanded = false
 
-    init(initial: HUDStack, onChange: @escaping (HUDStack) -> Void, onRemove: @escaping () -> Void) {
+    init(initial: HUDStack, startExpanded: Bool = false,
+         onChange: @escaping (HUDStack) -> Void, onRemove: @escaping () -> Void) {
         self.initial = initial; self.onChange = onChange; self.onRemove = onRemove
         _cfg = State(initialValue: initial)
+        _expanded = State(initialValue: startExpanded)
     }
 
     // Anchor: which edge the stack is pinned to (so it grows away from it).
