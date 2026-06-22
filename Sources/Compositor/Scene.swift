@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import Metal
 import simd
@@ -49,6 +50,12 @@ public struct SceneScreen: Identifiable {
     public var canvasPixelHeight: Int = 0
     public var canvasTiles: [CanvasTile] = []
     public var isCanvas: Bool { !canvasTiles.isEmpty }
+
+    /// Optional corner label (the screen's name), shown top-left when labels are toggled on (⌃⌥L).
+    /// The renderer rasterises `labelImage` to a texture (cached by `labelText`) and places it with
+    /// `labelQuad`. Left nil for merged canvas screens.
+    public var labelText: String?
+    public var labelImage: CGImage?
 
     public init(id: UUID, yaw: Float, pitch: Float, distance: Float, widthMeters: Float,
                 aspect: Float, curveH: Float, autoCurveH: Bool, headLocked: Bool = false,
@@ -195,5 +202,34 @@ public struct SceneScreen: Identifiable {
         let qYaw = simd_quatf(angle: yaw, axis: SIMD3(0, 1, 0))
         let qPitch = simd_quatf(angle: pitch, axis: SIMD3(1, 0, 0))
         return qYaw.act(qPitch.act(local))
+    }
+
+    /// World-space quad (6 vertices, 2 triangles) for a top-left corner label sized to the given
+    /// image aspect, anchored just inside the screen's top-left and lying in the screen's plane.
+    /// Returns nil for merged canvas screens (a per-screen label doesn't map to one merged surface).
+    func labelQuad(imageAspect aspect: Float) -> [Vertex]? {
+        guard !isCanvas else { return nil }
+        let (thetaX, thetaY) = angles
+        let corner = point(u: 0, v: 0, thetaX: thetaX, thetaY: thetaY) // exact top-left
+        // Orient the label using the screen's placement rotation (exact for flat screens; a close
+        // approximation near the corner of curved ones).
+        let rot = simd_quatf(angle: yaw, axis: SIMD3(0, 1, 0))
+            * simd_quatf(angle: pitch, axis: SIMD3(1, 0, 0))
+        let right = rot.act(SIMD3<Float>(1, 0, 0))
+        let up = rot.act(SIMD3<Float>(0, 1, 0))
+        let lh = max(0.05, height * 0.09)          // label height: ~9% of the screen height
+        let lw = lh * aspect
+        let inset = lh * 0.35                        // nudge inside the corner so it sits on-screen
+        let tl = corner + right * inset - up * inset
+        let p00 = tl, p10 = tl + right * lw
+        let p01 = tl - up * lh, p11 = tl + right * lw - up * lh
+        return [
+            Vertex(position: p00, uv: SIMD2(0, 0)),
+            Vertex(position: p10, uv: SIMD2(1, 0)),
+            Vertex(position: p01, uv: SIMD2(0, 1)),
+            Vertex(position: p10, uv: SIMD2(1, 0)),
+            Vertex(position: p11, uv: SIMD2(1, 1)),
+            Vertex(position: p01, uv: SIMD2(0, 1)),
+        ]
     }
 }

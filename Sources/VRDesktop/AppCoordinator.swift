@@ -1173,6 +1173,7 @@ final class AppCoordinator: ObservableObject {
             pairs.append((config, makeCapture(config: config, captureDisplayID: displayID)))
         }
 
+        renderer.showLabels = labelsVisible
         renderer.setScreens(assembleScene(pairs))
         arActive = true
         widgetManager?.setLayout(widgets: workspace.widgets, stacks: workspace.stacks)
@@ -1258,7 +1259,7 @@ final class AppCoordinator: ObservableObject {
     /// underlying virtual display and its capture are untouched.
     private func focusedSceneScreen(config: VirtualScreenConfig, capture: CaptureSource) -> SceneScreen {
         let aspect = Float(config.width) / Float(max(1, config.height))
-        return SceneScreen(
+        var screen = SceneScreen(
             id: config.id,
             yaw: 0, pitch: 0,
             distance: focusDistanceMeters,
@@ -1267,12 +1268,15 @@ final class AppCoordinator: ObservableObject {
             curveH: 0, autoCurveH: false,
             headLocked: true,
             textureProvider: { [weak capture] in capture?.latestTexture })
+        screen.labelText = config.name
+        screen.labelImage = labelCGImage(for: config.name)
+        return screen
     }
 
     private func sceneScreen(config: VirtualScreenConfig, capture: CaptureSource) -> SceneScreen {
         // Apparent width: ~1.6m per 1920px at scale 1, 2m away.
         let baseWidth = Float(config.width) / 1920.0 * 1.6 * Float(config.scale)
-        return SceneScreen(
+        var screen = SceneScreen(
             id: config.id,
             yaw: Float(config.yawDegrees * .pi / 180),
             pitch: Float(config.pitchDegrees * .pi / 180),
@@ -1284,6 +1288,28 @@ final class AppCoordinator: ObservableObject {
             headLocked: config.placement == .floating,
             textureProvider: { [weak capture] in capture?.latestTexture }
         )
+        screen.labelText = config.name
+        screen.labelImage = labelCGImage(for: config.name)
+        return screen
+    }
+
+    /// Cache of rasterised name labels (keyed by name) so dragging sliders doesn't re-render text.
+    private var labelImageCache: [String: CGImage] = [:]
+
+    /// Rasterise a screen's name into a rounded pill label for the in-AR corner label (⌃⌥L).
+    private func labelCGImage(for name: String) -> CGImage? {
+        if let cached = labelImageCache[name] { return cached }
+        let view = Text(name)
+            .font(.system(size: 30, weight: .semibold, design: .rounded))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 16).padding(.vertical, 8)
+            .background(Color.black.opacity(0.55), in: Capsule())
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = 2
+        renderer.isOpaque = false
+        let image = renderer.cgImage
+        if let image { labelImageCache[name] = image }
+        return image
     }
 
     /// Stable id for the single merged wide-canvas surface (so its atlas/vertex caches persist
@@ -1421,6 +1447,16 @@ final class AppCoordinator: ObservableObject {
             if let capture = captures[config.id] { pairs.append((config, capture)) }
         }
         renderer.setScreens(assembleScene(pairs))
+    }
+
+    /// Whether per-screen corner name labels are shown (⌃⌥L).
+    @Published var labelsVisible = false
+
+    /// Toggle the top-left screen-name labels in AR (⌃⌥L).
+    func toggleLabels() {
+        labelsVisible.toggle()
+        renderer?.showLabels = labelsVisible
+        statusMessage = labelsVisible ? "Screen labels on" : "Screen labels off"
     }
 
     /// Passthrough (⌃⌥V): hide / show the screens only. HUD widgets are unaffected (⌃⌥I toggles

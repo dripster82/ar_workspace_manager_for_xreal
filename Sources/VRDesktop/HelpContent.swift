@@ -35,6 +35,7 @@ enum HelpContent {
         Section(title: "Display & HUD", column: 1, shortcuts: [
             Shortcut(keys: "⌃⌥ + brightness", action: "Dim / brighten the glasses"),
             Shortcut(keys: "⌃⌥I", action: "Show / hide the HUD widgets"),
+            Shortcut(keys: "⌃⌥L", action: "Show / hide screen name labels"),
         ]),
         Section(title: "App", column: 1, shortcuts: [
             Shortcut(keys: "⌃⌥H", action: "Show / hide this help"),

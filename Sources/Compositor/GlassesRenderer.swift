@@ -76,6 +76,11 @@ public final class GlassesRenderer: NSObject {
     }
     private var widgetEntries: [WidgetEntry] = []
 
+    /// Per-screen corner labels (screen names), toggled with ⌃⌥L. Textures are cached by label
+    /// text so renaming/rebuilds don't re-upload, and shared between screens of the same name.
+    public var showLabels = false
+    private var labelTextures: [String: MTLTexture] = [:]
+
     private struct OverlayVertex { var position: SIMD2<Float>; var uv: SIMD2<Float> }
 
     private let poseStore: PoseStore
@@ -1153,6 +1158,36 @@ public final class GlassesRenderer: NSObject {
             }
             encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: geometry.count)
         }
+        if showLabels { drawLabels(screens, viewProjection: viewProjection, encoder: encoder) }
+    }
+
+    /// Draw each screen's top-left corner label (alpha-blended, always on top) using the same
+    /// view-projection as its screen, so labels track anchored/floating placement correctly.
+    private func drawLabels(_ screens: [SceneScreen], viewProjection: simd_float4x4,
+                            encoder: MTLRenderCommandEncoder) {
+        guard let pipe = widgetPipeline, let depth = widgetDepthState else { return }
+        encoder.setRenderPipelineState(pipe)
+        encoder.setDepthStencilState(depth)
+        encoder.setFragmentSamplerState(linearSampler, index: 0)
+        var uniforms = Uniforms(viewProjection: viewProjection)
+        for screen in screens {
+            guard let text = screen.labelText, let image = screen.labelImage,
+                  let tex = labelTexture(text: text, image: image) else { continue }
+            let aspect = Float(tex.width) / Float(max(1, tex.height))
+            guard var verts = screen.labelQuad(imageAspect: aspect) else { continue }
+            encoder.setVertexBytes(&verts, length: verts.count * MemoryLayout<SceneScreen.Vertex>.stride, index: 0)
+            encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.size, index: 1)
+            encoder.setFragmentTexture(tex, index: 0)
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+        }
+        encoder.setDepthStencilState(depthState) // restore for any later draws
+    }
+
+    private func labelTexture(text: String, image: CGImage) -> MTLTexture? {
+        if let t = labelTextures[text] { return t }
+        guard let t = makeOverlayTexture(image) else { return nil }
+        labelTextures[text] = t
+        return t
     }
 
     private func vertexBuffer(for screen: SceneScreen) -> (buffer: MTLBuffer, count: Int) {

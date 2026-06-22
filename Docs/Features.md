@@ -55,6 +55,7 @@ source; keep it in sync when adding features. See also [Roadmap.md](Roadmap.md) 
 - **Stacks** — group widgets vertically/horizontally with alignment + per-widget scale; drag-to-reorder
 - **Styling** per widget — tint, background (pill/solid/none)
 - **Show/hide HUD** (⌃⌥I), independent of passthrough
+- **Screen name labels** (⌃⌥L) — per-screen top-left corner label that tracks each screen (anchored or floating); toggle on/off
 
 ## Integrations
 - **Google Calendar** — iCal feed (Keychain), recurrence expansion, agenda widget, **meeting alarms**
@@ -91,6 +92,7 @@ source; keep it in sync when adding features. See also [Roadmap.md](Roadmap.md) 
 | ⌃⌥F | Focus the looked-at screen (toggle) |
 | ⌃⌥V | Passthrough — hide / show the screens (HUD stays) |
 | ⌃⌥I | Show / hide the HUD widgets |
+| ⌃⌥L | Show / hide screen name labels |
 | ⌃⌥C | Find the cursor (screen + arrow) |
 | ⌃⌥X | Move cursor to where you're looking |
 | ⌃⌥P | Screenshot the glasses view → Desktop |
