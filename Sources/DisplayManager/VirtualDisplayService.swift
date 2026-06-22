@@ -383,6 +383,16 @@ public final class WorkspaceStore {
     public func appendHUDProfile(_ profile: HUDProfile) { hudProfiles.append(profile) }
     public func removeHUDProfile(id: UUID) { hudProfiles.removeAll { $0.id == id } }
 
+    // Id-based access (for editing a workspace/profile that isn't the active/displayed one).
+    public func workspace(_ id: UUID?) -> Workspace? { workspaces.first { $0.id == id } }
+    public func updateWorkspace(_ ws: Workspace) {
+        if let i = workspaces.firstIndex(where: { $0.id == ws.id }) { workspaces[i] = ws }
+    }
+    public func hudProfile(_ id: UUID?) -> HUDProfile? { hudProfiles.first { $0.id == id } }
+    public func updateHUDProfile(_ p: HUDProfile) {
+        if let i = hudProfiles.firstIndex(where: { $0.id == p.id }) { hudProfiles[i] = p }
+    }
+
     public func append(_ workspace: Workspace) {
         workspaces.append(workspace)
     }

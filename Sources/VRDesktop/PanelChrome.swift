@@ -97,10 +97,7 @@ struct SidebarView: View {
                 }
                 .padding(.horizontal, 10)
             }
-
             Spacer(minLength: 8)
-            statusChip
-                .padding(10)
         }
         .frame(maxHeight: .infinity, alignment: .top)
         .background(PanelTheme.sidebar)

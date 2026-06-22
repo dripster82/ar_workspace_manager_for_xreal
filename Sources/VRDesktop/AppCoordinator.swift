@@ -74,6 +74,10 @@ final class AppCoordinator: ObservableObject {
     @Published var fakePitchDegrees: Double = 0 { didSet { applyFakePose() } }
 
     let workspaceStore = WorkspaceStore()
+    /// What the panel is EDITING — independent of the displayed/active workspace+HUD, so changing
+    /// the selector on the Workspace/HUD page doesn't disturb the live AR. nil = follow active.
+    @Published var editingWorkspaceID: UUID?
+    @Published var editingHUDProfileID: UUID?
     let virtualDisplays = VirtualDisplayService()
     private let windowLayout = WindowLayoutStore()
     private let windowRestorePrompt = WindowRestorePromptController()
@@ -1963,11 +1967,26 @@ final class AppCoordinator: ObservableObject {
 
     // MARK: Workspace editing
 
+    // The workspace being EDITED (falls back to the displayed/active one).
+    private var effectiveEditingWorkspaceID: UUID? { editingWorkspaceID ?? workspaceStore.activeWorkspaceID }
+    var editingWorkspace: Workspace? { workspaceStore.workspace(effectiveEditingWorkspaceID) }
+    private var editingIsActiveWorkspace: Bool { effectiveEditingWorkspaceID == workspaceStore.activeWorkspaceID }
+    /// Name of the workspace being edited (for the Workspace page); top bar uses activeWorkspaceName.
+    var displayedWorkspaceName: String { workspaceStore.activeWorkspace?.name ?? "—" }
+    var displayedWorkspaceID: UUID? { workspaceStore.activeWorkspaceID }
+
+    /// Editor selection — change which workspace you're editing (does NOT touch the live AR).
     func selectWorkspace(_ id: UUID?) {
+        editingWorkspaceID = id
+        objectWillChange.send()
+    }
+
+    /// Top bar — choose the workspace AR displays (rebuilds the live session if running).
+    func setDisplayedWorkspace(_ id: UUID?) {
         guard id != workspaceStore.activeWorkspaceID else { return }
         workspaceStore.activeWorkspaceID = id
         workspaceStore.save()
-        syncPhysicalMonitors() // the new workspace may not have this machine's monitors yet
+        syncPhysicalMonitors()
         objectWillChange.send()
         restartARIfActive()
     }
@@ -1975,29 +1994,31 @@ final class AppCoordinator: ObservableObject {
     func addWorkspace() {
         let ws = Workspace(name: "Workspace \(workspaceStore.workspaces.count + 1)")
         workspaceStore.append(ws)
-        workspaceStore.activeWorkspaceID = ws.id
+        editingWorkspaceID = ws.id     // edit the new one; displayed workspace is unchanged
+        syncPhysicalMonitors()
         workspaceStore.save()
-        syncPhysicalMonitors() // seed the fresh workspace with this machine's monitors
         objectWillChange.send()
-        restartARIfActive()
     }
 
     func renameActiveWorkspace(_ name: String) {
-        guard var ws = workspaceStore.activeWorkspace else { return }
+        guard var ws = editingWorkspace else { return }
         ws.name = name
-        workspaceStore.activeWorkspace = ws
+        workspaceStore.updateWorkspace(ws)
         workspaceStore.save()
         objectWillChange.send()
     }
 
     func deleteActiveWorkspace() {
-        guard workspaceStore.workspaces.count > 1,
-              let id = workspaceStore.activeWorkspaceID else { return }
+        guard workspaceStore.workspaces.count > 1, let id = effectiveEditingWorkspaceID else { return }
+        let wasDisplayed = (id == workspaceStore.activeWorkspaceID)
         workspaceStore.remove(id: id)
-        workspaceStore.activeWorkspaceID = workspaceStore.workspaces.first?.id
+        if editingWorkspaceID == id { editingWorkspaceID = workspaceStore.workspaces.first?.id }
+        if workspaceStore.activeWorkspaceID == id {
+            workspaceStore.activeWorkspaceID = workspaceStore.workspaces.first?.id
+        }
         workspaceStore.save()
         objectWillChange.send()
-        restartARIfActive()
+        if wasDisplayed { restartARIfActive() }
     }
 
     /// Set while we deliberately change the glasses' display mode (e.g. enabling SBS), so a
@@ -2059,12 +2080,13 @@ final class AppCoordinator: ObservableObject {
     // MARK: Screen editing (live add / remove)
 
     func addVirtualScreen(_ config: VirtualScreenConfig) {
-        guard var ws = workspaceStore.activeWorkspace else { return }
+        guard var ws = editingWorkspace else { return }
         ws.virtualScreens.append(config)
-        workspaceStore.activeWorkspace = ws
+        workspaceStore.updateWorkspace(ws)
         workspaceStore.save()
         objectWillChange.send()
-        guard arActive, config.showInAR,
+        // Only touch the live AR when we're editing the workspace that's actually displayed.
+        guard arActive, editingIsActiveWorkspace, config.showInAR,
               let displayID = virtualDisplays.create(config) ?? nil,
               displayID != glassesDisplayID else { return }
         _ = makeCapture(config: config, captureDisplayID: displayID)
@@ -2072,7 +2094,7 @@ final class AppCoordinator: ObservableObject {
     }
 
     func removeScreen(id: UUID) {
-        guard var ws = workspaceStore.activeWorkspace else { return }
+        guard var ws = editingWorkspace else { return }
         if let idx = ws.virtualScreens.firstIndex(where: { $0.id == id }) {
             ws.virtualScreens.remove(at: idx)
         } else if let key = ws.physicalInAR.first(where: { $0.value.id == id })?.key {
@@ -2080,9 +2102,10 @@ final class AppCoordinator: ObservableObject {
         } else {
             return
         }
-        workspaceStore.activeWorkspace = ws
+        workspaceStore.updateWorkspace(ws)
         workspaceStore.save()
         objectWillChange.send()
+        guard editingIsActiveWorkspace else { return } // editing a non-displayed workspace: no live ops
         if let capture = captures[id] {
             captures.removeValue(forKey: id)
             Task { await capture.stop() }
@@ -2093,10 +2116,15 @@ final class AppCoordinator: ObservableObject {
 
     // MARK: HUD widgets
 
-    var widgets: [HUDWidget] { workspaceStore.activeHUDProfile?.widgets ?? [] }
+    // The HUD profile being EDITED (falls back to the active one).
+    private var effectiveEditingHUDID: UUID? { editingHUDProfileID ?? workspaceStore.activeHUDProfileID }
+    var editingHUDProfile: HUDProfile? { workspaceStore.hudProfile(effectiveEditingHUDID) }
+    private var editingIsActiveHUD: Bool { effectiveEditingHUDID == workspaceStore.activeHUDProfileID }
+
+    var widgets: [HUDWidget] { editingHUDProfile?.widgets ?? [] }
 
     func addWidget(kind: WidgetKind) {
-        guard var p = workspaceStore.activeHUDProfile else { return }
+        guard var p = editingHUDProfile else { return }
         // Fan new widgets out a little so they don't stack exactly.
         let n = p.widgets.count
         p.widgets.append(HUDWidget(kind: kind,
@@ -2106,7 +2134,7 @@ final class AppCoordinator: ObservableObject {
     }
 
     func updateWidget(_ widget: HUDWidget) {
-        guard var p = workspaceStore.activeHUDProfile,
+        guard var p = editingHUDProfile,
               let i = p.widgets.firstIndex(where: { $0.id == widget.id }) else { return }
         p.widgets[i] = widget
         commitHUD(p)
@@ -2115,7 +2143,7 @@ final class AppCoordinator: ObservableObject {
     /// Drag-and-drop move: put `id` into `stackID` (nil = standalone), inserted just before
     /// `beforeID` in the widget array (which drives stack order), or at the end if `beforeID` is nil.
     func moveWidget(_ id: UUID, toStack stackID: UUID?, before beforeID: UUID?) {
-        guard var p = workspaceStore.activeHUDProfile,
+        guard var p = editingHUDProfile,
               let idx = p.widgets.firstIndex(where: { $0.id == id }), id != beforeID else { return }
         var w = p.widgets.remove(at: idx)
         w.stackID = stackID
@@ -2128,7 +2156,7 @@ final class AppCoordinator: ObservableObject {
     }
 
     func removeWidget(id: UUID) {
-        guard var p = workspaceStore.activeHUDProfile,
+        guard var p = editingHUDProfile,
               let i = p.widgets.firstIndex(where: { $0.id == id }) else { return }
         p.widgets.remove(at: i)
         commitHUD(p)
@@ -2136,10 +2164,10 @@ final class AppCoordinator: ObservableObject {
 
     // MARK: HUD stacks
 
-    var stacks: [HUDStack] { workspaceStore.activeHUDProfile?.stacks ?? [] }
+    var stacks: [HUDStack] { editingHUDProfile?.stacks ?? [] }
 
     func addStack() {
-        guard var p = workspaceStore.activeHUDProfile else { return }
+        guard var p = editingHUDProfile else { return }
         let n = p.stacks.count
         p.stacks.append(HUDStack(name: "Stack \(n + 1)",
                                  yawDegrees: -14 + Double(n % 3) * 16, pitchDegrees: 8))
@@ -2147,14 +2175,14 @@ final class AppCoordinator: ObservableObject {
     }
 
     func updateStack(_ stack: HUDStack) {
-        guard var p = workspaceStore.activeHUDProfile,
+        guard var p = editingHUDProfile,
               let i = p.stacks.firstIndex(where: { $0.id == stack.id }) else { return }
         p.stacks[i] = stack
         commitHUD(p)
     }
 
     func removeStack(id: UUID) {
-        guard var p = workspaceStore.activeHUDProfile,
+        guard var p = editingHUDProfile,
               let i = p.stacks.firstIndex(where: { $0.id == id }) else { return }
         p.stacks.remove(at: i)
         // Release its members back to standalone.
@@ -2168,66 +2196,79 @@ final class AppCoordinator: ObservableObject {
     // MARK: HUD profiles
 
     var hudProfiles: [HUDProfile] { workspaceStore.hudProfiles }
-    var activeHUDProfileID: UUID? { workspaceStore.activeHUDProfileID }
-    var activeHUDProfileName: String { workspaceStore.activeHUDProfile?.name ?? "—" }
+    /// The HUD profile being edited (drives the HUD page). Top-bar "displayed" HUD is `activeHUDProfileID`.
+    var activeHUDProfileID: UUID? { effectiveEditingHUDID }
+    /// The HUD profile AR is displaying.
+    var displayedHUDProfileID: UUID? { workspaceStore.activeHUDProfileID }
+    var displayedHUDProfileName: String { workspaceStore.activeHUDProfile?.name ?? "—" }
+    var activeHUDProfileName: String { editingHUDProfile?.name ?? "—" }
 
+    /// Editor selection — change which HUD profile you're editing (does NOT touch the live AR).
     func selectHUDProfile(_ id: UUID?) {
+        editingHUDProfileID = id
+        objectWillChange.send()
+    }
+
+    /// Top bar — choose the HUD profile AR displays (applies live).
+    func setDisplayedHUDProfile(_ id: UUID?) {
         workspaceStore.activeHUDProfileID = id
         workspaceStore.save()
         objectWillChange.send()
-        pushActiveHUD()
+        if arActive {
+            let p = workspaceStore.activeHUDProfile
+            widgetManager?.setLayout(widgets: p?.widgets ?? [], stacks: p?.stacks ?? [])
+        }
     }
 
     func addHUDProfile(name: String = "") {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         let p = HUDProfile(name: trimmed.isEmpty ? "HUD \(hudProfiles.count + 1)" : trimmed)
         workspaceStore.appendHUDProfile(p)
-        workspaceStore.activeHUDProfileID = p.id
+        editingHUDProfileID = p.id     // edit the new one; displayed HUD is unchanged
         workspaceStore.save()
         objectWillChange.send()
-        pushActiveHUD()
     }
 
     func renameHUDProfile(_ name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty, var p = workspaceStore.activeHUDProfile else { return }
+        guard !trimmed.isEmpty, var p = editingHUDProfile else { return }
         p.name = trimmed
-        workspaceStore.activeHUDProfile = p
+        workspaceStore.updateHUDProfile(p)
         workspaceStore.save()
         objectWillChange.send()
     }
 
     func deleteHUDProfile(id: UUID) {
         workspaceStore.removeHUDProfile(id: id)
+        if workspaceStore.hudProfiles.isEmpty { workspaceStore.appendHUDProfile(HUDProfile(name: "Default")) }
+        if editingHUDProfileID == id { editingHUDProfileID = workspaceStore.hudProfiles.first?.id }
         if workspaceStore.activeHUDProfileID == id {
             workspaceStore.activeHUDProfileID = workspaceStore.hudProfiles.first?.id
         }
-        if workspaceStore.hudProfiles.isEmpty { workspaceStore.appendHUDProfile(HUDProfile(name: "Default")) }
-        workspaceStore.activeHUDProfileID = workspaceStore.activeHUDProfileID ?? workspaceStore.hudProfiles.first?.id
         workspaceStore.save()
         objectWillChange.send()
-        pushActiveHUD()
+        if arActive {
+            let p = workspaceStore.activeHUDProfile
+            widgetManager?.setLayout(widgets: p?.widgets ?? [], stacks: p?.stacks ?? [])
+        }
     }
 
-    /// Push the active HUD profile's widgets to the renderer (when AR is running).
-    private func pushActiveHUD() {
-        guard arActive else { return }
-        let p = workspaceStore.activeHUDProfile
-        widgetManager?.setLayout(widgets: p?.widgets ?? [], stacks: p?.stacks ?? [])
-    }
-
+    /// Commit edits to the EDITED HUD profile. Only pushes to AR when that profile is the one
+    /// currently displayed (so editing a different profile doesn't disturb the live HUD).
     private func commitHUD(_ profile: HUDProfile) {
-        workspaceStore.activeHUDProfile = profile
+        workspaceStore.updateHUDProfile(profile)
         workspaceStore.save()
         objectWillChange.send()
-        if arActive { widgetManager?.setLayout(widgets: profile.widgets, stacks: profile.stacks) }
+        if arActive && editingIsActiveHUD {
+            widgetManager?.setLayout(widgets: profile.widgets, stacks: profile.stacks)
+        }
     }
 
     /// All editable screens in the active workspace, for the UI list and Layout map: virtual
     /// screens plus connected physical monitors (excluding mirror targets, which are shown via
     /// the virtual screen mirrored onto them).
     func editableScreens() -> [VirtualScreenConfig] {
-        guard let ws = workspaceStore.activeWorkspace else { return [] }
+        guard let ws = editingWorkspace else { return [] }
         let physical = ws.physicalInAR
             .filter { isLayoutPhysical(uuid: $0.key) }
             .values.sorted { $0.name < $1.name }
@@ -2236,17 +2277,19 @@ final class AppCoordinator: ObservableObject {
 
     /// True if the screen is a real (physical) monitor mirrored into AR rather than a virtual one.
     func isPhysicalScreen(_ id: UUID) -> Bool {
-        workspaceStore.activeWorkspace?.physicalInAR.values.contains { $0.id == id } ?? false
+        editingWorkspace?.physicalInAR.values.contains { $0.id == id } ?? false
     }
 
     func bindingForScreen(id: UUID) -> VirtualScreenConfig? {
-        guard let ws = workspaceStore.activeWorkspace else { return nil }
+        guard let ws = editingWorkspace else { return nil }
         return ws.virtualScreens.first { $0.id == id }
             ?? ws.physicalInAR.values.first { $0.id == id }
     }
 
     func updateScreen(_ config: VirtualScreenConfig) {
-        guard var ws = workspaceStore.activeWorkspace else { return }
+        guard var ws = editingWorkspace else { return }
+        // Live display ops only when editing the workspace that's actually displayed.
+        let live = arActive && editingIsActiveWorkspace
         let existing = ws.virtualScreens.first(where: { $0.id == config.id })
         var physicalKey: String?
         let priorShowInAR: Bool?
@@ -2260,8 +2303,10 @@ final class AppCoordinator: ObservableObject {
         } else {
             return
         }
-        workspaceStore.activeWorkspace = ws
+        workspaceStore.updateWorkspace(ws)
         workspaceStore.save()
+        objectWillChange.send()
+        guard live else { return } // editing a non-displayed workspace: persist only, don't touch AR
 
         let resolutionChanged = existing.map { $0.width != config.width || $0.height != config.height || $0.hiDPI != config.hiDPI } ?? false
         if resolutionChanged {
@@ -2269,7 +2314,7 @@ final class AppCoordinator: ObservableObject {
                 Task { await capture.stop() }
             }
             virtualDisplays.destroy(config.id)
-            if arActive, config.showInAR,
+            if config.showInAR,
                let displayID = virtualDisplays.create(config),
                displayID != glassesDisplayID {
                 _ = makeCapture(config: config, captureDisplayID: displayID)
@@ -2278,7 +2323,7 @@ final class AppCoordinator: ObservableObject {
 
         // Physical monitor toggled between positioning-only (green) and mirrored-into-AR
         // (orange) live: start or stop its capture so the change takes effect without a restart.
-        if arActive, let uuid = physicalKey, priorShowInAR != config.showInAR {
+        if let uuid = physicalKey, priorShowInAR != config.showInAR {
             if config.showInAR, captures[config.id] == nil,
                let displayID = Self.resolvePhysicalDisplay(uuidString: uuid),
                displayID != glassesDisplayID {
@@ -2289,10 +2334,9 @@ final class AppCoordinator: ObservableObject {
         }
 
         // Apply the desktop background live when it (or the resolution, which recreates the
-        // display and drops the wallpaper) changed. Guarded so a slider drag doesn't re-set it
-        // every step. Physical screens have no virtual display, so this naturally skips them.
+        // display and drops the wallpaper) changed.
         let backgroundChanged = existing?.background != config.background
-        if arActive, physicalKey == nil, backgroundChanged || resolutionChanged,
+        if physicalKey == nil, backgroundChanged || resolutionChanged,
            let displayID = virtualDisplays.displayID(for: config.id) {
             ScreenBackgroundApplier.apply(config.background, toDisplayID: displayID)
         }

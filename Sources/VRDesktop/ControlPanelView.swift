@@ -36,16 +36,39 @@ struct ControlPanelView: View {
     }
 
     private var topBar: some View {
-        HStack(alignment: .center) {
+        HStack(alignment: .center, spacing: 16) {
             PageHeader(title: route.title, subtitle: route.subtitle)
             Spacer()
-            Button { coordinator.toggleAR() } label: {
-                Label(coordinator.arActive ? "Stop AR" : "Start AR",
-                      systemImage: coordinator.arActive ? "stop.fill" : "play.fill")
+            VStack(alignment: .trailing, spacing: 6) {
+                Button { coordinator.toggleAR() } label: {
+                    Label(coordinator.arActive ? "Stop AR" : "Start AR",
+                          systemImage: coordinator.arActive ? "stop.fill" : "play.fill")
+                        .frame(minWidth: 96)
+                }
+                .buttonStyle(.borderedProminent).controlSize(.large)
+                // What AR is displaying (independent of what the pages are editing).
+                HStack(spacing: 6) {
+                    Image(systemName: "rectangle.3.group").font(.caption2).foregroundStyle(.secondary)
+                    Picker("", selection: Binding(
+                        get: { coordinator.displayedWorkspaceID },
+                        set: { coordinator.setDisplayedWorkspace($0) }
+                    )) {
+                        ForEach(coordinator.workspaceStore.workspaces) { Text($0.name).tag(UUID?.some($0.id)) }
+                    }
+                    .labelsHidden().fixedSize()
+                    Image(systemName: "square.text.square").font(.caption2).foregroundStyle(.secondary)
+                    Picker("", selection: Binding(
+                        get: { coordinator.displayedHUDProfileID },
+                        set: { coordinator.setDisplayedHUDProfile($0) }
+                    )) {
+                        ForEach(coordinator.hudProfiles) { Text($0.name).tag(Optional($0.id)) }
+                    }
+                    .labelsHidden().fixedSize()
+                }
+                .controlSize(.small)
             }
-            .buttonStyle(.borderedProminent)
         }
-        .padding(.horizontal, 20).padding(.vertical, 14)
+        .padding(.horizontal, 20).padding(.vertical, 12)
     }
 
     @ViewBuilder private var detail: some View {
@@ -143,8 +166,8 @@ struct ControlPanelView: View {
                 HStack(spacing: 8) {
                     Text("Workspace").font(.caption).foregroundStyle(.secondary).frame(width: 80, alignment: .leading)
                     Picker("", selection: Binding(
-                        get: { coordinator.workspaceStore.activeWorkspaceID },
-                        set: { coordinator.selectWorkspace($0); selectedDisplayID = nil }
+                        get: { coordinator.editingWorkspace?.id },
+                        set: { coordinator.selectWorkspace($0); selectedDisplayID = nil; syncWorkspaceName() }
                     )) {
                         ForEach(coordinator.workspaceStore.workspaces) { ws in
                             Text(ws.name).tag(UUID?.some(ws.id))
@@ -155,7 +178,6 @@ struct ControlPanelView: View {
                         .textFieldStyle(.roundedBorder).frame(width: 150)
                         .onSubmit { coordinator.renameActiveWorkspace(workspaceName) }
                         .onAppear { syncWorkspaceName() }
-                        .onChange(of: coordinator.workspaceStore.activeWorkspaceID) { _ in syncWorkspaceName() }
                     Button { coordinator.addWorkspace(); syncWorkspaceName() } label: { Image(systemName: "plus") }
                         .help("New workspace")
                     Button(role: .destructive) { coordinator.deleteActiveWorkspace(); syncWorkspaceName() } label: {
@@ -285,7 +307,7 @@ struct ControlPanelView: View {
 
     private var activeWidgetsColumn: some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text("HUD Profile · \(coordinator.activeWorkspaceName)")
+            Text("Editing · \(coordinator.activeHUDProfileName)")
                 .font(.caption2).foregroundStyle(.secondary)
             if coordinator.widgets.isEmpty && coordinator.stacks.isEmpty {
                 Text("No widgets yet — add one from the left, then drag it into place in the "
@@ -963,7 +985,7 @@ struct ControlPanelView: View {
     }
 
     private func syncWorkspaceName() {
-        workspaceName = coordinator.workspaceStore.activeWorkspace?.name ?? ""
+        workspaceName = coordinator.editingWorkspace?.name ?? ""
     }
 
     private func isPhysical(_ id: UUID) -> Bool {
