@@ -117,3 +117,55 @@ P=$(ls ~/Library/Preferences/ByHost/com.apple.windowserver.displays.*.plist | he
 plutil -convert xml1 -o /tmp/ws.xml "$P"
 echo "configs: $(grep -cE '<key>ConfigVersion</key>' /tmp/ws.xml) | UUIDs: $(grep -oE '[0-9A-F]{8}(-[0-9A-F]{4}){3}-[0-9A-F]{12}' /tmp/ws.xml | sort -u | wc -l)"
 ```
+
+---
+
+## Recurrence (2026-06-22) — bloated ColorSync *device registry*
+
+The runaway came back at a solid ~73% **even with AR closed**, and killing the daemon didn't help
+(it restarts and re-wedges). Unplugging the Air 2 still dropped it to 0%, so it was the Air 2 again
+— but the hot path had **moved**.
+
+### What was different this time
+
+WindowServer was **idle (~2%)** while `colorsync.displayservices` (73%) and `colorsyncd` (23%) span
+on their own. Sampling both daemons showed the hot path was no longer WindowServer's
+`restore_color_preferences`, but the **ColorSync device registry being re-parsed**:
+
+```
+ColorSyncXPCDeviceRegistryCopyAnyUserInfo
+└ ColorSyncDeviceRegistryCopyInfo
+  └ CFPropertyListCreateWithData → __CFTryParseBinaryPlist   (deep, repeated, in BOTH daemons)
+```
+
+Same *shape* as the original WindowServer-plist bloat, different store. The device registry had
+accumulated **20 display profiles** in `/Library/ColorSync/Profiles/Displays/`, many stale —
+multiple `Air 2-<UUID>` (the Air 2's display UUID keeps changing between sessions:
+`8DE95A81…` → `87932B42…`), old `Screen 1/2/3`, and pre-slot-fix `Code Screen`/`Slack`/`Browser`.
+The custom **`Air 2 Calibrated.icc`** is a *preference* the system keeps trying to restore against
+the Air 2's shifting identity, which pokes the registry; re-parsing the fat plist on each poke pins
+both daemons. (The slot-based virtual-display fix means *our* virtual displays no longer add to this
+churn — the stale virtual entries are historical.)
+
+### Fix that worked (durable)
+
+Clear the stale display profiles (incl. the custom calibration being chased) and restart the
+daemons so they rebuild a clean registry — macOS regenerates the profiles it actually needs:
+
+```sh
+sudo cp -R /Library/ColorSync/Profiles/Displays /tmp/colorsync-displays-backup
+sudo rm -f /Library/ColorSync/Profiles/Displays/*.icc
+sudo killall colorsyncd colorsync.displayservices
+# verify
+sleep 3; ps -o pcpu,comm -p $(pgrep -x colorsync.displayservices)   # → ~0%
+```
+
+A reboot guarantees the daemons start from the clean folder if the kill alone doesn't settle it.
+
+### Keep it from recurring
+
+- **Don't re-calibrate the Air 2** (System Settings → Displays → Color). A custom profile against its
+  unstable UUID is what re-arms the loop; leave it on the default profile.
+- If it creeps back, the three commands above clear it. It won't re-bloat from VR Desktop's virtual
+  displays (stable slot UUIDs now) — the source is the Air 2's churning identity + accumulated
+  profiles.
