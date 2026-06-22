@@ -939,7 +939,53 @@ struct ControlPanelView: View {
                     }
                 }
             }
+            card("System health", "waveform.path.ecg") { systemHealthSection }
             card("Displays", "rectangle.on.rectangle") { diagnosticsInfo }
+        }
+        .onAppear { coordinator.refreshHealthNow() }
+    }
+
+    private var systemHealthSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle("Monitor problem processes (colorsync, WindowServer, Sophos)",
+                   isOn: $coordinator.processMonitorEnabled)
+                .font(.caption)
+            if coordinator.processMonitorEnabled {
+                ForEach(coordinator.processSamples) { s in
+                    HStack {
+                        Text(s.name).font(.system(.caption, design: .monospaced))
+                        Spacer()
+                        Text(String(format: "%.0f%%", s.cpu))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(s.cpu > 60 ? .red : (s.cpu > 25 ? .orange : .secondary))
+                    }
+                }
+                .padding(.leading, 8)
+                Text("Updates every 3 s while enabled.").font(.caption2).foregroundStyle(.secondary)
+            }
+            Divider()
+            healthRow("ColorSync display profiles", coordinator.displayProfileCount, warn: 30,
+                      hint: "Lots of stale per-display profiles bloat the ColorSync registry.")
+            healthRow("Saved display configs", coordinator.displayConfigCount, warn: 50,
+                      hint: "Excessive saved arrangements make ColorSync re-parse a huge plist.")
+            Button("Refresh") { coordinator.refreshHealthNow() }.controlSize(.small)
+        }
+    }
+
+    private func healthRow(_ label: String, _ count: Int, warn: Int, hint: String) -> some View {
+        let over = count >= warn
+        return VStack(alignment: .leading, spacing: 1) {
+            HStack {
+                Text(label).font(.caption)
+                Spacer()
+                Text("\(count)").font(.caption.monospacedDigit())
+                    .foregroundStyle(over ? .orange : .secondary)
+                if over { Image(systemName: "exclamationmark.triangle.fill").font(.caption2).foregroundStyle(.orange) }
+            }
+            if over {
+                Text(hint).font(.caption2).foregroundStyle(.orange.opacity(0.85))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 

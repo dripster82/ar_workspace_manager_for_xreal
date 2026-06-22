@@ -310,6 +310,7 @@ final class AppCoordinator: ObservableObject {
             Task { @MainActor in self?.updateStats() }
         }
         updateSystemLoadTimer() // resume if the toggle was persisted on
+        updateHealthTimer() // resume the process/health monitor if persisted on
         // Populate the layout with the currently-connected monitors (positioning-only/green).
         syncPhysicalMonitors()
     }
@@ -2192,6 +2193,46 @@ final class AppCoordinator: ObservableObject {
 
     /// Hide / show the head-locked HUD widgets in the AR scene (⌃⌥I).
     func toggleHUD() { widgetManager?.toggleHidden() }
+
+    // MARK: System health (Diagnostics page)
+
+    @Published var processMonitorEnabled: Bool = UserDefaults.standard.bool(forKey: "processMonitorEnabled") {
+        didSet {
+            UserDefaults.standard.set(processMonitorEnabled, forKey: "processMonitorEnabled")
+            updateHealthTimer()
+        }
+    }
+    @Published var processSamples: [ProcessSample] = []
+    @Published var displayProfileCount = 0
+    @Published var displayConfigCount = 0
+    private var healthTimer: Timer?
+
+    private func updateHealthTimer() {
+        healthTimer?.invalidate(); healthTimer = nil
+        guard processMonitorEnabled else { return }
+        refreshHealthNow()
+        let t = Timer(timeInterval: 3, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshHealthNow() }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        healthTimer = t
+    }
+
+    /// Refresh the health readouts off the main thread (cheap, runs `ps` + counts files).
+    func refreshHealthNow() {
+        let wantProcesses = processMonitorEnabled
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let samples = wantProcesses ? SystemHealth.processCPU(matching: SystemHealth.watchedProcesses) : []
+            let profiles = SystemHealth.colorSyncDisplayProfileCount()
+            let configs = SystemHealth.displayConfigCount()
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.processSamples = samples
+                self.displayProfileCount = profiles
+                self.displayConfigCount = configs
+            }
+        }
+    }
 
     // MARK: HUD profiles
 
