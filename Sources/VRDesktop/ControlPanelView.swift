@@ -49,12 +49,10 @@ struct ControlPanelView: View {
     @ViewBuilder private var detail: some View {
         switch route {
         case .dashboard: dashboardPage
-        case .workspaces:
-            card("Workspace", "square.grid.2x2") { workspaceSection }
-        case .displays:
+        case .workspace:
             VStack(spacing: 14) {
-                card("AR Output", "display") { outputSection }
                 card("Layout", "square.on.square.dashed") { PlacementMapView(coordinator: coordinator) }
+                card("Workspace & displays", "square.grid.2x2") { workspaceSection }
             }
         case .hudWidgets:
             card("HUD Widgets", "square.text.square") { widgetsSection }
@@ -95,10 +93,13 @@ struct ControlPanelView: View {
             case .general: card("General", "gearshape") { generalSection }
             case .glasses:
                 card("Glasses", "eyeglasses") {
-                    Text("Brightness is on the Dashboard; display mode, refresh rate and stereo are "
-                         + "under Displays › AR Output. These move here in a later update.")
-                        .font(.callout).foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 12) {
+                        if coordinator.brightnessAvailable { brightnessControl }
+                        outputSection
+                    }
                 }
+            case .hud:
+                card("HUD connections", "antenna.radiowaves.left.and.right") { hudConnectionsSection }
             case .performance: card("Performance", "gauge.with.dots.needle.33percent") { testSection }
             case .permissions: card("Permissions", "lock.shield") { permissionsSection }
             case .shortcuts: card("Shortcuts", "keyboard") { HelpView() }
@@ -192,24 +193,38 @@ struct ControlPanelView: View {
                         .toggleStyle(.checkbox)
                         .help("Off: horizon stays gravity-level when recentering")
                 }
-                if coordinator.brightnessAvailable {
-                    HStack(spacing: 8) {
-                        Image(systemName: "sun.min").foregroundStyle(.secondary)
-                        // Device is 0–7; show it as 1–8 to the user.
-                        Slider(value: Binding(
-                            get: { coordinator.glassesBrightness + 1 },
-                            set: { coordinator.glassesBrightness = $0 - 1 }
-                        ), in: 1...9, step: 1) { editing in
-                            coordinator.editingBrightness = editing
-                            if !editing { coordinator.applyBrightness() }
-                        }
-                        Image(systemName: "sun.max").foregroundStyle(.secondary)
-                        Text("\(Int(coordinator.glassesBrightness) + 1)").frame(width: 14).monospacedDigit()
-                    }.font(.caption)
-                }
+                if coordinator.brightnessAvailable { brightnessControl }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 2)
+        }
+    }
+
+    /// Glasses brightness slider — reused on the Dashboard and in Settings › Glasses.
+    private var brightnessControl: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "sun.min").foregroundStyle(.secondary)
+            // Device is 0–7; show it as 1–8 to the user.
+            Slider(value: Binding(
+                get: { coordinator.glassesBrightness + 1 },
+                set: { coordinator.glassesBrightness = $0 - 1 }
+            ), in: 1...9, step: 1) { editing in
+                coordinator.editingBrightness = editing
+                if !editing { coordinator.applyBrightness() }
+            }
+            Image(systemName: "sun.max").foregroundStyle(.secondary)
+            Text("\(Int(coordinator.glassesBrightness) + 1)").frame(width: 14).monospacedDigit()
+        }.font(.caption)
+    }
+
+    /// HUD account connections (moved out of the HUD Widgets page into Settings › HUD).
+    private var hudConnectionsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SlackSettingsView(slack: coordinator.slack)
+            Divider()
+            GitHubSettingsView(github: coordinator.github)
+            Divider()
+            CalendarSettingsView(calendar: coordinator.calendar)
         }
     }
 
@@ -561,22 +576,12 @@ struct ControlPanelView: View {
                 }
                 ForEach(loose) { w in widgetRow(w) }
             }
-            if coordinator.widgets.contains(where: { $0.kind == .slack }) {
-                Divider()
-                SlackSettingsView(slack: coordinator.slack)
-            }
-            if coordinator.widgets.contains(where: { $0.kind == .github }) {
-                Divider()
-                GitHubSettingsView(github: coordinator.github)
-            }
-            if coordinator.widgets.contains(where: { $0.kind == .calendar }) {
-                Divider()
-                CalendarSettingsView(calendar: coordinator.calendar)
-            }
             if !coordinator.arActive {
                 Text("Widgets appear once AR is running.")
                     .font(.caption2).foregroundStyle(.secondary)
             }
+            Text("Account connections (Slack / GitHub / Calendar) are in Settings › HUD.")
+                .font(.caption2).foregroundStyle(.secondary)
         }
     }
 

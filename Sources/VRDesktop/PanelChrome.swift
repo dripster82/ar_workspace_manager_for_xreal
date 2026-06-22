@@ -13,7 +13,7 @@ enum PanelTheme {
 
 /// Top-level destinations in the sidebar.
 enum PanelRoute: String, CaseIterable, Identifiable {
-    case dashboard, workspaces, displays, hudWidgets
+    case dashboard, workspace, hudWidgets
     case windowRules, voiceCommands
     case settings
     var id: String { rawValue }
@@ -21,8 +21,7 @@ enum PanelRoute: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .dashboard: return "Dashboard"
-        case .workspaces: return "Workspaces"
-        case .displays: return "Displays"
+        case .workspace: return "Workspace"
         case .hudWidgets: return "HUD Widgets"
         case .windowRules: return "Window Rules"
         case .voiceCommands: return "Voice Commands"
@@ -32,8 +31,7 @@ enum PanelRoute: String, CaseIterable, Identifiable {
     var subtitle: String {
         switch self {
         case .dashboard: return "Overview and quick actions"
-        case .workspaces: return "Manage your workspace profiles"
-        case .displays: return "Configure your virtual displays"
+        case .workspace: return "Arrange the displays in your workspace"
         case .hudWidgets: return "Customise your HUD (always in view)"
         case .windowRules: return "Automatically place apps on screens"
         case .voiceCommands: return "Hands-free control"
@@ -43,8 +41,7 @@ enum PanelRoute: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .dashboard: return "square.grid.2x2"
-        case .workspaces: return "rectangle.3.group"
-        case .displays: return "display"
+        case .workspace: return "rectangle.3.group"
         case .hudWidgets: return "square.text.square"
         case .windowRules: return "wand.and.rays"
         case .voiceCommands: return "mic"
@@ -53,14 +50,15 @@ enum PanelRoute: String, CaseIterable, Identifiable {
     }
 }
 
-/// Settings sub-pages (per the UX review: Performance/Glasses/Shortcuts live here, not top-level).
+/// Settings sub-pages (per the UX review: Performance/Glasses/HUD/Shortcuts live here, not top-level).
 enum SettingsTab: String, CaseIterable, Identifiable {
-    case general, glasses, performance, permissions, shortcuts, about
+    case general, glasses, hud, performance, permissions, shortcuts, about
     var id: String { rawValue }
     var label: String {
         switch self {
         case .general: return "General"
         case .glasses: return "Glasses"
+        case .hud: return "HUD"
         case .performance: return "Performance"
         case .permissions: return "Permissions"
         case .shortcuts: return "Shortcuts"
@@ -90,7 +88,7 @@ struct SidebarView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    group("MAIN", [.dashboard, .workspaces, .displays, .hudWidgets])
+                    group("MAIN", [.dashboard, .workspace, .hudWidgets])
                     group("AUTOMATION", [.windowRules, .voiceCommands])
                     group("SYSTEM", [.settings])
                 }

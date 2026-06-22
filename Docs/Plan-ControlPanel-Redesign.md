@@ -22,6 +22,33 @@ About = **"coming soon" stubs**; **no greeting** line.
 
 ---
 
+## 0. Revision — merged Workspace page + settings moves (supersedes §2–§6 where they differ)
+
+Design direction after Phase 0:
+
+- **Merge Workspaces + Displays into one "Workspace" page.** They're the same thing with extra
+  steps — a workspace *is* its set of displays. The page is **layout-centric**:
+  - **Workspace selector** + **HUD Profile selector** at the top (HUD "layouts" are renamed **HUD
+    Profiles** — named, selectable like workspaces).
+  - The **Layout map is the main element**; an **Add Display** button drops a new display into it.
+  - **Clicking a screen in the layout selects it** and shows its **detail below**: background,
+    placement sliders (yaw/pitch/distance/scale/curve) with **editable numeric values**, mirror
+    options, label, reset/delete.
+- **Move "AR Output" to Settings › Glasses** (output picker, display mode, refresh, stereo/IPD,
+  wide-canvas) and **duplicate the brightness slider** there.
+- **Move HUD widget connections/settings to Settings › HUD** (Slack / GitHub / Calendar auth +
+  refresh intervals). The **HUD Widgets page** keeps only widget management + placement.
+- **Move the calendar meeting-alarm options onto the Calendar widget itself** (its per-widget
+  config), not a separate Automation page.
+
+Resulting navigation: **Main** — Dashboard, Workspace, HUD Widgets · **Automation** — Window Rules,
+Voice Commands · **Settings** (sub-tabs) — General, Glasses, HUD, Performance, Permissions,
+Shortcuts, About.
+
+Phase 0 applies the easy structural moves (merge the two routes; AR Output + brightness under
+Glasses); the layout-centric click-to-select editor, the connections split, HUD Profiles as a
+selectable model, and calendar-alarms-on-widget are the next build phases.
+
 ## 1. Visual language
 
 - **Theme:** near-black window (~#0E0E12), lighter cards (~#16161C), hairline borders (white ~8%),
