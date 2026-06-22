@@ -1337,7 +1337,7 @@ final class AppCoordinator: ObservableObject {
         // the right, b = −pitch grows downward (matching the Layout editor's mapping). Size uses
         // each screen's own scale + distance, exactly like the Layout box, so the atlas mirrors
         // the GUI (including any gaps the user left).
-        struct Tile { let provider: () -> MTLTexture?
+        struct Tile { let provider: () -> MTLTexture?; let name: String
                       let aLeft: Double; let bTop: Double; let wDeg: Double; let hDeg: Double }
         let tiles: [Tile] = anchored.map { (config, capture) in
             let widthMeters = Double(config.width) / 1920.0 * 1.6 * config.scale
@@ -1346,7 +1346,7 @@ final class AppCoordinator: ObservableObject {
             let dist = max(0.1, config.distanceMeters)
             let wDeg = 2.0 * atan((widthMeters / 2.0) / dist) * 180.0 / .pi
             let hDeg = 2.0 * atan((heightMeters / 2.0) / dist) * 180.0 / .pi
-            return Tile(provider: { [weak capture] in capture?.latestTexture },
+            return Tile(provider: { [weak capture] in capture?.latestTexture }, name: config.name,
                         aLeft: -config.yawDegrees - wDeg / 2.0,
                         bTop: -config.pitchDegrees - hDeg / 2.0,
                         wDeg: wDeg, hDeg: hDeg)
@@ -1388,7 +1388,7 @@ final class AppCoordinator: ObservableObject {
         let centreB = (bMin + bMax) / 2.0
         let distance = Float(wideCanvasDistanceMeters)
         let arcWRad = arcWDeg * .pi / 180.0
-        return SceneScreen(
+        var canvas = SceneScreen(
             canvasID: Self.wideCanvasID,
             yaw: Float(-centreA * .pi / 180.0),
             pitch: Float(-centreB * .pi / 180.0),
@@ -1398,6 +1398,14 @@ final class AppCoordinator: ObservableObject {
             canvasPixelWidth: canvasW, canvasPixelHeight: canvasH,
             tiles: canvasTiles
         )
+        // One corner label per merged tile, at the tile's top-left in atlas UV.
+        canvas.tileLabels = tiles.compactMap { t in
+            guard let image = labelCGImage(for: t.name) else { return nil }
+            let u = Float((t.aLeft - aMin) * pxPerDegH / Double(canvasW))
+            let v = Float((t.bTop - bMin) * pxPerDegV / Double(canvasH))
+            return SceneScreen.TileLabel(u: u, v: v, text: t.name, image: image)
+        }
+        return canvas
     }
 
     /// Assemble the renderer's scene from (config, capture) pairs. In wide-canvas mono mode the

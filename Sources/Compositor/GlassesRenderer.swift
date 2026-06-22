@@ -1170,15 +1170,30 @@ public final class GlassesRenderer: NSObject {
         encoder.setDepthStencilState(depth)
         encoder.setFragmentSamplerState(linearSampler, index: 0)
         var uniforms = Uniforms(viewProjection: viewProjection)
-        for screen in screens {
-            guard let text = screen.labelText, let image = screen.labelImage,
-                  let tex = labelTexture(text: text, image: image) else { continue }
-            let aspect = Float(tex.width) / Float(max(1, tex.height))
-            guard var verts = screen.labelQuad(imageAspect: aspect) else { continue }
-            encoder.setVertexBytes(&verts, length: verts.count * MemoryLayout<SceneScreen.Vertex>.stride, index: 0)
-            encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.size, index: 1)
+        encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.size, index: 1)
+
+        func draw(_ tex: MTLTexture, _ verts: [SceneScreen.Vertex]) {
+            var v = verts
+            encoder.setVertexBytes(&v, length: v.count * MemoryLayout<SceneScreen.Vertex>.stride, index: 0)
             encoder.setFragmentTexture(tex, index: 0)
             encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+        }
+
+        for screen in screens {
+            if screen.isCanvas {
+                // Wide canvas: one label per merged tile, positioned on the canvas surface.
+                for label in screen.tileLabels {
+                    guard let tex = labelTexture(text: label.text, image: label.image) else { continue }
+                    let aspect = Float(tex.width) / Float(max(1, tex.height))
+                    if let verts = screen.canvasLabelQuad(u: label.u, v: label.v, imageAspect: aspect) {
+                        draw(tex, verts)
+                    }
+                }
+            } else if let text = screen.labelText, let image = screen.labelImage,
+                      let tex = labelTexture(text: text, image: image) {
+                let aspect = Float(tex.width) / Float(max(1, tex.height))
+                if let verts = screen.labelQuad(imageAspect: aspect) { draw(tex, verts) }
+            }
         }
         encoder.setDepthStencilState(depthState) // restore for any later draws
     }

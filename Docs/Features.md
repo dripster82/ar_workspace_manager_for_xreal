@@ -55,7 +55,7 @@ source; keep it in sync when adding features. See also [Roadmap.md](Roadmap.md) 
 - **Stacks** — group widgets vertically/horizontally with alignment + per-widget scale; drag-to-reorder
 - **Styling** per widget — tint, background (pill/solid/none)
 - **Show/hide HUD** (⌃⌥I), independent of passthrough
-- **Screen name labels** (⌃⌥L) — per-screen top-left corner label that tracks each screen (anchored or floating); toggle on/off
+- **Screen name labels** (⌃⌥L) — per-screen top-left corner label that tracks each screen (anchored, floating, and per-tile in wide-canvas mode); toggle on/off
 
 ## Integrations
 - **Google Calendar** — iCal feed (Keychain), recurrence expansion, agenda widget, **meeting alarms**

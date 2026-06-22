@@ -53,9 +53,22 @@ public struct SceneScreen: Identifiable {
 
     /// Optional corner label (the screen's name), shown top-left when labels are toggled on (⌃⌥L).
     /// The renderer rasterises `labelImage` to a texture (cached by `labelText`) and places it with
-    /// `labelQuad`. Left nil for merged canvas screens.
+    /// `labelQuad`. For a merged canvas, the per-tile labels live in `tileLabels` instead.
     public var labelText: String?
     public var labelImage: CGImage?
+
+    /// One label per original screen merged into a wide canvas, anchored at the tile's top-left in
+    /// atlas UV (so its world position is computed from the canvas surface, not a separate screen).
+    public struct TileLabel {
+        public let u: Float        // atlas UV of the tile's top-left (0…1)
+        public let v: Float
+        public let text: String
+        public let image: CGImage
+        public init(u: Float, v: Float, text: String, image: CGImage) {
+            self.u = u; self.v = v; self.text = text; self.image = image
+        }
+    }
+    public var tileLabels: [TileLabel] = []
 
     public init(id: UUID, yaw: Float, pitch: Float, distance: Float, widthMeters: Float,
                 aspect: Float, curveH: Float, autoCurveH: Bool, headLocked: Bool = false,
@@ -206,7 +219,7 @@ public struct SceneScreen: Identifiable {
 
     /// World-space quad (6 vertices, 2 triangles) for a top-left corner label sized to the given
     /// image aspect, anchored just inside the screen's top-left and lying in the screen's plane.
-    /// Returns nil for merged canvas screens (a per-screen label doesn't map to one merged surface).
+    /// Returns nil for merged canvas screens (use `canvasLabelQuad` per tile there).
     func labelQuad(imageAspect aspect: Float) -> [Vertex]? {
         guard !isCanvas else { return nil }
         let (thetaX, thetaY) = angles
@@ -218,6 +231,26 @@ public struct SceneScreen: Identifiable {
         let right = rot.act(SIMD3<Float>(1, 0, 0))
         let up = rot.act(SIMD3<Float>(0, 1, 0))
         let lh = max(0.05, height * 0.09)          // label height: ~9% of the screen height
+        return labelQuadVerts(topLeft: corner, right: right, up: up, height: lh, aspect: aspect)
+    }
+
+    /// Label quad for a tile merged into a wide canvas, placed at atlas UV (u, v) — the tile's
+    /// top-left. The corner and a local right/up basis are read straight off the curved canvas
+    /// surface (finite differences), so the label sits on the canvas where that screen renders.
+    func canvasLabelQuad(u: Float, v: Float, imageAspect aspect: Float) -> [Vertex]? {
+        guard isCanvas else { return nil }
+        let tl = point(u: u, v: v, thetaX: 0, thetaY: 0)
+        let du = point(u: min(1, u + 0.01), v: v, thetaX: 0, thetaY: 0) - tl
+        let dv = point(u: u, v: min(1, v + 0.01), thetaX: 0, thetaY: 0) - tl
+        let right = simd_normalize(du)
+        let up = simd_normalize(-dv)               // v grows downward
+        let lh = max(0.05, height * 0.05)          // uniform across the canvas
+        return labelQuadVerts(topLeft: tl, right: right, up: up, height: lh, aspect: aspect)
+    }
+
+    /// Build the 6-vertex label quad anchored just inside `topLeft`, spanning `height`×`height*aspect`.
+    private func labelQuadVerts(topLeft corner: SIMD3<Float>, right: SIMD3<Float>, up: SIMD3<Float>,
+                                height lh: Float, aspect: Float) -> [Vertex] {
         let lw = lh * aspect
         let inset = lh * 0.35                        // nudge inside the corner so it sits on-screen
         let tl = corner + right * inset - up * inset
