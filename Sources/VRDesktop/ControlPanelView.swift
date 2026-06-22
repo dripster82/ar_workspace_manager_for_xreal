@@ -599,6 +599,7 @@ struct ControlPanelView: View {
                 .onDrag { NSItemProvider(object: w.id.uuidString as NSString) }
                 .help("Drag to reorder, or onto a stack to add it")
             WidgetRow(initial: w, stacks: coordinator.stacks,
+                      calendar: w.kind == .calendar ? coordinator.calendar : nil,
                       onChange: { coordinator.updateWidget($0) },
                       onRemove: { coordinator.removeWidget(id: w.id) })
         }
@@ -813,16 +814,19 @@ struct ControlPanelView: View {
 struct WidgetRow: View {
     let initial: HUDWidget
     let stacks: [HUDStack]
+    /// The calendar service, supplied only for the calendar widget so its alarm options show here.
+    var calendar: GoogleCalendarService?
     var onChange: (HUDWidget) -> Void
     var onRemove: () -> Void
 
     @State private var cfg: HUDWidget
     @State private var expanded = false
 
-    init(initial: HUDWidget, stacks: [HUDStack],
+    init(initial: HUDWidget, stacks: [HUDStack], calendar: GoogleCalendarService? = nil,
          onChange: @escaping (HUDWidget) -> Void, onRemove: @escaping () -> Void) {
         self.initial = initial
         self.stacks = stacks
+        self.calendar = calendar
         self.onChange = onChange
         self.onRemove = onRemove
         _cfg = State(initialValue: initial)
@@ -880,6 +884,10 @@ struct WidgetRow: View {
                     }
                     if cfg.kind == .slack {
                         Toggle("Show refresh countdown", isOn: $cfg.style.showRefreshCountdown).font(.caption)
+                    }
+                    if cfg.kind == .calendar, let calendar {
+                        Divider()
+                        CalendarAlarmOptions(calendar: calendar)
                     }
                     HStack {
                         Button("Remove", role: .destructive, action: onRemove)

@@ -26,13 +26,8 @@ struct CalendarSettingsView: View {
                     Spacer()
                 }
 
-                Divider()
-                Toggle("Meeting alarms (audio + centre-FOV, Esc to dismiss)", isOn: $calendar.alarmsEnabled)
-                    .font(.caption)
-                if calendar.alarmsEnabled {
-                    leadPicker("Alarm 1", $calendar.alarm1Lead)
-                    leadPicker("Alarm 2", $calendar.alarm2Lead)
-                }
+                Text("Meeting alarms are configured on the Calendar widget (HUD Widgets).")
+                    .font(.caption2).foregroundStyle(.secondary)
 
                 HStack(spacing: 10) {
                     switch calendar.state {
@@ -73,20 +68,36 @@ struct CalendarSettingsView: View {
         }
     }
 
-    private func leadPicker(_ label: String, _ selection: Binding<Int>) -> some View {
-        HStack {
-            Text(label).font(.caption).frame(width: 92, alignment: .leading)
-            Picker("", selection: selection) {
-                ForEach(GoogleCalendarService.leadOptions, id: \.minutes) { Text($0.label).tag($0.minutes) }
-            }.labelsHidden().fixedSize()
-            Spacer()
-        }
-    }
-
     private func field<F: View>(_ label: String, _ field: F) -> some View {
         HStack {
             Text(label).font(.caption).frame(width: 92, alignment: .leading)
             field.textFieldStyle(.roundedBorder).font(.caption)
+        }
+    }
+}
+
+/// Meeting-alarm options, shown on the Calendar HUD widget's own settings (not the connection page).
+struct CalendarAlarmOptions: View {
+    @ObservedObject var calendar: GoogleCalendarService
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle("Meeting alarms (audio + centre-FOV, Esc to dismiss)", isOn: $calendar.alarmsEnabled)
+                .font(.caption)
+            if calendar.alarmsEnabled {
+                leadPicker("Alarm 1", $calendar.alarm1Lead)
+                leadPicker("Alarm 2", $calendar.alarm2Lead)
+            }
+        }
+    }
+
+    private func leadPicker(_ label: String, _ selection: Binding<Int>) -> some View {
+        HStack {
+            Text(label).font(.caption).frame(width: 70, alignment: .leading)
+            Picker("", selection: selection) {
+                ForEach(GoogleCalendarService.leadOptions, id: \.minutes) { Text($0.label).tag($0.minutes) }
+            }.labelsHidden().fixedSize()
+            Spacer()
         }
     }
 }
