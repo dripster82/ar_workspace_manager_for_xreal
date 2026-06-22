@@ -77,7 +77,6 @@ final class AppCoordinator: ObservableObject {
     /// What the panel is EDITING — independent of the displayed/active workspace+HUD, so changing
     /// the selector on the Workspace/HUD page doesn't disturb the live AR. nil = follow active.
     @Published var editingWorkspaceID: UUID?
-    @Published var editingHUDProfileID: UUID?
     let virtualDisplays = VirtualDisplayService()
     private let windowLayout = WindowLayoutStore()
     private let windowRestorePrompt = WindowRestorePromptController()
@@ -393,17 +392,7 @@ final class AppCoordinator: ObservableObject {
         renderFPS = fps
         euler = e
 
-        if let info = renderer?.outputWindowInfo {
-            let name = info.displayID != 0 ? cachedScreenName(displayID: info.displayID, screen: nil) : "none"
-            outputWindowInfo = "window \(Int(info.frame.width))×\(Int(info.frame.height)) at (\(Int(info.frame.origin.x)),\(Int(info.frame.origin.y))) on \(name)"
-        } else {
-            outputWindowInfo = "—"
-        }
-        screenList = NSScreen.screens.map { screen in
-            let name = cachedScreenName(displayID: Self.screenDisplayID(screen), screen: screen)
-            return "\(name): \(Int(screen.frame.width))×\(Int(screen.frame.height)) at (\(Int(screen.frame.origin.x)),\(Int(screen.frame.origin.y))) scale \(screen.backingScaleFactor)"
-        }
-
+        refreshDisplayDiagnostics()
         updateLookedAtScreen()
 
         // Reflect brightness changed via the glasses' own buttons (unless mid-drag).
@@ -1217,7 +1206,7 @@ final class AppCoordinator: ObservableObject {
         renderer.showLabels = labelsVisible
         renderer.setScreens(assembleScene(pairs))
         arActive = true
-        let hud = workspaceStore.activeHUDProfile
+        let hud = displayedHUDProfile
         widgetManager?.setLayout(widgets: hud?.widgets ?? [], stacks: hud?.stacks ?? [])
         widgetManager?.start()
         refreshBrightness() // sync the slider to the glasses' actual brightness as AR starts
@@ -2117,10 +2106,14 @@ final class AppCoordinator: ObservableObject {
 
     // MARK: HUD widgets
 
-    // The HUD profile being EDITED (falls back to the active one).
-    private var effectiveEditingHUDID: UUID? { editingHUDProfileID ?? workspaceStore.activeHUDProfileID }
-    var editingHUDProfile: HUDProfile? { workspaceStore.hudProfile(effectiveEditingHUDID) }
-    private var editingIsActiveHUD: Bool { effectiveEditingHUDID == workspaceStore.activeHUDProfileID }
+    // The HUD profile is owned by the workspace (workspace.hudProfileID). "Editing" follows the
+    // workspace being edited; "displayed" follows the active workspace.
+    private func hudProfile(for ws: Workspace?) -> HUDProfile? {
+        workspaceStore.hudProfile(ws?.hudProfileID) ?? workspaceStore.hudProfiles.first
+    }
+    var editingHUDProfile: HUDProfile? { hudProfile(for: editingWorkspace) }
+    private var displayedHUDProfile: HUDProfile? { hudProfile(for: workspaceStore.activeWorkspace) }
+    private var editingIsActiveHUD: Bool { editingHUDProfile?.id == displayedHUDProfile?.id }
 
     var widgets: [HUDWidget] { editingHUDProfile?.widgets ?? [] }
 
@@ -2218,8 +2211,25 @@ final class AppCoordinator: ObservableObject {
         healthTimer = t
     }
 
+    /// Recompute the live display list + output-window info (used by the Diagnostics page; called
+    /// from updateStats while AR is off, and on demand while the Diagnostics page is visible so it
+    /// stays current during AR without the continuous @Published writes that cause head-tracking judder).
+    func refreshDisplayDiagnostics() {
+        if let info = renderer?.outputWindowInfo {
+            let name = info.displayID != 0 ? cachedScreenName(displayID: info.displayID, screen: nil) : "none"
+            outputWindowInfo = "window \(Int(info.frame.width))×\(Int(info.frame.height)) at (\(Int(info.frame.origin.x)),\(Int(info.frame.origin.y))) on \(name)"
+        } else {
+            outputWindowInfo = "—"
+        }
+        screenList = NSScreen.screens.map { screen in
+            let name = cachedScreenName(displayID: Self.screenDisplayID(screen), screen: screen)
+            return "\(name): \(Int(screen.frame.width))×\(Int(screen.frame.height)) at (\(Int(screen.frame.origin.x)),\(Int(screen.frame.origin.y))) scale \(screen.backingScaleFactor)"
+        }
+    }
+
     /// Refresh the health readouts off the main thread (cheap, runs `ps` + counts files).
     func refreshHealthNow() {
+        refreshDisplayDiagnostics()
         let wantProcesses = processMonitorEnabled
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let samples = wantProcesses ? SystemHealth.processCPU(matching: SystemHealth.watchedProcesses) : []
@@ -2237,37 +2247,26 @@ final class AppCoordinator: ObservableObject {
     // MARK: HUD profiles
 
     var hudProfiles: [HUDProfile] { workspaceStore.hudProfiles }
-    /// The HUD profile being edited (drives the HUD page). Top-bar "displayed" HUD is `activeHUDProfileID`.
-    var activeHUDProfileID: UUID? { effectiveEditingHUDID }
-    /// The HUD profile AR is displaying.
-    var displayedHUDProfileID: UUID? { workspaceStore.activeHUDProfileID }
-    var displayedHUDProfileName: String { workspaceStore.activeHUDProfile?.name ?? "—" }
+    /// The HUD profile the edited workspace uses (drives the HUD page + the Workspace-page picker).
+    var activeHUDProfileID: UUID? { editingHUDProfile?.id }
     var activeHUDProfileName: String { editingHUDProfile?.name ?? "—" }
 
-    /// Editor selection — change which HUD profile you're editing (does NOT touch the live AR).
+    /// Assign a HUD profile to the workspace being edited (the workspace owns its HUD). Applies
+    /// live only if that workspace is the one being displayed.
     func selectHUDProfile(_ id: UUID?) {
-        editingHUDProfileID = id
-        objectWillChange.send()
-    }
-
-    /// Top bar — choose the HUD profile AR displays (applies live).
-    func setDisplayedHUDProfile(_ id: UUID?) {
-        workspaceStore.activeHUDProfileID = id
+        guard var ws = editingWorkspace else { return }
+        ws.hudProfileID = id
+        workspaceStore.updateWorkspace(ws)
         workspaceStore.save()
         objectWillChange.send()
-        if arActive {
-            let p = workspaceStore.activeHUDProfile
-            widgetManager?.setLayout(widgets: p?.widgets ?? [], stacks: p?.stacks ?? [])
-        }
+        pushDisplayedHUDIfNeeded()
     }
 
     func addHUDProfile(name: String = "") {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         let p = HUDProfile(name: trimmed.isEmpty ? "HUD \(hudProfiles.count + 1)" : trimmed)
         workspaceStore.appendHUDProfile(p)
-        editingHUDProfileID = p.id     // edit the new one; displayed HUD is unchanged
-        workspaceStore.save()
-        objectWillChange.send()
+        selectHUDProfile(p.id)   // assign the new profile to the edited workspace
     }
 
     func renameHUDProfile(_ name: String) {
@@ -2282,20 +2281,24 @@ final class AppCoordinator: ObservableObject {
     func deleteHUDProfile(id: UUID) {
         workspaceStore.removeHUDProfile(id: id)
         if workspaceStore.hudProfiles.isEmpty { workspaceStore.appendHUDProfile(HUDProfile(name: "Default")) }
-        if editingHUDProfileID == id { editingHUDProfileID = workspaceStore.hudProfiles.first?.id }
-        if workspaceStore.activeHUDProfileID == id {
-            workspaceStore.activeHUDProfileID = workspaceStore.hudProfiles.first?.id
+        let fallback = workspaceStore.hudProfiles.first?.id
+        for ws in workspaceStore.workspaces where ws.hudProfileID == id {
+            var w = ws; w.hudProfileID = fallback; workspaceStore.updateWorkspace(w)
         }
         workspaceStore.save()
         objectWillChange.send()
-        if arActive {
-            let p = workspaceStore.activeHUDProfile
-            widgetManager?.setLayout(widgets: p?.widgets ?? [], stacks: p?.stacks ?? [])
-        }
+        pushDisplayedHUDIfNeeded()
     }
 
-    /// Commit edits to the EDITED HUD profile. Only pushes to AR when that profile is the one
-    /// currently displayed (so editing a different profile doesn't disturb the live HUD).
+    /// Push the displayed workspace's HUD profile to the renderer when AR is running.
+    private func pushDisplayedHUDIfNeeded() {
+        guard arActive else { return }
+        let p = displayedHUDProfile
+        widgetManager?.setLayout(widgets: p?.widgets ?? [], stacks: p?.stacks ?? [])
+    }
+
+    /// Commit edits to the edited workspace's HUD profile. Pushes to AR only when that profile is
+    /// the one currently displayed (so editing a different workspace's HUD doesn't disturb the live one).
     private func commitHUD(_ profile: HUDProfile) {
         workspaceStore.updateHUDProfile(profile)
         workspaceStore.save()

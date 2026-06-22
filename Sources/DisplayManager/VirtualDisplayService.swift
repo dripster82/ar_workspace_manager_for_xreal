@@ -162,21 +162,25 @@ public struct Workspace: Codable, Identifiable, Hashable, Sendable {
     /// Physical displays (by persistent display UUID string) the user wants mirrored into AR,
     /// mapped to their placement config.
     public var physicalInAR: [String: VirtualScreenConfig]
-    /// Head-locked HUD widgets (clock, power, …) floating in the field of view.
+    /// Legacy per-workspace HUD (migrated into HUD profiles; kept for decode/migration only).
     public var widgets: [HUDWidget]
     /// Stack containers that lay out grouped widgets.
     public var stacks: [HUDStack]
+    /// The HUD profile this workspace displays (nil = use the first profile).
+    public var hudProfileID: UUID?
 
     public init(id: UUID = UUID(), name: String,
                 virtualScreens: [VirtualScreenConfig] = [],
                 physicalInAR: [String: VirtualScreenConfig] = [:],
-                widgets: [HUDWidget] = [], stacks: [HUDStack] = []) {
+                widgets: [HUDWidget] = [], stacks: [HUDStack] = [],
+                hudProfileID: UUID? = nil) {
         self.id = id
         self.name = name
         self.virtualScreens = virtualScreens
         self.physicalInAR = physicalInAR
         self.widgets = widgets
         self.stacks = stacks
+        self.hudProfileID = hudProfileID
     }
 
     // Custom decoding so workspaces saved before widgets existed still load.
@@ -188,6 +192,7 @@ public struct Workspace: Codable, Identifiable, Hashable, Sendable {
         physicalInAR = try c.decodeIfPresent([String: VirtualScreenConfig].self, forKey: .physicalInAR) ?? [:]
         widgets = try c.decodeIfPresent([HUDWidget].self, forKey: .widgets) ?? []
         stacks = try c.decodeIfPresent([HUDStack].self, forKey: .stacks) ?? []
+        hudProfileID = try c.decodeIfPresent(UUID.self, forKey: .hudProfileID)
     }
 }
 
@@ -332,25 +337,28 @@ public final class WorkspaceStore {
                 hudProfiles = profiles
                 activeHUDProfileID = saved.activeHUDProfileID ?? profiles.first?.id
             } else {
-                // Migrate: one HUD profile per workspace that has a HUD, named "<workspace> HUD".
+                // Migrate: one HUD profile per workspace, named "<workspace> HUD", and point each
+                // workspace at its profile (workspaces now own a HUD profile reference).
                 var profiles: [HUDProfile] = []
-                var activeID: UUID?
-                for ws in workspaces where !(ws.widgets.isEmpty && ws.stacks.isEmpty) {
+                for i in workspaces.indices {
+                    let ws = workspaces[i]
                     let p = HUDProfile(name: "\(ws.name) HUD", widgets: ws.widgets, stacks: ws.stacks)
                     profiles.append(p)
-                    if ws.id == activeWorkspaceID { activeID = p.id }
+                    workspaces[i].hudProfileID = p.id
                 }
                 if profiles.isEmpty { profiles = [HUDProfile(name: "Default")] }
                 hudProfiles = profiles
-                activeHUDProfileID = activeID ?? profiles.first?.id
+                activeHUDProfileID = workspaces.first(where: { $0.id == activeWorkspaceID })?.hudProfileID
+                    ?? profiles.first?.id
             }
         } else {
-            let defaultWS = Workspace(name: "Default", virtualScreens: [
+            let p = HUDProfile(name: "Default")
+            var defaultWS = Workspace(name: "Default", virtualScreens: [
                 VirtualScreenConfig(name: "Main", width: 2560, height: 1440, hiDPI: true),
             ])
+            defaultWS.hudProfileID = p.id
             workspaces = [defaultWS]
             activeWorkspaceID = defaultWS.id
-            let p = HUDProfile(name: "Default")
             hudProfiles = [p]
             activeHUDProfileID = p.id
         }

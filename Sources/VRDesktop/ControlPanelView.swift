@@ -46,7 +46,7 @@ struct ControlPanelView: View {
                         .frame(minWidth: 96)
                 }
                 .buttonStyle(.borderedProminent).controlSize(.large)
-                // What AR is displaying (independent of what the pages are editing).
+                // The workspace AR is displaying (its HUD profile follows automatically).
                 HStack(spacing: 6) {
                     Image(systemName: "rectangle.3.group").font(.caption2).foregroundStyle(.secondary)
                     Picker("", selection: Binding(
@@ -54,14 +54,6 @@ struct ControlPanelView: View {
                         set: { coordinator.setDisplayedWorkspace($0) }
                     )) {
                         ForEach(coordinator.workspaceStore.workspaces) { Text($0.name).tag(UUID?.some($0.id)) }
-                    }
-                    .labelsHidden().fixedSize()
-                    Image(systemName: "square.text.square").font(.caption2).foregroundStyle(.secondary)
-                    Picker("", selection: Binding(
-                        get: { coordinator.displayedHUDProfileID },
-                        set: { coordinator.setDisplayedHUDProfile($0) }
-                    )) {
-                        ForEach(coordinator.hudProfiles) { Text($0.name).tag(Optional($0.id)) }
                     }
                     .labelsHidden().fixedSize()
                 }
@@ -942,7 +934,12 @@ struct ControlPanelView: View {
             card("System health", "waveform.path.ecg") { systemHealthSection }
             card("Displays", "rectangle.on.rectangle") { diagnosticsInfo }
         }
+        // Keep the display list current while viewing (incl. during AR), without the continuous
+        // writes that cause judder — the publisher only lives while this page is on screen.
         .onAppear { coordinator.refreshHealthNow() }
+        .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in
+            coordinator.refreshDisplayDiagnostics()
+        }
     }
 
     private var systemHealthSection: some View {
