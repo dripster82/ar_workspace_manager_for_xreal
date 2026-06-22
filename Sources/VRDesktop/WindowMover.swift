@@ -20,15 +20,21 @@ struct WinItem: Identifiable {
 @MainActor
 enum WindowMover {
     /// On-screen, normal app windows (excluding our own), sorted by app then title. No thumbnails yet.
+    /// Filters out desktop/wallpaper, the Dock, menu-bar/Control-Centre items, widgets and the Finder
+    /// desktop: only real windows (layer 0) owned by regular foreground apps.
     static func listWindows() async -> [WinItem] {
         guard let content = try? await SCShareableContent.excludingDesktopWindows(
-            false, onScreenWindowsOnly: true) else { return [] }
+            true, onScreenWindowsOnly: true) else { return [] }
         let own = Bundle.main.bundleIdentifier
         var items: [WinItem] = []
         for w in content.windows {
-            guard w.isOnScreen, let app = w.owningApplication,
-                  app.bundleIdentifier != own,
-                  w.frame.width > 80, w.frame.height > 60 else { continue }
+            guard w.isOnScreen, w.windowLayer == 0,                 // normal window layer only
+                  let app = w.owningApplication, app.bundleIdentifier != own,
+                  w.frame.width > 120, w.frame.height > 80,
+                  // Only regular, dock-shown apps — excludes the Dock, Control Centre, Spotlight,
+                  // Notification Centre, wallpaper/widget agents, etc.
+                  NSRunningApplication(processIdentifier: app.processID)?.activationPolicy == .regular
+            else { continue }
             items.append(WinItem(id: w.windowID, appName: app.applicationName,
                                  title: w.title ?? "", bundleID: app.bundleIdentifier,
                                  pid: app.processID, frame: w.frame, image: nil))
@@ -41,7 +47,7 @@ enum WindowMover {
     static func fillThumbnails(_ items: [WinItem],
                                onEach: @MainActor @escaping (CGWindowID, CGImage?) -> Void) async {
         guard let content = try? await SCShareableContent.excludingDesktopWindows(
-            false, onScreenWindowsOnly: true) else { return }
+            true, onScreenWindowsOnly: true) else { return }
         var byID: [CGWindowID: SCWindow] = [:]
         for w in content.windows { byID[w.windowID] = w }
         for item in items {
@@ -75,13 +81,23 @@ enum WindowMover {
               let windows = value as? [AXUIElement], let win = bestMatch(windows, item: item) else {
             return false
         }
-        var pos = bounds.origin
-        let movedPos = setAX(win, kAXPositionAttribute, .cgPoint, &pos)
+        // Move onto the target first (so a resize clamps relative to the right screen).
+        var origin = bounds.origin
+        let movedPos = setAX(win, kAXPositionAttribute, .cgPoint, &origin)
         if fill {
             var size = bounds.size
             setAX(win, kAXSizeAttribute, .cgSize, &size)
-            setAX(win, kAXPositionAttribute, .cgPoint, &pos) // re-apply: apps clamp pos before resize
         }
+        // Centre on the target screen using the window's ACTUAL final size — fill may be clamped to a
+        // window's max size, and reposition-only keeps its size, so centre handles every case.
+        let actual = axFrame(win).size
+        var centred = CGPoint(x: bounds.origin.x + max(0, (bounds.width - actual.width) / 2),
+                              y: bounds.origin.y + max(0, (bounds.height - actual.height) / 2))
+        setAX(win, kAXPositionAttribute, .cgPoint, &centred)
+        // Bring the window to the front of the target screen and focus its app, so it's visible
+        // regardless of whether it could be resized (fixed-size windows otherwise stayed buried).
+        AXUIElementPerformAction(win, kAXRaiseAction as CFString)
+        NSRunningApplication(processIdentifier: item.pid)?.activate()
         return movedPos
     }
 

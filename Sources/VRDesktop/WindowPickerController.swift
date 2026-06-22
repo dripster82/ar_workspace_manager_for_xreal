@@ -117,8 +117,13 @@ final class WindowPickerController {
         guard !items.isEmpty else { hide(); return }
         let item = items[min(selected, items.count - 1)]
         switch coordinator.moveWindowToLookedAtScreen(item) {
-        case .moved, .failed: hide()
-        case .noTarget: render()   // keep open; the footer already prompts to look at a screen
+        case .moved:
+            previousApp = nil   // keep the moved window focused (don't restore the old app)
+            hide()
+        case .failed:
+            hide()
+        case .noTarget:
+            render()            // keep open; the footer already prompts to look at a screen
         }
     }
 
