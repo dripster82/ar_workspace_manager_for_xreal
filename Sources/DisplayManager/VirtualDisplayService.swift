@@ -290,12 +290,33 @@ public final class VirtualDisplayService {
     }
 }
 
+/// A named HUD layout — a reusable set of widgets + stacks, selectable independently of the
+/// workspace (so the same HUD can be used across workspaces).
+public struct HUDProfile: Codable, Identifiable, Hashable, Sendable {
+    public var id: UUID
+    public var name: String
+    public var widgets: [HUDWidget]
+    public var stacks: [HUDStack]
+    public init(id: UUID = UUID(), name: String, widgets: [HUDWidget] = [], stacks: [HUDStack] = []) {
+        self.id = id; self.name = name; self.widgets = widgets; self.stacks = stacks
+    }
+}
+
 /// Persists workspaces as JSON in Application Support.
 public final class WorkspaceStore {
     public private(set) var workspaces: [Workspace]
     public var activeWorkspaceID: UUID?
+    public private(set) var hudProfiles: [HUDProfile]
+    public var activeHUDProfileID: UUID?
 
     private let url: URL
+
+    private struct Saved: Codable {
+        var workspaces: [Workspace]
+        var activeWorkspaceID: UUID?
+        var hudProfiles: [HUDProfile]?
+        var activeHUDProfileID: UUID?
+    }
 
     public init() {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -303,29 +324,41 @@ public final class WorkspaceStore {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         url = dir.appendingPathComponent("workspaces.json")
 
-        struct Saved: Codable {
-            var workspaces: [Workspace]
-            var activeWorkspaceID: UUID?
-        }
         if let data = try? Data(contentsOf: url),
            let saved = try? JSONDecoder().decode(Saved.self, from: data) {
             workspaces = saved.workspaces
             activeWorkspaceID = saved.activeWorkspaceID
+            if let profiles = saved.hudProfiles, !profiles.isEmpty {
+                hudProfiles = profiles
+                activeHUDProfileID = saved.activeHUDProfileID ?? profiles.first?.id
+            } else {
+                // Migrate: one HUD profile per workspace that has a HUD, named "<workspace> HUD".
+                var profiles: [HUDProfile] = []
+                var activeID: UUID?
+                for ws in workspaces where !(ws.widgets.isEmpty && ws.stacks.isEmpty) {
+                    let p = HUDProfile(name: "\(ws.name) HUD", widgets: ws.widgets, stacks: ws.stacks)
+                    profiles.append(p)
+                    if ws.id == activeWorkspaceID { activeID = p.id }
+                }
+                if profiles.isEmpty { profiles = [HUDProfile(name: "Default")] }
+                hudProfiles = profiles
+                activeHUDProfileID = activeID ?? profiles.first?.id
+            }
         } else {
             let defaultWS = Workspace(name: "Default", virtualScreens: [
                 VirtualScreenConfig(name: "Main", width: 2560, height: 1440, hiDPI: true),
             ])
             workspaces = [defaultWS]
             activeWorkspaceID = defaultWS.id
+            let p = HUDProfile(name: "Default")
+            hudProfiles = [p]
+            activeHUDProfileID = p.id
         }
     }
 
     public func save() {
-        struct Saved: Codable {
-            var workspaces: [Workspace]
-            var activeWorkspaceID: UUID?
-        }
-        let saved = Saved(workspaces: workspaces, activeWorkspaceID: activeWorkspaceID)
+        let saved = Saved(workspaces: workspaces, activeWorkspaceID: activeWorkspaceID,
+                          hudProfiles: hudProfiles, activeHUDProfileID: activeHUDProfileID)
         if let data = try? JSONEncoder().encode(saved) {
             try? data.write(to: url, options: .atomic)
         }
@@ -338,6 +371,17 @@ public final class WorkspaceStore {
             workspaces[i] = newValue
         }
     }
+
+    public var activeHUDProfile: HUDProfile? {
+        get { hudProfiles.first { $0.id == activeHUDProfileID } }
+        set {
+            guard let nv = newValue, let i = hudProfiles.firstIndex(where: { $0.id == nv.id }) else { return }
+            hudProfiles[i] = nv
+        }
+    }
+
+    public func appendHUDProfile(_ profile: HUDProfile) { hudProfiles.append(profile) }
+    public func removeHUDProfile(id: UUID) { hudProfiles.removeAll { $0.id == id } }
 
     public func append(_ workspace: Workspace) {
         workspaces.append(workspace)

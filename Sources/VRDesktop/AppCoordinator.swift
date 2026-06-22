@@ -1212,7 +1212,8 @@ final class AppCoordinator: ObservableObject {
         renderer.showLabels = labelsVisible
         renderer.setScreens(assembleScene(pairs))
         arActive = true
-        widgetManager?.setLayout(widgets: workspace.widgets, stacks: workspace.stacks)
+        let hud = workspaceStore.activeHUDProfile
+        widgetManager?.setLayout(widgets: hud?.widgets ?? [], stacks: hud?.stacks ?? [])
         widgetManager?.start()
         refreshBrightness() // sync the slider to the glasses' actual brightness as AR starts
         lastWindowSnapshot = CACurrentMediaTime() // defer the first periodic snapshot ~10s
@@ -2092,83 +2093,134 @@ final class AppCoordinator: ObservableObject {
 
     // MARK: HUD widgets
 
-    var widgets: [HUDWidget] { workspaceStore.activeWorkspace?.widgets ?? [] }
+    var widgets: [HUDWidget] { workspaceStore.activeHUDProfile?.widgets ?? [] }
 
     func addWidget(kind: WidgetKind) {
-        guard var ws = workspaceStore.activeWorkspace else { return }
+        guard var p = workspaceStore.activeHUDProfile else { return }
         // Fan new widgets out a little so they don't stack exactly.
-        let n = ws.widgets.count
-        ws.widgets.append(HUDWidget(kind: kind,
-                                    yawDegrees: -14 + Double(n % 3) * 14,
-                                    pitchDegrees: 8 - Double(n / 3) * 10))
-        commitWidgets(ws)
+        let n = p.widgets.count
+        p.widgets.append(HUDWidget(kind: kind,
+                                   yawDegrees: -14 + Double(n % 3) * 14,
+                                   pitchDegrees: 8 - Double(n / 3) * 10))
+        commitHUD(p)
     }
 
     func updateWidget(_ widget: HUDWidget) {
-        guard var ws = workspaceStore.activeWorkspace,
-              let i = ws.widgets.firstIndex(where: { $0.id == widget.id }) else { return }
-        ws.widgets[i] = widget
-        commitWidgets(ws)
+        guard var p = workspaceStore.activeHUDProfile,
+              let i = p.widgets.firstIndex(where: { $0.id == widget.id }) else { return }
+        p.widgets[i] = widget
+        commitHUD(p)
     }
 
     /// Drag-and-drop move: put `id` into `stackID` (nil = standalone), inserted just before
     /// `beforeID` in the widget array (which drives stack order), or at the end if `beforeID` is nil.
     func moveWidget(_ id: UUID, toStack stackID: UUID?, before beforeID: UUID?) {
-        guard var ws = workspaceStore.activeWorkspace,
-              let idx = ws.widgets.firstIndex(where: { $0.id == id }), id != beforeID else { return }
-        var w = ws.widgets.remove(at: idx)
+        guard var p = workspaceStore.activeHUDProfile,
+              let idx = p.widgets.firstIndex(where: { $0.id == id }), id != beforeID else { return }
+        var w = p.widgets.remove(at: idx)
         w.stackID = stackID
-        if let beforeID, let bi = ws.widgets.firstIndex(where: { $0.id == beforeID }) {
-            ws.widgets.insert(w, at: bi)
+        if let beforeID, let bi = p.widgets.firstIndex(where: { $0.id == beforeID }) {
+            p.widgets.insert(w, at: bi)
         } else {
-            ws.widgets.append(w)
+            p.widgets.append(w)
         }
-        commitWidgets(ws)
+        commitHUD(p)
     }
 
     func removeWidget(id: UUID) {
-        guard var ws = workspaceStore.activeWorkspace,
-              let i = ws.widgets.firstIndex(where: { $0.id == id }) else { return }
-        ws.widgets.remove(at: i)
-        commitWidgets(ws)
+        guard var p = workspaceStore.activeHUDProfile,
+              let i = p.widgets.firstIndex(where: { $0.id == id }) else { return }
+        p.widgets.remove(at: i)
+        commitHUD(p)
     }
 
     // MARK: HUD stacks
 
-    var stacks: [HUDStack] { workspaceStore.activeWorkspace?.stacks ?? [] }
+    var stacks: [HUDStack] { workspaceStore.activeHUDProfile?.stacks ?? [] }
 
     func addStack() {
-        guard var ws = workspaceStore.activeWorkspace else { return }
-        let n = ws.stacks.count
-        ws.stacks.append(HUDStack(name: "Stack \(n + 1)",
-                                  yawDegrees: -14 + Double(n % 3) * 16, pitchDegrees: 8))
-        commitWidgets(ws)
+        guard var p = workspaceStore.activeHUDProfile else { return }
+        let n = p.stacks.count
+        p.stacks.append(HUDStack(name: "Stack \(n + 1)",
+                                 yawDegrees: -14 + Double(n % 3) * 16, pitchDegrees: 8))
+        commitHUD(p)
     }
 
     func updateStack(_ stack: HUDStack) {
-        guard var ws = workspaceStore.activeWorkspace,
-              let i = ws.stacks.firstIndex(where: { $0.id == stack.id }) else { return }
-        ws.stacks[i] = stack
-        commitWidgets(ws)
+        guard var p = workspaceStore.activeHUDProfile,
+              let i = p.stacks.firstIndex(where: { $0.id == stack.id }) else { return }
+        p.stacks[i] = stack
+        commitHUD(p)
     }
 
     func removeStack(id: UUID) {
-        guard var ws = workspaceStore.activeWorkspace,
-              let i = ws.stacks.firstIndex(where: { $0.id == id }) else { return }
-        ws.stacks.remove(at: i)
+        guard var p = workspaceStore.activeHUDProfile,
+              let i = p.stacks.firstIndex(where: { $0.id == id }) else { return }
+        p.stacks.remove(at: i)
         // Release its members back to standalone.
-        for j in ws.widgets.indices where ws.widgets[j].stackID == id { ws.widgets[j].stackID = nil }
-        commitWidgets(ws)
+        for j in p.widgets.indices where p.widgets[j].stackID == id { p.widgets[j].stackID = nil }
+        commitHUD(p)
     }
 
     /// Hide / show the head-locked HUD widgets in the AR scene (⌃⌥I).
     func toggleHUD() { widgetManager?.toggleHidden() }
 
-    private func commitWidgets(_ ws: Workspace) {
-        workspaceStore.activeWorkspace = ws
+    // MARK: HUD profiles
+
+    var hudProfiles: [HUDProfile] { workspaceStore.hudProfiles }
+    var activeHUDProfileID: UUID? { workspaceStore.activeHUDProfileID }
+    var activeHUDProfileName: String { workspaceStore.activeHUDProfile?.name ?? "—" }
+
+    func selectHUDProfile(_ id: UUID?) {
+        workspaceStore.activeHUDProfileID = id
         workspaceStore.save()
         objectWillChange.send()
-        if arActive { widgetManager?.setLayout(widgets: ws.widgets, stacks: ws.stacks) }
+        pushActiveHUD()
+    }
+
+    func addHUDProfile(name: String = "") {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        let p = HUDProfile(name: trimmed.isEmpty ? "HUD \(hudProfiles.count + 1)" : trimmed)
+        workspaceStore.appendHUDProfile(p)
+        workspaceStore.activeHUDProfileID = p.id
+        workspaceStore.save()
+        objectWillChange.send()
+        pushActiveHUD()
+    }
+
+    func renameHUDProfile(_ name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, var p = workspaceStore.activeHUDProfile else { return }
+        p.name = trimmed
+        workspaceStore.activeHUDProfile = p
+        workspaceStore.save()
+        objectWillChange.send()
+    }
+
+    func deleteHUDProfile(id: UUID) {
+        workspaceStore.removeHUDProfile(id: id)
+        if workspaceStore.activeHUDProfileID == id {
+            workspaceStore.activeHUDProfileID = workspaceStore.hudProfiles.first?.id
+        }
+        if workspaceStore.hudProfiles.isEmpty { workspaceStore.appendHUDProfile(HUDProfile(name: "Default")) }
+        workspaceStore.activeHUDProfileID = workspaceStore.activeHUDProfileID ?? workspaceStore.hudProfiles.first?.id
+        workspaceStore.save()
+        objectWillChange.send()
+        pushActiveHUD()
+    }
+
+    /// Push the active HUD profile's widgets to the renderer (when AR is running).
+    private func pushActiveHUD() {
+        guard arActive else { return }
+        let p = workspaceStore.activeHUDProfile
+        widgetManager?.setLayout(widgets: p?.widgets ?? [], stacks: p?.stacks ?? [])
+    }
+
+    private func commitHUD(_ profile: HUDProfile) {
+        workspaceStore.activeHUDProfile = profile
+        workspaceStore.save()
+        objectWillChange.send()
+        if arActive { widgetManager?.setLayout(widgets: profile.widgets, stacks: profile.stacks) }
     }
 
     /// All editable screens in the active workspace, for the UI list and Layout map: virtual

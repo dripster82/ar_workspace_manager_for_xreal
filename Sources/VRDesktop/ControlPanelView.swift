@@ -119,11 +119,44 @@ struct ControlPanelView: View {
     // MARK: HUD Widgets — three-column (Available / Active / Settings)
 
     private var hudWidgetsPage: some View {
-        HStack(alignment: .top, spacing: 14) {
-            card("Available", "plus.app") { availableWidgetsColumn }.frame(width: 220)
-            card("Active", "square.stack.3d.up") { activeWidgetsColumn }.frame(width: 290)
-            card("Settings", "slider.horizontal.3") { hudDetailColumn }
-                .frame(maxWidth: .infinity, alignment: .topLeading)
+        VStack(alignment: .leading, spacing: 14) {
+            hudProfileBar
+            HStack(alignment: .top, spacing: 14) {
+                card("Available", "plus.app") { availableWidgetsColumn }.frame(width: 220)
+                card("Active", "square.stack.3d.up") { activeWidgetsColumn }.frame(width: 290)
+                card("Settings", "slider.horizontal.3") { hudDetailColumn }
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+        }
+    }
+
+    /// HUD Profile selector + create/rename/delete, above the three columns (like the workspace bar).
+    private var hudProfileBar: some View {
+        card("HUD Profile", "rectangle.on.rectangle.angled") {
+            HStack(spacing: 8) {
+                Picker("", selection: Binding(
+                    get: { coordinator.activeHUDProfileID },
+                    set: { coordinator.selectHUDProfile($0); selectedHUDID = nil }
+                )) {
+                    ForEach(coordinator.hudProfiles) { p in Text(p.name).tag(Optional(p.id)) }
+                }
+                .labelsHidden().frame(minWidth: 200)
+
+                TextField("Rename", text: Binding(
+                    get: { coordinator.activeHUDProfileName },
+                    set: { coordinator.renameHUDProfile($0) }
+                ))
+                .textFieldStyle(.roundedBorder).frame(width: 160)
+
+                Button { coordinator.addHUDProfile() } label: { Label("New", systemImage: "plus") }
+                Button(role: .destructive) {
+                    if let id = coordinator.activeHUDProfileID { coordinator.deleteHUDProfile(id: id) }
+                    selectedHUDID = nil
+                } label: { Label("Delete", systemImage: "trash") }
+                .disabled(coordinator.hudProfiles.count <= 1)
+                Spacer()
+            }
+            .controlSize(.small)
         }
     }
 
