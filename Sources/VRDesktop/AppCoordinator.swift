@@ -1570,6 +1570,17 @@ final class AppCoordinator: ObservableObject {
         let virtualIDs = Set(virtualDisplays.active.values.map { $0.displayID })
         let mirrorTargets = physicalMirrorTargetUUIDs()
         var changed = false
+
+        // Purge phantom physicalInAR entries that actually resolve to one of our virtual displays
+        // (named after a virtual screen, e.g. "Code Screen" — they pollute the OS arrangement).
+        for uuid in Array(ws.physicalInAR.keys) {
+            if let id = Self.resolvePhysicalDisplay(uuidString: uuid), virtualIDs.contains(id) {
+                ws.physicalInAR.removeValue(forKey: uuid)
+                changed = true
+                DebugLog.shared.log("layout: pruned phantom physical entry \(uuid.prefix(8)) (a virtual display)")
+            }
+        }
+
         for screen in NSScreen.screens {
             let id = Self.screenDisplayID(screen)
             guard id != glasses, id != 0, !virtualIDs.contains(id),
@@ -1609,10 +1620,15 @@ final class AppCoordinator: ObservableObject {
         }
         // Physical monitors anchor the layout whether or not they're shown in the glasses:
         // positioning-only (green) monitors still define where the virtual screens sit relative
-        // to the main display. Mirror targets are excluded (represented by their virtual screen).
+        // to the main display. Mirror targets are excluded (represented by their virtual screen),
+        // and so are any stale physicalInAR entries that actually resolve to one of our virtual
+        // displays — otherwise those phantoms widen the row and throw off the centring.
         let mirrorTargets = physicalMirrorTargetUUIDs()
+        let virtualIDs = Set(virtualDisplays.active.values.map { $0.displayID })
         for (uuid, cfg) in ws.physicalInAR where !mirrorTargets.contains(uuid) {
-            if let id = Self.resolvePhysicalDisplay(uuidString: uuid) { add(cfg, id) }
+            if let id = Self.resolvePhysicalDisplay(uuidString: uuid), !virtualIDs.contains(id) {
+                add(cfg, id)
+            }
         }
         let rows = Dictionary(grouping: entries) { Int($0.pitch.rounded()) }
         return rows.keys.sorted(by: >).map { key in
@@ -1660,7 +1676,17 @@ final class AppCoordinator: ObservableObject {
         }
         if CGCompleteDisplayConfiguration(ref, .forSession) == .success {
             lastArrangementSignature = signature
-            DebugLog.shared.log("arrange: applied OS layout for \(all.count) display(s)")
+            DebugLog.shared.log("arrange: applied OS layout for \(all.count) display(s); "
+                + "main=\(CGMainDisplayID()) rows=\(rows.count) anchor=(\(origin.x),\(origin.y))")
+            for (ri, row) in rows.enumerated() {
+                for d in row {
+                    let p = positions[d.id] ?? (0, 0)
+                    let x = p.x - origin.x, y = p.y - origin.y
+                    let name = cachedScreenName(displayID: d.id, screen: nil)
+                    DebugLog.shared.log(String(format: "  row%d '%@' id=%u x=%d..%d y=%d w=%d h=%d",
+                        ri, name, d.id, x, x + d.w, y, d.w, d.h))
+                }
+            }
         } else {
             CGCancelDisplayConfiguration(ref)
             DebugLog.shared.log("arrange: CGCompleteDisplayConfiguration failed")
@@ -1680,9 +1706,10 @@ final class AppCoordinator: ObservableObject {
                 out.append((id, "v:\(cfg.id.uuidString)"))
             }
         }
+        let virtualIDs = Set(virtualDisplays.active.values.map { $0.displayID })
         for (uuid, _) in ws.physicalInAR {
             if let id = Self.resolvePhysicalDisplay(uuidString: uuid),
-               id != effectiveGlassesID {
+               id != effectiveGlassesID, !virtualIDs.contains(id) {
                 out.append((id, "p:\(uuid)"))
             }
         }
