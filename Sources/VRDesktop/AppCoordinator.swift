@@ -202,6 +202,8 @@ final class AppCoordinator: ObservableObject {
     /// Last time we persisted the window layout while AR runs (every ~10s), so positions survive
     /// a quit/crash without an explicit Stop.
     private var lastWindowSnapshot: TimeInterval = 0
+    /// Last time the stall watchdog escalated to a full AR rebuild — debounced so it can't loop.
+    private var lastFullRecovery: TimeInterval = 0
     private var lastPermissionCheck: TimeInterval = 0
     /// Cache of display localized names keyed by display ID. NSScreen.localizedName does an
     /// IOKit/CoreDisplay lookup (tens of ms) — too expensive to call every 0.5s stats tick on
@@ -361,6 +363,18 @@ final class AppCoordinator: ObservableObject {
                 DebugLog.shared.log(String(format: "capture %u stalled %.1fs — restarting",
                                            capture.displayID, capture.secondsSinceLastSample))
                 capture.restartCapture()
+            }
+            // Escalation: a glasses-only display sleep/wake doesn't fire didWakeNotification, so the
+            // only recovery is the per-stream restart above — and if that can't recover (e.g. a
+            // virtual display came back stale, or the output window is on a dead display), the
+            // screens stay frozen. If anything is still badly stalled past the point where restarts
+            // should've worked, rebuild the whole AR session once (recreates virtual displays +
+            // output). Debounced so it can't loop while displays settle.
+            if let worst = captures.values.map(\.secondsSinceLastSample).max(), worst > 12,
+               now - lastFullRecovery > 30 {
+                lastFullRecovery = now
+                DebugLog.shared.log(String(format: "capture stalled %.0fs despite restarts — full AR recovery", worst))
+                restartARIfActive(preserveLayout: true)
             }
         }
 
