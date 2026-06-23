@@ -10,3 +10,6 @@ colorsync_debug*.log
 *.cer
 *.p12
 *.certSigningRequest
+
+# Internal docs/notes — kept local, never committed
+notes/

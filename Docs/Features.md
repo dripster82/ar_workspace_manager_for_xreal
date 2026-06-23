@@ -1,8 +1,7 @@
-# VR Desktop — Features
+# AR Workspace Manager for XREAL — Features
 
 A living inventory of what the app does, grouped by area. Generated from a full pass over the
-source; keep it in sync when adding features. See also [Roadmap.md](Roadmap.md) (forward plan),
-[PLAN.md](PLAN.md) (original build plan), and [Ideas.md](Ideas.md) (product vision).
+source; keep it in sync when adding features.
 
 ## Core AR / head tracking
 - **3DoF head tracking** from the XREAL IMU at ~1 kHz (`GlassesDriver/IMUService`)
@@ -46,7 +45,7 @@ source; keep it in sync when adding features. See also [Roadmap.md](Roadmap.md) 
 
 ## View modes & interaction
 - **Focus mode** (⌃⌥F) — fits the looked-at screen to the FOV (head-locked), moves the cursor onto
-  it and confines it there; toggles back. Render-only (no display reconfig). See [Plan-Focus.md](Plan-Focus.md)
+  it and confines it there; toggles back. Render-only (no display reconfig).
 - **Passthrough** (⌃⌥V) — hides only the screens (HUD stays) for a real-world view
 - **Gaze tracking** — "looking at" detection; gaze-point ray intersection per screen
 - **Cursor tools** — confine cursor off the AR display; **find-my-cursor** compass with homing ping
@@ -128,6 +127,6 @@ A dark/violet sidebar app (`PanelChrome` design system). Top bar = big **Start/S
 | ⌃⌥R | Record the glasses view → Movies |
 | ⌃⌥M | Mute / unmute the recording mic |
 | ⌃⌥H | Show / hide help |
-| ⌃⌥Q | Quit VR Desktop |
+| ⌃⌥Q | Quit AR Workspace Manager |
 | ⌃⌥ + brightness keys | Dim / brighten the glasses |
 | Esc | Dismiss an active meeting alarm |

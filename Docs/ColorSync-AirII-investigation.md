@@ -10,12 +10,12 @@ killing it only helps for a moment.
 
 ## TL;DR root cause
 
-**A macOS 26.5.1 bug, triggered by the Air 2 as a display — not VR Desktop.**
+**A macOS 26.5.1 bug, triggered by the Air 2 as a display — not AR Workspace Manager.**
 
 WindowServer loops in `WS::Displays::CAWSManager::restore_color_preferences()`, making
 **synchronous** `ColorSyncXPCAcquireDisplayInfo` calls to `colorsync.displayservices`, which
 services each with `ColorSyncProfileCreateDeviceProfile`. It never settles, so ColorSync stays
-pinned. The trigger is the **Air 2 glasses being connected as a display**; VR Desktop's virtual
+pinned. The trigger is the **Air 2 glasses being connected as a display**; AR Workspace Manager's virtual
 displays are *not* the cause.
 
 Likely reason it never settles: a custom **"Air 2 Calibrated"** colour profile is assigned to the
@@ -26,12 +26,12 @@ so the saved colour preference never matches the live display and WindowServer r
 
 | Scenario | `colorsync.displayservices` |
 |---|---|
-| Air 2 plugged in, **VR Desktop closed**, no virtual displays | **~74% sustained** |
+| Air 2 plugged in, **AR Workspace Manager closed**, no virtual displays | **~74% sustained** |
 | **Air 2 unplugged** | **0%** (drops within ~2 s) |
 | **AR running**, virtual displays present, **output to a monitor (no Air 2)** | **~0%**, only brief transient blips |
 
 The decisive ones: unplugging the Air 2 takes it to 0%, and running the full app with virtual
-displays but no glasses stays near 0%. So the virtual displays / VR Desktop are exonerated; the
+displays but no glasses stays near 0%. So the virtual displays / AR Workspace Manager are exonerated; the
 Air 2's presence is necessary and sufficient for the runaway.
 
 ## How it was diagnosed (repeatable method)
@@ -52,7 +52,7 @@ Air 2's presence is necessary and sufficient for the runaway.
 ### 1. WindowServer display-registry bloat — FIXED in-app
 `~/Library/Preferences/ByHost/com.apple.windowserver.displays.*.plist` had grown to **95k lines /
 517 configs / 371 distinct display UUIDs**. WindowServer saves a new arrangement for every distinct
-*combination* of display UUIDs and never prunes; VR Desktop's virtual displays previously took a
+*combination* of display UUIDs and never prunes; AR Workspace Manager's virtual displays previously took a
 unique identity per screen (serial = FNV hash of the screen's UUID), so the registry grew without
 bound and made every ColorSync request expensive.
 
@@ -65,7 +65,7 @@ delete only sticks if done immediately before the restart.*
 
 ### 2. Air 2 colour-preference loop — OS-side, no app fix
 The `restore_color_preferences` loop persists with the app closed and only the Air 2 connected, so it
-can't be fixed in VR Desktop. The private `CGVirtualDisplay` API exposes no colour fields, and
+can't be fixed in AR Workspace Manager. The private `CGVirtualDisplay` API exposes no colour fields, and
 assigning an sRGB profile via `ColorSyncDeviceSetCustomProfiles` had no effect (that attempt was
 reverted).
 
@@ -166,7 +166,7 @@ A reboot guarantees the daemons start from the clean folder if the kill alone do
 
 - **Don't re-calibrate the Air 2** (System Settings → Displays → Color). A custom profile against its
   unstable UUID is what re-arms the loop; leave it on the default profile.
-- If it creeps back, the three commands above clear it. It won't re-bloat from VR Desktop's virtual
+- If it creeps back, the three commands above clear it. It won't re-bloat from AR Workspace Manager's virtual
   displays (stable slot UUIDs now) — the source is the Air 2's churning identity + accumulated
   profiles.
 

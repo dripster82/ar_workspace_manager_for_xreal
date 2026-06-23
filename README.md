@@ -159,7 +159,10 @@ header of `Scripts/notarize.sh`).
 - `Sources/CXrealDriver` — vendored C: xrealair-sdk-macos (MIT), xioTechnologies Fusion (MIT),
   hidapi mac backend (BSD); `json-c` is statically linked from Homebrew (`vendor/lib/libjson-c.a`)
 
-`vendor/` clones are gitignored; refresh them with the URLs in [PLAN.md](Docs/PLAN.md) if needed.
+`vendor/` clones are gitignored; re-fetch them from
+[xrealair-sdk-macos](https://github.com/adidoes/xrealair-sdk-macos),
+[Fusion](https://github.com/xioTechnologies/Fusion), and
+[hidapi](https://github.com/libusb/hidapi) if needed.
 
 ## License
 
