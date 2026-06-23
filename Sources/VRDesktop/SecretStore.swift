@@ -5,7 +5,9 @@ import Security
 /// One item means the user is prompted at most once (not once per service) when an unsigned dev
 /// build accesses the keychain. Legacy per-service items are migrated in on first use.
 enum SecretStore {
-    private static let service = "VRDesktop"
+    private static let service = "uk.co.ketelle.ar.workspace.manager"
+    /// The pre-rebrand service name; its blob is migrated into `service` on first load.
+    private static let legacyService = "VRDesktop"
     private static let account = "secrets"
     private static var cache: [String: String]?
 
@@ -20,16 +22,25 @@ enum SecretStore {
 
     private static func load() -> [String: String] {
         if let cache { return cache }
-        var dict = readBlob() ?? [:]
+        var dict = readBlob(service) ?? [:]
         if dict.isEmpty {
-            migrateLegacy(into: &dict)
+            // Rebrand migration: adopt the blob from the old service name, then delete it. Falls back
+            // to the even older per-service items if no unified blob exists.
+            if let old = readBlob(legacyService) {
+                dict = old
+                SecItemDelete([kSecClass as String: kSecClassGenericPassword,
+                               kSecAttrService as String: legacyService,
+                               kSecAttrAccount as String: account] as CFDictionary)
+            } else {
+                migrateLegacy(into: &dict)
+            }
             if !dict.isEmpty { persist(dict) }
         }
         cache = dict
         return dict
     }
 
-    private static func readBlob() -> [String: String]? {
+    private static func readBlob(_ service: String) -> [String: String]? {
         let q: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service, kSecAttrAccount as String: account,

@@ -83,7 +83,7 @@ struct SidebarView: View {
                 Image(systemName: "eyeglasses")
                     .font(.title3).foregroundStyle(PanelTheme.accent)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Spatial Workspace").font(.subheadline.weight(.semibold))
+                    Text("AR Workspace Manager").font(.subheadline.weight(.semibold))
                     Text("v2.0").font(.caption2).foregroundStyle(.secondary)
                 }
             }

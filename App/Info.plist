@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleExecutable</key>
-    <string>VRDesktop</string>
+    <string>AR Workspace Manager</string>
     <key>CFBundleIdentifier</key>
     <string>uk.co.ketelle.ar.workspace.manager</string>
     <key>CFBundleName</key>
     <string>AR Workspace Manager</string>
     <key>CFBundleDisplayName</key>
-    <string>AR Workspace Manager for XRE</string>
+    <string>AR Workspace Manager for XREAL</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>CFBundlePackageType</key>
@@ -23,9 +23,9 @@
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSScreenCaptureUsageDescription</key>
-    <string>VR Desktop captures your displays so they can be shown inside your AR glasses.</string>
+    <string>AR Workspace Manager captures your displays so they can be shown inside your AR glasses.</string>
     <key>NSMicrophoneUsageDescription</key>
-    <string>VR Desktop records your microphone when you record the glasses view (you can mute it with ⌃⌥M).</string>
+    <string>AR Workspace Manager records your microphone when you record the glasses view (you can mute it with ⌃⌥M).</string>
     <key>NSHumanReadableCopyright</key>
     <string>Personal use. Includes MIT-licensed code from nrealAirLinuxDriver/xrealair-sdk-macos, xioTechnologies Fusion, and BSD-licensed hidapi.</string>
 </dict>

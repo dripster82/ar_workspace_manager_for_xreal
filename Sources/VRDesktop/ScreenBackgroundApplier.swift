@@ -12,7 +12,7 @@ enum ScreenBackgroundApplier {
     /// the same file each time AR starts.
     private static let cacheDir: URL = {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("VRDesktop/Backgrounds", isDirectory: true)
+            .appendingPathComponent("AR Workspace Manager/Backgrounds", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }()
@@ -57,7 +57,7 @@ enum ScreenBackgroundApplier {
     /// (moving/deleting the original doesn't break the screen).
     private static let imageDir: URL = {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("VRDesktop/Backgrounds/Images", isDirectory: true)
+            .appendingPathComponent("AR Workspace Manager/Backgrounds/Images", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }()

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Hardened-runtime entitlements for the main app (NOT the helper). Under the hardened runtime,
+         microphone access is blocked — and the TCC prompt suppressed — unless this is present.
+         Screen recording (ScreenCaptureKit) and Accessibility are TCC-only and need no entitlement.
+         json-c is statically linked, so library validation needs no exception. -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+</dict>
+</plist>

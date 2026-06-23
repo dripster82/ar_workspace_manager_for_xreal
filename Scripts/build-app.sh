@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Build VRDesktop.app from the SwiftPM product.
+# Build "AR Workspace Manager.app" from the SwiftPM product.
 # Usage: Scripts/build-app.sh [debug|release]
 set -euo pipefail
 
@@ -35,11 +35,13 @@ swift build -c "$CONFIG"
 BINDIR="$(swift build -c "$CONFIG" --show-bin-path)"
 BIN="$BINDIR/VRDesktop"
 HELPER_BIN="$BINDIR/VRDesktopHelper"
-APP="$ROOT/build/VRDesktop.app"
+APP="$ROOT/build/AR Workspace Manager.app"
 
-rm -rf "$APP"
+rm -rf "$APP" "$ROOT/build/VRDesktop.app"   # also clear the old-named bundle
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Library/LaunchDaemons"
-cp "$BIN" "$APP/Contents/MacOS/VRDesktop"
+# Bundle executable is the user-facing name (matches CFBundleExecutable in Info.plist); the SwiftPM
+# product is still built as "VRDesktop" internally.
+cp "$BIN" "$APP/Contents/MacOS/AR Workspace Manager"
 cp "$ROOT/App/Info.plist" "$APP/Contents/Info.plist"
 [[ -f "$ROOT/App/AppIcon.icns" ]] && cp "$ROOT/App/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 
@@ -70,15 +72,20 @@ if [[ "$IDENTITY" == *"Developer ID Application"* ]]; then
   RUNTIME_OPTS=(--options runtime --timestamp)
 fi
 
+# App entitlements (microphone under the hardened runtime). Applied to the APP only — the helper
+# stays minimal (no device entitlements). Without this the mic prompt never appears under hardened
+# runtime and the app won't show in System Settings > Microphone.
+ENTITLEMENTS="$ROOT/App/VRDesktop.entitlements"
+
 if [[ -n "${IDENTITY:-}" ]]; then
   codesign --force "${RUNTIME_OPTS[@]}" --sign "$IDENTITY" \
     --identifier uk.co.ketelle.ar.workspace.manager.helper "$APP/Contents/MacOS/VRDesktopHelper"
-  codesign --force "${RUNTIME_OPTS[@]}" --sign "$IDENTITY" \
+  codesign --force "${RUNTIME_OPTS[@]}" --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" \
     --identifier uk.co.ketelle.ar.workspace.manager "$APP"
   echo "Signed with: $IDENTITY"
 else
   codesign --force --sign - --identifier uk.co.ketelle.ar.workspace.manager.helper "$APP/Contents/MacOS/VRDesktopHelper"
-  codesign --force --sign - --identifier uk.co.ketelle.ar.workspace.manager "$APP"
+  codesign --force --entitlements "$ENTITLEMENTS" --sign - --identifier uk.co.ketelle.ar.workspace.manager "$APP"
   echo "Ad-hoc signed — run Scripts/make-signing-cert.sh once so permissions persist across builds"
 fi
 

@@ -2,6 +2,19 @@ import AppKit
 import Carbon.HIToolbox
 import SwiftUI
 
+/// One-time rebrand migration: move the app's data folder from the old "VRDesktop" name to
+/// "AR Workspace Manager" so saved workspaces, window layouts, and backgrounds carry over. Runs
+/// before any store reads its path. Keychain secrets migrate separately in SecretStore.
+private func migrateAppSupportFolderIfNeeded() {
+    let fm = FileManager.default
+    guard let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return }
+    let old = base.appendingPathComponent("VRDesktop", isDirectory: true)
+    let new = base.appendingPathComponent("AR Workspace Manager", isDirectory: true)
+    guard fm.fileExists(atPath: old.path), !fm.fileExists(atPath: new.path) else { return }
+    try? fm.moveItem(at: old, to: new)
+}
+migrateAppSupportFolderIfNeeded()
+
 // Programmatic app entry (no @main attribute conflicts with SwiftPM main.swift).
 let app = NSApplication.shared
 let delegate = AppDelegate()
@@ -40,7 +53,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             contentRect: NSRect(x: 0, y: 0, width: 1040, height: 720),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered, defer: false)
-        window.title = "VR Desktop"
+        window.title = "AR Workspace Manager"
         window.isReleasedWhenClosed = false // keep it so the menu bar can reopen it
         window.contentView = NSHostingView(rootView: ControlPanelView(coordinator: coordinator))
         window.center()
@@ -61,9 +74,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let appItem = NSMenuItem()
         mainMenu.addItem(appItem)
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "Hide VR Desktop", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        appMenu.addItem(withTitle: "Hide AR Workspace Manager", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "Quit VR Desktop", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appMenu.addItem(withTitle: "Quit AR Workspace Manager", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
 
         let editItem = NSMenuItem()
@@ -208,7 +221,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func setupMenuBar() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.image = NSImage(systemSymbolName: "eyeglasses",
-                                           accessibilityDescription: "VR Desktop")
+                                           accessibilityDescription: "AR Workspace Manager")
         let menu = NSMenu()
         menu.delegate = self
         statusItem.menu = menu
@@ -229,7 +242,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(statusEntry)
         menu.addItem(.separator())
 
-        menu.addItem(withTitle: "Open VR Desktop", action: #selector(openWindow), keyEquivalent: "")
+        menu.addItem(withTitle: "Open AR Workspace Manager", action: #selector(openWindow), keyEquivalent: "")
             .target = self
         let arItem = NSMenuItem(title: coordinator.arActive ? "Stop AR" : "Start AR",
                                 action: #selector(toggleAR), keyEquivalent: "")
@@ -268,7 +281,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(launch)
 
         menu.addItem(.separator())
-        let quit = NSMenuItem(title: "Quit VR Desktop", action: #selector(NSApplication.terminate(_:)),
+        let quit = NSMenuItem(title: "Quit AR Workspace Manager", action: #selector(NSApplication.terminate(_:)),
                               keyEquivalent: "q")
         menu.addItem(quit)
     }

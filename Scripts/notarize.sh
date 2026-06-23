@@ -12,7 +12,7 @@ set -euo pipefail
 
 PROFILE="${1:-notary-arwm}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-APP="$ROOT/build/VRDesktop.app"
+APP="$ROOT/build/AR Workspace Manager.app"
 ZIP="$(mktemp -d)/AR-Workspace-Manager.zip"
 
 [[ -d "$APP" ]] || { echo "No app at $APP — build a release first (see header)."; exit 1; }

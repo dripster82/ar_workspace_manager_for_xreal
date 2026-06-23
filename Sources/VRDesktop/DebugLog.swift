@@ -18,7 +18,7 @@ final class DebugLog: @unchecked Sendable {
 
     private init() {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("VRDesktop", isDirectory: true)
+            .appendingPathComponent("AR Workspace Manager", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         fileURL = dir.appendingPathComponent("debug.log")
     }

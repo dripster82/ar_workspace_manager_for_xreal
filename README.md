@@ -1,19 +1,24 @@
-# VR Desktop
+# AR Workspace Manager for XREAL
 
-Personal macOS app that renders head-tracked virtual desktops into XREAL Air 2 glasses.
+macOS app that renders head-tracked virtual desktops into XREAL Air 2 glasses.
 Feature list: see [Docs/Features.md](Docs/Features.md). Plan and milestones: see [PLAN.md](PLAN.md).
 
 ## Build & run
 
 ```sh
-Scripts/build-app.sh          # builds + signs build/VRDesktop.app
-open build/VRDesktop.app
+Scripts/build-app.sh          # builds + signs "build/AR Workspace Manager.app"
+open "build/AR Workspace Manager.app"
 ```
 
 Requires macOS 14+, Apple Silicon. First AR start will prompt for **Screen Recording**
-permission (System Settings → Privacy & Security). With only Command Line Tools and
-ad-hoc signing, macOS may re-prompt after rebuilds; installing Xcode with a free
-Apple Development certificate makes the grant stick.
+permission (System Settings → Privacy & Security); recording the glasses view also prompts
+for **Microphone**. With only Command Line Tools and ad-hoc signing, macOS may re-prompt
+after rebuilds; an Apple Development certificate makes the grant stick.
+
+## Distribution
+
+`Scripts/release.sh` produces a Developer-ID-signed, notarized, stapled build (needs a
+Developer ID Application cert + a stored `notarytool` profile — see `Scripts/notarize.sh`).
 
 ## Staged testing
 
@@ -38,7 +43,9 @@ Apple Development certificate makes the grant stick.
 - `Sources/Compositor` — CAMetalLayer fullscreen output + CAMetalDisplayLink renderer,
   flat/curved screen meshes.
 - `Sources/CPrivateDisplay` / `Sources/DisplayManager` — CGVirtualDisplay private API,
-  workspaces, persistence (`~/Library/Application Support/VRDesktop/workspaces.json`).
+  workspaces, persistence (`~/Library/Application Support/AR Workspace Manager/workspaces.json`).
 - `Sources/VRDesktop` — SwiftUI control panel + app lifecycle.
+- `Sources/PrivilegedHelperShared` / `Sources/VRDesktopHelper` / `Sources/CXPCAuditToken` —
+  signed SMAppService privileged helper that prunes orphaned ColorSync display profiles.
 
 `vendor/` clones are gitignored; refresh them with the URLs in PLAN.md if needed.

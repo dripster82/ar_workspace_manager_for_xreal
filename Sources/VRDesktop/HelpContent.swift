@@ -40,7 +40,7 @@ enum HelpContent {
         ]),
         Section(title: "App", column: 1, shortcuts: [
             Shortcut(keys: "⌃⌥H", action: "Show / hide this help"),
-            Shortcut(keys: "⌃⌥Q", action: "Quit VR Desktop"),
+            Shortcut(keys: "⌃⌥Q", action: "Quit AR Workspace Manager"),
         ]),
     ]
 
@@ -64,7 +64,7 @@ enum HelpContent {
 struct HelpView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Label("VR Desktop — Shortcuts", systemImage: "keyboard")
+            Label("AR Workspace Manager — Shortcuts", systemImage: "keyboard")
                 .font(.headline)
             HStack(alignment: .top, spacing: 28) {
                 column(0)

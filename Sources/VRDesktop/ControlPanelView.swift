@@ -119,7 +119,7 @@ struct ControlPanelView: View {
             case .about:
                 card("About", "info.circle") {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("Spatial Workspace").font(.headline)
+                        Text("AR Workspace Manager for XREAL").font(.headline)
                         Text("Build \(BuildInfo.commit) · \(BuildInfo.date)")
                             .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                     }
@@ -133,23 +133,57 @@ struct ControlPanelView: View {
     private var workspacePage: some View {
         VStack(alignment: .leading, spacing: 14) {
             workspaceBar
-            card("Layout", "square.on.square.dashed") {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 8) {
-                        Button { addDisplay(width: 2560, height: 1440) } label: {
-                            Label("Add display (16:9)", systemImage: "plus.rectangle")
+            // Layout map (narrow) on the left, the selected display's detail to its right.
+            HStack(alignment: .top, spacing: 14) {
+                card("Layout", "square.on.square.dashed") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 8) {
+                            addDisplayMenu
+                            Spacer()
                         }
-                        Button { addDisplay(width: 3840, height: 1080) } label: {
-                            Label("Add ultrawide", systemImage: "plus.rectangle.on.rectangle")
-                        }
-                        Spacer()
+                        .controlSize(.small)
+                        PlacementMapView(coordinator: coordinator, selection: $selectedDisplayID)
                     }
-                    .controlSize(.small)
-                    PlacementMapView(coordinator: coordinator, selection: $selectedDisplayID)
                 }
+                .frame(width: 400)
+                selectedDisplayDetail
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
             }
-            selectedDisplayDetail
         }
+    }
+
+    /// "Add Display" → pops a resolution picker; the first item is the main physical display's
+    /// resolution (falling back to 1920×1080) as the default.
+    private var addDisplayMenu: some View {
+        Menu {
+            let (dw, dh) = mainDisplayResolution()
+            Button("Default — \(dw)×\(dh)") { addDisplay(width: dw, height: dh) }
+            Divider()
+            Section("16:9 / standard") {
+                Button("1920×1080") { addDisplay(width: 1920, height: 1080) }
+                Button("2560×1440") { addDisplay(width: 2560, height: 1440) }
+                Button("3840×2160") { addDisplay(width: 3840, height: 2160) }
+            }
+            Section("Ultrawide") {
+                Button("2560×1080") { addDisplay(width: 2560, height: 1080) }
+                Button("3440×1440") { addDisplay(width: 3440, height: 1440) }
+                Button("3840×1080") { addDisplay(width: 3840, height: 1080) }
+                Button("5120×1080") { addDisplay(width: 5120, height: 1080) }
+                Button("5120×1440") { addDisplay(width: 5120, height: 1440) }
+            }
+        } label: {
+            Label("Add Display", systemImage: "plus.rectangle")
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+    }
+
+    /// Main physical display's current resolution, or 1920×1080 if unavailable — the default for a
+    /// newly added virtual display.
+    private func mainDisplayResolution() -> (Int, Int) {
+        let id = CGMainDisplayID()
+        let w = Int(CGDisplayPixelsWide(id)), h = Int(CGDisplayPixelsHigh(id))
+        return (w > 0 && h > 0) ? (w, h) : (1920, 1080)
     }
 
     private var workspaceBar: some View {
@@ -1411,6 +1445,7 @@ struct ScreenRow: View {
                             Button("1920×1080 (16:9)") { setResolution(width: 1920, height: 1080) }
                             Button("2560×1080 (21:9)") { setResolution(width: 2560, height: 1080) }
                             Button("3840×1080 (32:9)") { setResolution(width: 3840, height: 1080) }
+                            Button("5120×1080 (43:9)") { setResolution(width: 5120, height: 1080) }
                         }
                         Section("1440p") {
                             Button("2560×1440") { setResolution(width: 2560, height: 1440) }
@@ -1595,7 +1630,11 @@ struct PlacementMapView: View {
                                       lookedAt: coordinator.lookedAtScreenID == cfg.id,
                                       selected: selection?.wrappedValue == cfg.id,
                                       onSelect: { selection?.wrappedValue = cfg.id },
-                                      onChange: { coordinator.updateScreen($0) })
+                                      onChange: { coordinator.updateScreen($0) },
+                                      onDelete: coordinator.isPhysicalScreen(cfg.id) ? nil : {
+                                          if selection?.wrappedValue == cfg.id { selection?.wrappedValue = nil }
+                                          coordinator.removeScreen(id: cfg.id)
+                                      })
                         }
                         // Head-locked HUD widgets/stacks live in the field of view → floating only.
                         if placement == .floating {
@@ -1637,13 +1676,15 @@ private struct ScreenBox: View {
     var selected: Bool = false
     var onSelect: () -> Void = {}
     var onChange: (VirtualScreenConfig) -> Void
+    /// Right-click delete; nil for physical monitors (which can't be removed).
+    var onDelete: (() -> Void)? = nil
 
     @State private var cfg: VirtualScreenConfig
 
     init(initial: VirtualScreenConfig, area: CGSize, coordinateSpace: String, accent: Color,
          pxPerDeg: CGFloat, yawRange: Double, pitchRange: Double,
          lookedAt: Bool, selected: Bool = false, onSelect: @escaping () -> Void = {},
-         onChange: @escaping (VirtualScreenConfig) -> Void) {
+         onChange: @escaping (VirtualScreenConfig) -> Void, onDelete: (() -> Void)? = nil) {
         self.initial = initial
         self.area = area
         self.coordinateSpace = coordinateSpace
@@ -1655,6 +1696,7 @@ private struct ScreenBox: View {
         self.selected = selected
         self.onSelect = onSelect
         self.onChange = onChange
+        self.onDelete = onDelete
         _cfg = State(initialValue: initial)
     }
 
@@ -1705,6 +1747,11 @@ private struct ScreenBox: View {
                 DragGesture(coordinateSpace: .named(coordinateSpace))
                     .onChanged { onSelect(); apply(location: $0.location) }
             )
+            .contextMenu {
+                if let onDelete {
+                    Button("Delete Display", systemImage: "trash", role: .destructive) { onDelete() }
+                }
+            }
             .onChange(of: initial) { newValue in if newValue != cfg { cfg = newValue } }
     }
 }
