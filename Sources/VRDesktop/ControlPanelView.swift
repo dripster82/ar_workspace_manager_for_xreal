@@ -118,10 +118,27 @@ struct ControlPanelView: View {
             case .shortcuts: card("Shortcuts", "keyboard") { HelpView() }
             case .about:
                 card("About", "info.circle") {
-                    VStack(alignment: .leading, spacing: 6) {
+                    VStack(alignment: .leading, spacing: 8) {
                         Text("AR Workspace Manager for XREAL").font(.headline)
-                        Text("Build \(BuildInfo.commit) · \(BuildInfo.date)")
+                        Text("Version \(coordinator.appVersion) · Build \(BuildInfo.commit) · \(BuildInfo.date)")
                             .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                        HStack(spacing: 10) {
+                            Button { coordinator.checkForUpdates() } label: {
+                                if coordinator.checkingForUpdate {
+                                    ProgressView().controlSize(.small)
+                                } else {
+                                    Text("Check for Updates")
+                                }
+                            }
+                            .disabled(coordinator.checkingForUpdate)
+                            if let v = coordinator.updateAvailableVersion, let url = coordinator.updateURL {
+                                Link("Download v\(v)", destination: url)
+                                    .buttonStyle(.borderedProminent)
+                            } else if let msg = coordinator.updateCheckMessage {
+                                Text(msg).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        .controlSize(.small)
                     }
                 }
             }

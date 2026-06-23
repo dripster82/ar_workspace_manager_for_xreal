@@ -36,6 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let icon = NSImage(named: "AppIcon") { NSApp.applicationIconImage = icon }
         coordinator = AppCoordinator()
+        coordinator.checkForUpdates()   // silent on launch; surfaces in the menu + About page
         helpOverlay = HelpOverlayController(coordinator: coordinator)
         cursorInfoOverlay = CursorInfoOverlayController(coordinator: coordinator)
         windowPicker = WindowPickerController(coordinator: coordinator)
@@ -122,6 +123,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var passthroughHotKeyRef: EventHotKeyRef?
     private var labelsHotKeyRef: EventHotKeyRef?
     private var windowPickerHotKeyRef: EventHotKeyRef?
+    private var recalibrateHotKeyRef: EventHotKeyRef?
     private static let recenterHotKeyID: UInt32 = 1
     private static let stopARHotKeyID: UInt32 = 2
     private static let helpHotKeyID: UInt32 = 3
@@ -139,6 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private static let passthroughHotKeyID: UInt32 = 15
     private static let labelsHotKeyID: UInt32 = 16
     private static let windowPickerHotKeyID: UInt32 = 17
+    private static let recalibrateHotKeyID: UInt32 = 18
 
     private func registerGlobalRecenterHotKey() {
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
@@ -170,6 +173,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 case AppDelegate.passthroughHotKeyID: delegate.coordinator.togglePassthrough()
                 case AppDelegate.labelsHotKeyID: delegate.coordinator.toggleLabels()
                 case AppDelegate.windowPickerHotKeyID: delegate.windowPicker.toggle()
+                case AppDelegate.recalibrateHotKeyID: delegate.coordinator.calibrateDrift()
                 case AppDelegate.quitHotKeyID: NSApp.terminate(nil)
                 default: break
                 }
@@ -202,6 +206,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         register(kVK_ANSI_V, AppDelegate.passthroughHotKeyID, &passthroughHotKeyRef)
         register(kVK_ANSI_L, AppDelegate.labelsHotKeyID, &labelsHotKeyRef)
         register(kVK_ANSI_W, AppDelegate.windowPickerHotKeyID, &windowPickerHotKeyRef)
+        register(kVK_ANSI_B, AppDelegate.recalibrateHotKeyID, &recalibrateHotKeyRef)
     }
 
     /// Esc-to-dismiss: a plain Escape hotkey registered only while an alarm is showing (so it
@@ -224,12 +229,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                                            accessibilityDescription: "AR Workspace Manager")
         let menu = NSMenu()
         menu.delegate = self
+        menu.autoenablesItems = false   // we drive isEnabled ourselves (AR-only items)
         statusItem.menu = menu
     }
 
-    // Rebuild the menu each time it opens so labels/checkmarks reflect current state.
+    // Rebuild the menu each time it opens so labels/state reflect the current session.
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+        let ar = coordinator.arActive
+
+        // Adds an item; `enabled` gates AR-only actions, `state` shows a checkmark.
+        @discardableResult
+        func add(_ title: String, _ sel: Selector?, enabled: Bool = true,
+                 state: NSControl.StateValue = .off) -> NSMenuItem {
+            let it = NSMenuItem(title: title, action: sel, keyEquivalent: "")
+            it.target = sel == nil ? nil : self
+            it.isEnabled = enabled
+            it.state = state
+            menu.addItem(it)
+            return it
+        }
 
         let status: String
         switch coordinator.glassesState {
@@ -237,53 +256,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case .disconnected: status = "Glasses: not connected"
         case .error(let e): status = "Glasses: \(e)"
         }
-        let statusEntry = NSMenuItem(title: status, action: nil, keyEquivalent: "")
-        statusEntry.isEnabled = false
-        menu.addItem(statusEntry)
+        add(status, nil, enabled: false)
         menu.addItem(.separator())
 
-        menu.addItem(withTitle: "Open AR Workspace Manager", action: #selector(openWindow), keyEquivalent: "")
-            .target = self
-        let arItem = NSMenuItem(title: coordinator.arActive ? "Stop AR" : "Start AR",
-                                action: #selector(toggleAR), keyEquivalent: "")
-        arItem.target = self
-        menu.addItem(arItem)
-        let recenter = NSMenuItem(title: "Recenter", action: #selector(menuRecenter), keyEquivalent: "")
-        recenter.target = self
-        menu.addItem(recenter)
-        let sbs = NSMenuItem(title: coordinator.stereoEnabled ? "Disable Stereo (SBS)" : "Enable Stereo (SBS)",
-                             action: #selector(toggleSBS), keyEquivalent: "")
-        sbs.target = self
-        sbs.isEnabled = coordinator.arActive
-        menu.addItem(sbs)
-
-        let cursorInfo = NSMenuItem(title: "Where's My Cursor? (⌃⌥C)",
-                                    action: #selector(toggleCursorInfo), keyEquivalent: "")
-        cursorInfo.target = self
-        menu.addItem(cursorInfo)
-
-        let cursorToGaze = NSMenuItem(title: "Move Cursor to Where I'm Looking (⌃⌥X)",
-                                      action: #selector(moveCursorToGaze), keyEquivalent: "")
-        cursorToGaze.target = self
-        cursorToGaze.isEnabled = coordinator.arActive
-        menu.addItem(cursorToGaze)
-
-        let help = NSMenuItem(title: "Keyboard Shortcuts (⌃⌥H)", action: #selector(toggleHelp),
-                              keyEquivalent: "")
-        help.target = self
-        menu.addItem(help)
-
+        add("Open AR Workspace Manager", #selector(openWindow))
+        if let v = coordinator.updateAvailableVersion, coordinator.updateURL != nil {
+            add("⬇ Update available: v\(v) — Download…", #selector(openUpdatePage))
+        }
         menu.addItem(.separator())
-        let launch = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin),
-                                keyEquivalent: "")
-        launch.target = self
-        launch.state = coordinator.launchAtLogin ? .on : .off
-        menu.addItem(launch)
 
+        // AR & view
+        add(ar ? "Stop AR  (⌃⌥S)" : "Start AR  (⌃⌥S)", #selector(toggleAR))
+        add("Recenter  (⌃⌥Space)", #selector(menuRecenter))
+        add("Recalibrate drift  (⌃⌥B)", #selector(menuRecalibrate))
+        add("Focus looked-at screen  (⌃⌥F)", #selector(menuToggleFocus), enabled: ar)
+        add("Passthrough  (⌃⌥V)", #selector(menuTogglePassthrough), enabled: ar)
+        add(coordinator.stereoEnabled ? "Disable Stereo (SBS)  (⌃⌥D)" : "Enable Stereo (SBS)  (⌃⌥D)",
+            #selector(toggleSBS), enabled: ar)
         menu.addItem(.separator())
-        let quit = NSMenuItem(title: "Quit AR Workspace Manager", action: #selector(NSApplication.terminate(_:)),
-                              keyEquivalent: "q")
-        menu.addItem(quit)
+
+        // HUD
+        add("Toggle HUD Widgets  (⌃⌥I)", #selector(menuToggleHUD), enabled: ar)
+        add("Toggle Screen Labels  (⌃⌥L)", #selector(menuToggleLabels), enabled: ar)
+        menu.addItem(.separator())
+
+        // Cursor & windows
+        add("Where's My Cursor?  (⌃⌥C)", #selector(toggleCursorInfo))
+        add("Move Cursor to Gaze  (⌃⌥X)", #selector(moveCursorToGaze), enabled: ar)
+        add("Move Window to Gaze  (⌃⌥W)", #selector(menuWindowPicker), enabled: ar)
+        menu.addItem(.separator())
+
+        // Capture
+        add("Screenshot Glasses View  (⌃⌥P)", #selector(menuScreenshot), enabled: ar)
+        add("Record Glasses View  (⌃⌥R)", #selector(menuRecord), enabled: ar)
+        add("Mute / Unmute Mic  (⌃⌥M)", #selector(menuMicMute), enabled: ar)
+        menu.addItem(.separator())
+
+        add("Keyboard Shortcuts  (⌃⌥H)", #selector(toggleHelp))
+        add("Launch at Login", #selector(toggleLaunchAtLogin),
+            state: coordinator.launchAtLogin ? .on : .off)
+        menu.addItem(.separator())
+        add("Quit AR Workspace Manager  (⌃⌥Q)", #selector(NSApplication.terminate(_:))).target = nil
     }
 
     @MainActor @objc private func openWindow() {
@@ -324,6 +337,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @MainActor @objc private func toggleSBS() { coordinator.setStereo(!coordinator.stereoEnabled) }
 
     @MainActor @objc private func toggleLaunchAtLogin() { coordinator.launchAtLogin.toggle() }
+
+    @MainActor @objc private func menuRecalibrate() { coordinator.calibrateDrift() }
+    @MainActor @objc private func menuToggleFocus() { coordinator.toggleFocus() }
+    @MainActor @objc private func menuTogglePassthrough() { coordinator.togglePassthrough() }
+    @MainActor @objc private func menuToggleHUD() { coordinator.toggleHUD() }
+    @MainActor @objc private func menuToggleLabels() { coordinator.toggleLabels() }
+    @MainActor @objc private func menuWindowPicker() { windowPicker.toggle() }
+    @MainActor @objc private func menuScreenshot() { coordinator.takeGlassesScreenshot() }
+    @MainActor @objc private func menuRecord() { coordinator.toggleRecording() }
+    @MainActor @objc private func menuMicMute() { coordinator.toggleMicMute() }
+    @MainActor @objc private func openUpdatePage() {
+        if let url = coordinator.updateURL { NSWorkspace.shared.open(url) }
+    }
 
     func applicationWillTerminate(_ notification: Notification) {
         coordinator.stopAR()

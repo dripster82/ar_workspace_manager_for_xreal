@@ -469,6 +469,71 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
+    // MARK: Update check (GitHub releases)
+
+    /// Set when a newer release than this build is published on GitHub.
+    @Published var updateAvailableVersion: String?
+    @Published var updateURL: URL?
+    @Published var checkingForUpdate = false
+    /// Human-readable result of the last check (shown on the About page).
+    @Published var updateCheckMessage: String?
+
+    private static let updateRepo = "dripster82/ar_workspace_manager_for_xreal"
+
+    /// This app's marketing version (CFBundleShortVersionString), e.g. "0.1.0".
+    var appVersion: String {
+        (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0.0.0"
+    }
+
+    /// Query the repo's latest published release and flag if it's newer than this build. Unauthenticated
+    /// (public endpoint, 60 req/hr) — runs silently on launch and on demand from the About page.
+    func checkForUpdates() {
+        guard !checkingForUpdate else { return }
+        checkingForUpdate = true
+        updateCheckMessage = nil
+        Task { @MainActor in
+            defer { checkingForUpdate = false }
+            guard let url = URL(string: "https://api.github.com/repos/\(Self.updateRepo)/releases/latest") else { return }
+            var req = URLRequest(url: url)
+            req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+            req.timeoutInterval = 10
+            do {
+                let (data, resp) = try await URLSession.shared.data(for: req)
+                guard let http = resp as? HTTPURLResponse else { updateCheckMessage = "Update check failed."; return }
+                guard http.statusCode == 200 else {
+                    updateCheckMessage = http.statusCode == 404 ? "No releases published yet." : "Update check failed (\(http.statusCode))."
+                    return
+                }
+                struct GHRelease: Decodable { let tag_name: String; let html_url: String; let draft: Bool }
+                let rel = try JSONDecoder().decode(GHRelease.self, from: data)
+                let latest = rel.tag_name.trimmingCharacters(in: CharacterSet(charactersIn: "vV "))
+                if !rel.draft, Self.versionIsNewer(latest, than: appVersion), let u = URL(string: rel.html_url) {
+                    updateAvailableVersion = latest
+                    updateURL = u
+                    updateCheckMessage = "Update available: v\(latest)."
+                } else {
+                    updateAvailableVersion = nil
+                    updateURL = nil
+                    updateCheckMessage = "You're on the latest version (v\(appVersion))."
+                }
+            } catch {
+                updateCheckMessage = "Update check failed: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// Compare dotted numeric versions ("0.2.0" > "0.1.3"); non-numeric parts count as 0.
+    static func versionIsNewer(_ a: String, than b: String) -> Bool {
+        let pa = a.split(separator: ".").map { Int($0) ?? 0 }
+        let pb = b.split(separator: ".").map { Int($0) ?? 0 }
+        for i in 0..<max(pa.count, pb.count) {
+            let x = i < pa.count ? pa[i] : 0
+            let y = i < pb.count ? pb[i] : 0
+            if x != y { return x > y }
+        }
+        return false
+    }
+
     // MARK: Glasses brightness (0–7)
 
     @Published var glassesBrightness: Double = 4 // device value 0–8

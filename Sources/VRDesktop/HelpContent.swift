@@ -19,6 +19,7 @@ enum HelpContent {
             Shortcut(keys: "⌃⌥S", action: "Start / stop AR"),
             Shortcut(keys: "⌃⌥Esc", action: "Stop AR"),
             Shortcut(keys: "⌃⌥Space", action: "Recenter the view"),
+            Shortcut(keys: "⌃⌥B", action: "Recalibrate drift (hold still ~4s)"),
             Shortcut(keys: "⌃⌥D", action: "Depth — Stereo (SBS) on / off"),
             Shortcut(keys: "⌃⌥F", action: "Focus the screen you're looking at (toggle)"),
             Shortcut(keys: "⌃⌥V", action: "Passthrough — hide / show the screens (HUD stays)"),

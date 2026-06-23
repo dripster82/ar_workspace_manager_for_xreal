@@ -45,6 +45,15 @@ cp "$BIN" "$APP/Contents/MacOS/AR Workspace Manager"
 cp "$ROOT/App/Info.plist" "$APP/Contents/Info.plist"
 [[ -f "$ROOT/App/AppIcon.icns" ]] && cp "$ROOT/App/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 
+# Release version is tag-driven (see release.sh): if ARWM_VERSION is set, stamp it into the bundle's
+# Info.plist (and use the git short-hash as the build number) so the built app reports the right
+# version without committing a version bump. Dev builds just use the repo Info.plist value.
+if [[ -n "${ARWM_VERSION:-}" ]]; then
+  /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $ARWM_VERSION" "$APP/Contents/Info.plist"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $HASH" "$APP/Contents/Info.plist" 2>/dev/null || true
+  echo "==> stamped bundle version $ARWM_VERSION (build $HASH)"
+fi
+
 # Privileged helper daemon (installed at runtime via SMAppService): executable into Contents/MacOS,
 # its LaunchDaemon plist into Contents/Library/LaunchDaemons (BundleProgram points at the executable).
 cp "$HELPER_BIN" "$APP/Contents/MacOS/VRDesktopHelper"
