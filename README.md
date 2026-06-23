@@ -7,7 +7,7 @@ onto them — all rendered into the glasses with low-latency head tracking.
 > **Requirements:** XREAL Air 2 / Air 2 Pro glasses connected over USB-C DisplayPort, and an
 > **Apple Silicon** Mac running **macOS 14 (Sonoma) or later**.
 
-![AR Workspace Manager for XREAL](assets/hero.png)
+![AR Workspace Manager for XREAL](assets/hero.png?v=2)
 
 ---
 
@@ -49,12 +49,12 @@ The app asks for these the first time each is needed (you can manage them under
 5. **Recenter** any time with **⌃⌥Space** so the layout sits straight ahead of you.
 6. **Stop AR** with **⌃⌥Esc** (or the top bar).
 
-![Quick start](assets/demo.gif)
+![Quick start](assets/demo.gif?v=2)
 
 Your layout is saved automatically. Create multiple **workspaces** for different setups and switch
 between them from the top bar.
 
-![Workspace layout editor](assets/workspace-editor.png)
+![Workspace layout editor](assets/workspace-editor.png?v=2)
 
 ## What it does
 
@@ -78,7 +78,7 @@ between them from the top bar.
   **meeting alarms**
 - Reusable HUD profiles; group widgets into stacks; per-widget styling
 
-![HUD widgets](assets/hud-widgets.png)
+![HUD widgets](assets/hud-widgets.png?v=2)
 
 **Glasses & capture**
 - Brightness and refresh-rate (60/72/90/120 Hz) control; quality settings (anti-aliasing,
@@ -123,9 +123,10 @@ between them from the top bar.
   [Docs/ColorSync-AirII-investigation.md](Docs/ColorSync-AirII-investigation.md) for the cause and
   fixes (keep the glasses on their default colour profile).
 
-![Diagnostics — system health](assets/diagnostics.png)
 - Virtual displays rely on macOS's private display APIs, so exact behaviour can vary between macOS
   releases.
+
+![Diagnostics — system health](assets/diagnostics.png?v=2)
 
 ---
 
