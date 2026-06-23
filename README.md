@@ -9,8 +9,6 @@ onto them — all rendered into the glasses with low-latency head tracking.
 
 ![AR Workspace Manager for XREAL](assets/hero.png)
 
-<sub>⚠️ The images and GIF in this README are placeholders — replace the files in `assets/` with real screenshots/recordings.</sub>
-
 ---
 
 ## Install
@@ -120,9 +118,12 @@ between them from the top bar.
 - **Microphone prompt never appeared?** Recording only requests the mic the first time you record;
   if it was previously denied, re-enable it in System Settings → Privacy & Security → Microphone.
 - **High CPU from `colorsync.displayservices`?** This is a macOS-side issue triggered by the glasses
-  as a display, not the app. See
+  as a display, not the app. The **Diagnostics** page shows live CPU of the usual offenders and
+  display-registry counts so you can spot it; see
   [Docs/ColorSync-AirII-investigation.md](Docs/ColorSync-AirII-investigation.md) for the cause and
   fixes (keep the glasses on their default colour profile).
+
+![Diagnostics — system health](assets/diagnostics.png)
 - Virtual displays rely on macOS's private display APIs, so exact behaviour can vary between macOS
   releases.
 
