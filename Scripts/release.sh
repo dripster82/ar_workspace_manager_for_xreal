@@ -21,7 +21,7 @@ cd "$ROOT"
 IDENTITY="${CODESIGN_IDENTITY:-Developer ID Application: Paul Ketelle (834D8P4J32)}"
 PROFILE="${NOTARY_PROFILE:-notary-arwm}"
 APP="$ROOT/build/AR Workspace Manager.app"
-DMG="$ROOT/build/AR-Workspace-Manager.dmg"
+DMG=""   # set once the version is known (named per-version, e.g. AR-Workspace-Manager-0.4.dmg)
 
 # --- Guards ----------------------------------------------------------------------------------------
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
@@ -58,13 +58,15 @@ else
   echo "==> No tag on HEAD — auto-incrementing ${LATEST:-(none)} → $TAG"
 fi
 
+DMG="$ROOT/build/AR-Workspace-Manager-$VERSION.dmg"
+
 # --- Build + notarize ------------------------------------------------------------------------------
 echo "==> [1/3] Developer-ID release build ($TAG)"
 ARWM_VERSION="$VERSION" CODESIGN_IDENTITY="$IDENTITY" "$ROOT/Scripts/build-app.sh" release
 "$ROOT/Scripts/notarize.sh" "$PROFILE"
 
 echo "==> [2/3] build + notarize the .dmg"
-CODESIGN_IDENTITY="$IDENTITY" "$ROOT/Scripts/make-dmg.sh" "$APP" "$DMG"
+DMG_VOLNAME="AR Workspace Manager $VERSION" CODESIGN_IDENTITY="$IDENTITY" "$ROOT/Scripts/make-dmg.sh" "$APP" "$DMG"
 xcrun notarytool submit "$DMG" --keychain-profile "$PROFILE" --wait
 xcrun stapler staple "$DMG"
 

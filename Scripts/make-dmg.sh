@@ -8,7 +8,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="${1:-$ROOT/build/AR Workspace Manager.app}"
 DMG="${2:-$ROOT/build/AR-Workspace-Manager.dmg}"
-VOLNAME="AR Workspace Manager"
+VOLNAME="${DMG_VOLNAME:-AR Workspace Manager}"
 
 [[ -d "$APP" ]] || { echo "No app at $APP — build it first (Scripts/build-app.sh)."; exit 1; }
 
