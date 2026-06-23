@@ -169,3 +169,38 @@ A reboot guarantees the daemons start from the clean folder if the kill alone do
 - If it creeps back, the three commands above clear it. It won't re-bloat from VR Desktop's virtual
   displays (stable slot UUIDs now) — the source is the Air 2's churning identity + accumulated
   profiles.
+
+---
+
+## Recurrence (2026-06-23) — confirmed clean-registry self-loop + in-app profile pruning
+
+Came back at ~74% with the registry **already clean** (5 profiles, single Air 2 entry, no custom
+calibration). Sampling `colorsync.displayservices` showed the same hot path as 06-22 —
+`ColorSyncProfileCreateDeviceProfile → ColorSyncDeviceRegistryCopyInfo → __CFTryParseBinaryPlist` —
+but WindowServer was idle (~6%), so the two ColorSync daemons were **looping between themselves**,
+re-parsing the device registry on a tight retry triggered by the Air 2 as a display. Cost was
+*frequency*, not plist size. Grep confirmed the app makes no ColorSync device-profile calls (only
+`CGColorSpaceCreateDeviceRGB`/`metalLayer.colorspace`), so the app is exonerated at the code level
+too. Decisive test unchanged: unplug the Air 2 → 0%.
+
+### Preventative fix shipped: prune orphaned profiles on display removal
+
+When a virtual display is **removed from a workspace** (`AppCoordinator.removeScreen`), the app now
+deletes its now-orphaned `*-<uuid>.icc` from `/Library/ColorSync/Profiles/Displays`
+(`SystemHealth.removeDisplayProfiles`, keyed by the CGDisplay UUID — physical displays have no virtual
+displayID so they're never touched). The folder is group-`wheel`-writable, so admin accounts delete
+directly with no prompt. For standard accounts a **signed privileged helper** does it as root.
+
+### The privileged helper (for distribution)
+
+A root LaunchDaemon (`Sources/VRDesktopHelper/`, target `VRDesktopHelper`) installed via
+`SMAppService.daemon` and reached over XPC (`PrivilegedHelperClient`). `ClientValidator` verifies the
+caller's **audit token** (via the `CXPCAuditToken` shim) against a code requirement (Apple anchor +
+Developer ID marker + Team ID `834D8P4J32` + bundle id) — fail-closed in release, debug-bypassed for
+local dev. The helper only ever deletes `*-<uuid>.icc` for valid UUIDs, never arbitrary paths.
+
+This pairs with the Mac-App-Store-incompatible reality: a sandboxed app can't write to
+`/Library/ColorSync` at all, so the app ships **direct-download (Developer ID + notarization)**, not
+App Store. App rebranded to **AR Workspace Manager for XRE** (`uk.co.ketelle.ar.workspace.manager`).
+First notarized + stapled build confirmed Gatekeeper-accepted 2026-06-23. Build/sign/notarize:
+`Scripts/release.sh` (local dev testing uses `Scripts/build-app.sh debug` — no notarization needed).

@@ -2100,7 +2100,13 @@ final class AppCoordinator: ObservableObject {
             captures.removeValue(forKey: id)
             Task { await capture.stop() }
         }
+        // Grab the virtual display's UUID before tearing it down, then delete its now-orphaned
+        // per-display ColorSync profile so the registry doesn't accumulate stale entries (a driver of
+        // the colorsync.displayservices runaway). Physical screens have no virtual displayID here, so
+        // their profiles (e.g. the glasses, built-in) are never touched.
+        let removedProfileUUID = virtualDisplays.displayID(for: id).flatMap { SystemHealth.displayUUID($0) }
         virtualDisplays.destroy(id) // no-op if it was a physical screen
+        if let removedProfileUUID { SystemHealth.removeDisplayProfiles(uuid: removedProfileUUID) }
         liveUpdateScreens()
     }
 

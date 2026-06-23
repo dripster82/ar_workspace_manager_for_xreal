@@ -35,9 +35,21 @@ let package = Package(
         ),
         .target(name: "DisplayManager", dependencies: ["CPrivateDisplay"]),
         .target(name: "Compositor", dependencies: ["GlassesDriver", "CapturePipeline"]),
+        // Re-declares NSXPCConnection.auditToken (header-only) so the helper can identify clients.
+        .target(name: "CXPCAuditToken"),
+        // XPC protocol + constants shared by the app and the privileged helper daemon.
+        .target(name: "PrivilegedHelperShared"),
+        // The privileged LaunchDaemon (runs as root, installed via SMAppService) that prunes
+        // root-owned ColorSync display profiles on behalf of the verified app.
+        .executableTarget(
+            name: "VRDesktopHelper",
+            dependencies: ["PrivilegedHelperShared", "CXPCAuditToken"],
+            linkerSettings: [.linkedFramework("Security")]
+        ),
         .executableTarget(
             name: "VRDesktop",
-            dependencies: ["GlassesDriver", "CapturePipeline", "Compositor", "DisplayManager"]
+            dependencies: ["GlassesDriver", "CapturePipeline", "Compositor", "DisplayManager",
+                           "PrivilegedHelperShared"]
         ),
     ]
 )

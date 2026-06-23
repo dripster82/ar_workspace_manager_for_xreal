@@ -5,9 +5,11 @@
     <key>CFBundleExecutable</key>
     <string>VRDesktop</string>
     <key>CFBundleIdentifier</key>
-    <string>co.ketelle.vrdesktop</string>
+    <string>uk.co.ketelle.ar.workspace.manager</string>
     <key>CFBundleName</key>
-    <string>VR Desktop</string>
+    <string>AR Workspace Manager</string>
+    <key>CFBundleDisplayName</key>
+    <string>AR Workspace Manager for XRE</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>CFBundlePackageType</key>

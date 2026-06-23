@@ -5,3 +5,8 @@ vendor/xrealair-sdk-macos/
 vendor/Fusion/
 vendor/hidapi/
 colorsync_debug*.log
+
+# Code-signing material (keep out of git)
+*.cer
+*.p12
+*.certSigningRequest

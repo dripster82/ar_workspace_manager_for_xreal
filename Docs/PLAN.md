@@ -20,7 +20,7 @@ Research established:
 Xcode app shell + local SPM packages (stable signing → TCC Screen Recording grant sticks):
 
 ```
-VRDesktop.xcodeproj            # app shell, signing (Personal Team, bundle id co.ketelle.vrdesktop), Info.plist (NSScreenCaptureUsageDescription)
+VRDesktop.xcodeproj            # app shell, signing (bundle id uk.co.ketelle.ar.workspace.manager), Info.plist (NSScreenCaptureUsageDescription)
 VRDesktop/                     # SwiftUI app target: AppCoordinator, control-panel UI, .metal shaders
 Packages/
   GlassesDriver/

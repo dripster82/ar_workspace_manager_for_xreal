@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- LaunchDaemon plist for the privileged helper, registered via SMAppService.daemon(plistName:).
+         Lives at Contents/Library/LaunchDaemons/ inside the app bundle. -->
+    <key>Label</key>
+    <string>uk.co.ketelle.ar.workspace.manager.helper</string>
+
+    <!-- Path to the helper executable, RELATIVE to the app bundle root. -->
+    <key>BundleProgram</key>
+    <string>Contents/MacOS/VRDesktopHelper</string>
+
+    <!-- The Mach service the app connects to (must match HelperConstants.machServiceName). -->
+    <key>MachServices</key>
+    <dict>
+        <key>uk.co.ketelle.ar.workspace.manager.helper</key>
+        <true/>
+    </dict>
+
+    <!-- Groups the daemon under the app in System Settings > Login Items & Extensions. -->
+    <key>AssociatedBundleIdentifiers</key>
+    <array>
+        <string>uk.co.ketelle.ar.workspace.manager</string>
+    </array>
+</dict>
+</plist>

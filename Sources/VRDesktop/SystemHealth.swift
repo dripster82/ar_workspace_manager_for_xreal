@@ -1,3 +1,5 @@
+import ColorSync
+import CoreGraphics
 import Foundation
 
 /// One monitored process's summed %CPU.
@@ -63,5 +65,51 @@ enum SystemHealth {
               let sets = plist["DisplaySets"] as? [String: Any],
               let configs = sets["Configs"] as? [Any] else { return 0 }
         return configs.count
+    }
+
+    /// Path to the system folder where macOS auto-generates one ICC profile per display, named
+    /// `<display name>-<CGDisplay UUID>.icc`. Admin-writable (group `wheel`), so members of `admin`
+    /// can prune it without elevation; on a standard account the removes below silently no-op.
+    private static let displayProfilesDir = "/Library/ColorSync/Profiles/Displays"
+
+    /// The CGDisplay UUID string macOS uses to key a display's ColorSync profile, or nil.
+    static func displayUUID(_ id: CGDirectDisplayID) -> String? {
+        guard let ref = CGDisplayCreateUUIDFromDisplayID(id)?.takeRetainedValue() else { return nil }
+        return CFUUIDCreateString(nil, ref) as String?
+    }
+
+    /// Remove the per-display ColorSync profile(s) macOS generated for `uuid`. Called when a virtual
+    /// display is permanently removed from a workspace so its now-orphaned profile doesn't linger and
+    /// bloat the ColorSync registry (the re-parse of which drives the colorsync.displayservices
+    /// runaway — see Docs/ColorSync-AirII-investigation.md). Matching on the UUID suffix also sweeps
+    /// up stale name-variants for the same slot (e.g. left behind by a rename).
+    ///
+    /// The folder is group-`wheel`-writable, so admin accounts delete directly with no prompt. If a
+    /// direct remove is denied (standard account, or a locked-down folder), the leftovers are handed
+    /// to the privileged helper daemon (`PrivilegedHelperClient`), which removes them as root after
+    /// verifying our code signature. Returns the count removed *directly* (the privileged path is
+    /// async). Passing the UUID — not paths — means the helper, not us, decides which files it touches.
+    @discardableResult
+    static func removeDisplayProfiles(uuid: String) -> Int {
+        let fm = FileManager.default
+        let all = (try? fm.contentsOfDirectory(atPath: displayProfilesDir)) ?? []
+        let suffix = "-\(uuid).icc".lowercased()
+        let matches = all.filter { $0.lowercased().hasSuffix(suffix) }
+            .map { "\(displayProfilesDir)/\($0)" }
+        var removed = 0
+        var denied = false
+        for path in matches {
+            do { try fm.removeItem(atPath: path); removed += 1 }
+            catch { if fm.fileExists(atPath: path) { denied = true } }
+        }
+        if removed > 0 { NSLog("SystemHealth: removed \(removed) ColorSync profile(s) for display \(uuid)") }
+        if denied {
+            Task { @MainActor in
+                PrivilegedHelperClient.shared.removeColorSyncProfiles(uuids: [uuid]) { n in
+                    if n > 0 { NSLog("SystemHealth: removed \(n) ColorSync profile(s) via privileged helper") }
+                }
+            }
+        }
+        return removed
     }
 }
