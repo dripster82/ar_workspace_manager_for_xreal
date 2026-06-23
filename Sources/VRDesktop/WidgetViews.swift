@@ -139,6 +139,33 @@ struct CalendarWidgetView: View {
         let f = DateFormatter(); f.dateFormat = "EEEE d"; return f.string(from: date)
     }
 
+    /// Wrap a title to lines of at most `limit` characters, breaking at whitespace where possible and
+    /// hard-breaking any single word longer than the limit.
+    static func wrapTitle(_ text: String, limit: Int = 25) -> String {
+        var lines: [String] = []
+        var current = ""
+        for token in text.split(whereSeparator: { $0.isWhitespace }) {
+            var word = String(token)
+            // Hard-break a word that can't fit on its own line.
+            while word.count > limit {
+                if !current.isEmpty { lines.append(current); current = "" }
+                let cut = word.index(word.startIndex, offsetBy: limit)
+                lines.append(String(word[..<cut]))
+                word = String(word[cut...])
+            }
+            if current.isEmpty {
+                current = word
+            } else if current.count + 1 + word.count <= limit {
+                current += " " + word
+            } else {
+                lines.append(current)
+                current = word
+            }
+        }
+        if !current.isEmpty { lines.append(current) }
+        return lines.joined(separator: "\n")
+    }
+
     /// Meeting length, e.g. "15m", "1hr", "1h30m".
     private func durationLabel(_ e: CalEvent) -> String {
         let mins = Int(e.end.timeIntervalSince(e.start) / 60)
@@ -169,7 +196,7 @@ struct CalendarWidgetView: View {
                             Text(dayLabel(e.start)).font(.system(size: 15, weight: .bold, design: .rounded))
                                 .foregroundStyle(.secondary).padding(.top, idx == 0 ? 2 : 6)
                         }
-                        HStack(spacing: 6) {
+                        HStack(alignment: .top, spacing: 6) {
                             Text(e.allDay ? "all-day" : Self.timeFmt.string(from: e.start))
                                 .font(.system(size: 13, weight: .medium, design: .rounded).monospacedDigit())
                                 .frame(width: 42, alignment: .leading).opacity(0.8)
@@ -177,8 +204,8 @@ struct CalendarWidgetView: View {
                                 Text("(\(d))").font(.system(size: 11, weight: .medium, design: .rounded))
                                     .frame(width: 46, alignment: .leading).opacity(0.55)
                             }
-                            Text(e.title).font(.system(size: 15, weight: isNext ? .semibold : .medium))
-                                .lineLimit(1)
+                            Text(Self.wrapTitle(e.title)).font(.system(size: 15, weight: isNext ? .semibold : .medium))
+                                .fixedSize(horizontal: false, vertical: true)
                             Spacer(minLength: 8)
                             let r = relative(e)
                             if !r.isEmpty {
