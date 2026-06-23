@@ -60,6 +60,34 @@ fi
 
 DMG="$ROOT/build/AR-Workspace-Manager-$VERSION.dmg"
 
+# --- Changelog (generated from commits since the previous tag; you review/edit before publishing) ---
+NOTES="$ROOT/build/release-notes-$TAG.md"
+mkdir -p "$ROOT/build"
+PREV_TAG="$(git tag -l 'V*' | sort -V | grep -vx "$TAG" | tail -1 || true)"
+{
+  echo "## AR Workspace Manager for XREAL $TAG"
+  echo
+  if [[ -n "$PREV_TAG" ]]; then
+    echo "Changes since $PREV_TAG:"
+    echo
+    git log --no-merges --pretty='- %s' "$PREV_TAG..HEAD"
+  else
+    echo "Initial release."
+  fi
+} > "$NOTES"
+
+echo
+echo "================ DRAFT RELEASE NOTES ($TAG) ================"
+cat "$NOTES"
+echo "==========================================================="
+echo "File: $NOTES"
+printf "Review the changelog — [Enter] accept · [e] edit in \$EDITOR · [q] abort: "
+read -r ans
+case "$ans" in
+  e|E) "${EDITOR:-nano}" "$NOTES"; echo "--- using edited notes ---"; cat "$NOTES"; echo "---" ;;
+  q|Q) echo "Aborted before building. No release made."; exit 1 ;;
+esac
+
 # --- Build + notarize ------------------------------------------------------------------------------
 echo "==> [1/3] Developer-ID release build ($TAG)"
 ARWM_VERSION="$VERSION" CODESIGN_IDENTITY="$IDENTITY" "$ROOT/Scripts/build-app.sh" release
@@ -75,12 +103,13 @@ echo "==> [3/3] publish GitHub release $TAG"
 command -v gh >/dev/null || { echo "✗ gh CLI not found — tag/release not published. dmg is at $DMG."; exit 1; }
 if gh release view "$TAG" >/dev/null 2>&1; then
   gh release upload "$TAG" "$DMG" --clobber
-  echo "✅ Updated existing release $TAG with a fresh dmg."
+  gh release edit "$TAG" --notes-file "$NOTES"
+  echo "✅ Updated existing release $TAG (fresh dmg + changelog)."
 else
   gh release create "$TAG" "$DMG" \
     --title "$TAG" \
     --target "$(git rev-parse HEAD)" \
-    --notes "AR Workspace Manager for XREAL $TAG"
-  echo "✅ Published release $TAG (tagged HEAD) with the dmg."
+    --notes-file "$NOTES"
+  echo "✅ Published release $TAG (tagged HEAD) with the dmg + changelog."
 fi
 echo "   $DMG"
