@@ -37,6 +37,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let icon = NSImage(named: "AppIcon") { NSApp.applicationIconImage = icon }
         coordinator = AppCoordinator()
         coordinator.checkForUpdates()   // silent on launch; surfaces in the menu + About page
+
+        // After a self-update the bundle (incl. the privileged helper) changed — refresh the daemon.
+        let versionKey = "lastLaunchedVersion"
+        let previous = UserDefaults.standard.string(forKey: versionKey)
+        if let previous, previous != coordinator.appVersion {
+            PrivilegedHelperClient.shared.refreshAfterUpdateIfRegistered()
+        }
+        UserDefaults.standard.set(coordinator.appVersion, forKey: versionKey)
         helpOverlay = HelpOverlayController(coordinator: coordinator)
         cursorInfoOverlay = CursorInfoOverlayController(coordinator: coordinator)
         windowPicker = WindowPickerController(coordinator: coordinator)

@@ -130,15 +130,27 @@ struct ControlPanelView: View {
                                     Text("Check for Updates")
                                 }
                             }
-                            .disabled(coordinator.checkingForUpdate)
-                            if let v = coordinator.updateAvailableVersion, let url = coordinator.updateURL {
-                                Link("Download v\(v)", destination: url)
-                                    .buttonStyle(.borderedProminent)
+                            .disabled(coordinator.checkingForUpdate || coordinator.updateInstalling)
+                            if let v = coordinator.updateAvailableVersion {
+                                if coordinator.updateDownloadAssetURL != nil {
+                                    Button("Download & Install v\(v)") { coordinator.installUpdate() }
+                                        .buttonStyle(.borderedProminent)
+                                        .disabled(coordinator.updateInstalling)
+                                }
+                                if let url = coordinator.updateURL {
+                                    Link("Release notes", destination: url)
+                                }
                             } else if let msg = coordinator.updateCheckMessage {
                                 Text(msg).font(.caption).foregroundStyle(.secondary)
                             }
                         }
                         .controlSize(.small)
+                        if let s = coordinator.updateInstallStatus {
+                            HStack(spacing: 6) {
+                                if coordinator.updateInstalling { ProgressView().controlSize(.small) }
+                                Text(s).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
                     }
                 }
             }
@@ -443,7 +455,7 @@ struct ControlPanelView: View {
                     .lineLimit(1).truncationMode(.tail)
             }
             Spacer(minLength: 8)
-            Label("\(BuildInfo.commit) · \(BuildInfo.date)", systemImage: "hammer")
+            Label("v\(coordinator.appVersion) · \(BuildInfo.commit) · \(BuildInfo.date)", systemImage: "hammer")
                 .font(.caption2).foregroundStyle(.secondary)
                 .textSelection(.enabled)
         }
@@ -984,6 +996,24 @@ struct ControlPanelView: View {
             }
             card("System health", "waveform.path.ecg") { systemHealthSection }
             card("Displays", "rectangle.on.rectangle") { diagnosticsInfo }
+            #if DEBUG
+            card("Developer — version override", "hammer") {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Force the version the app reports, to test updates. Blank = real (v\(coordinator.bundleVersion)).")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
+                        TextField("e.g. 0.2", text: $coordinator.forcedVersionOverride)
+                            .textFieldStyle(.roundedBorder).frame(width: 90)
+                            .onSubmit { coordinator.applyForcedVersion() }
+                        Button("Apply") { coordinator.applyForcedVersion() }
+                        Button("Clear") { coordinator.forcedVersionOverride = ""; coordinator.applyForcedVersion() }
+                    }
+                    .controlSize(.small)
+                    Text("Reporting v\(coordinator.appVersion) · \(coordinator.updateCheckMessage ?? "not checked")")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+            #endif
         }
         // Keep the display list current while viewing (incl. during AR), without the continuous
         // writes that cause judder — the publisher only lives while this page is on screen.

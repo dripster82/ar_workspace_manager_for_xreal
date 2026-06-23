@@ -41,6 +41,16 @@ final class PrivilegedHelperClient {
         }
     }
 
+    /// After a self-update the bundled helper binary + plist change. If the daemon was already
+    /// registered, re-register so the installed daemon matches the new bundle; if it was never
+    /// registered (lazy), do nothing — it'll pick up the new bundle when first needed.
+    func refreshAfterUpdateIfRegistered() {
+        guard service.status == .enabled else { return }
+        do { try service.register() } catch {
+            NSLog("PrivilegedHelperClient: post-update re-register failed: \(error.localizedDescription)")
+        }
+    }
+
     /// Register if needed, then unregister — exposed for a future "remove helper" affordance.
     func unregister() {
         try? service.unregister()

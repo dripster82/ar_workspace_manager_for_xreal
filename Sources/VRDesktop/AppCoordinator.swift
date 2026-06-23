@@ -473,16 +473,43 @@ final class AppCoordinator: ObservableObject {
 
     /// Set when a newer release than this build is published on GitHub.
     @Published var updateAvailableVersion: String?
-    @Published var updateURL: URL?
+    @Published var updateURL: URL?              // the release page (for "Release notes")
+    @Published var updateDownloadAssetURL: URL? // the .dmg asset (for in-app install)
     @Published var checkingForUpdate = false
     /// Human-readable result of the last check (shown on the About page).
     @Published var updateCheckMessage: String?
+    /// In-app install (download → verify → swap → relaunch) progress.
+    @Published var updateInstalling = false
+    @Published var updateInstallStatus: String?
 
     private static let updateRepo = "dripster82/ar_workspace_manager_for_xreal"
 
-    /// This app's marketing version (CFBundleShortVersionString), e.g. "0.1.0".
-    var appVersion: String {
+    /// The real bundled version (CFBundleShortVersionString), e.g. "0.4".
+    var bundleVersion: String {
         (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0.0.0"
+    }
+
+#if DEBUG
+    /// Dev-only: pretend to be this version to exercise the updater — set "0.2" to see an update
+    /// offered, or the latest tag to see "you're on the latest". Seeded from the `ARWM_FORCE_VERSION`
+    /// env var or the last value you typed; blank = the real bundled version. Release builds ignore it.
+    @Published var forcedVersionOverride: String =
+        ProcessInfo.processInfo.environment["ARWM_FORCE_VERSION"]
+        ?? UserDefaults.standard.string(forKey: "devForcedVersion") ?? ""
+
+    /// Persist the override and re-run the update check against the new "current" version.
+    func applyForcedVersion() {
+        UserDefaults.standard.set(forcedVersionOverride, forKey: "devForcedVersion")
+        checkForUpdates()
+    }
+#endif
+
+    /// The version the app reports for update comparisons and display. Honours the dev override.
+    var appVersion: String {
+#if DEBUG
+        if !forcedVersionOverride.isEmpty { return forcedVersionOverride }
+#endif
+        return bundleVersion
     }
 
     /// Query the repo's latest published release and flag if it's newer than this build. Unauthenticated
@@ -504,16 +531,20 @@ final class AppCoordinator: ObservableObject {
                     updateCheckMessage = http.statusCode == 404 ? "No releases published yet." : "Update check failed (\(http.statusCode))."
                     return
                 }
-                struct GHRelease: Decodable { let tag_name: String; let html_url: String; let draft: Bool }
+                struct GHAsset: Decodable { let name: String; let browser_download_url: String }
+                struct GHRelease: Decodable { let tag_name: String; let html_url: String; let draft: Bool; let assets: [GHAsset] }
                 let rel = try JSONDecoder().decode(GHRelease.self, from: data)
                 let latest = rel.tag_name.trimmingCharacters(in: CharacterSet(charactersIn: "vV "))
                 if !rel.draft, Self.versionIsNewer(latest, than: appVersion), let u = URL(string: rel.html_url) {
                     updateAvailableVersion = latest
                     updateURL = u
+                    updateDownloadAssetURL = rel.assets.first { $0.name.lowercased().hasSuffix(".dmg") }
+                        .flatMap { URL(string: $0.browser_download_url) }
                     updateCheckMessage = "Update available: v\(latest)."
                 } else {
                     updateAvailableVersion = nil
                     updateURL = nil
+                    updateDownloadAssetURL = nil
                     updateCheckMessage = "You're on the latest version (v\(appVersion))."
                 }
             } catch {
@@ -532,6 +563,31 @@ final class AppCoordinator: ObservableObject {
             if x != y { return x > y }
         }
         return false
+    }
+
+    /// Download the latest release's .dmg, verify it's our genuine notarised build, swap the running
+    /// bundle, and relaunch (see `SelfUpdater`). On success the app quits so the swap helper can finish.
+    func installUpdate() {
+        guard !updateInstalling else { return }
+        guard let dmg = updateDownloadAssetURL else {
+            updateInstallStatus = "This release has no .dmg attached — use Release notes to download it."
+            return
+        }
+        updateInstalling = true
+        updateInstallStatus = "Starting…"
+        Task { @MainActor in
+            do {
+                try await SelfUpdater.installUpdate(from: dmg) { [weak self] status in
+                    self?.updateInstallStatus = status
+                }
+                // The swap helper is now armed and waiting for us to exit. Quit to let it finish.
+                NSApp.terminate(nil)
+            } catch {
+                updateInstalling = false
+                updateInstallStatus = "Update failed: \(error.localizedDescription)"
+                NSLog("SelfUpdater: \(error.localizedDescription)")
+            }
+        }
     }
 
     // MARK: Glasses brightness (0–7)
