@@ -27,6 +27,6 @@
     <key>NSMicrophoneUsageDescription</key>
     <string>AR Workspace Manager records your microphone when you record the glasses view (you can mute it with ⌃⌥M).</string>
     <key>NSHumanReadableCopyright</key>
-    <string>Personal use. Includes MIT-licensed code from nrealAirLinuxDriver/xrealair-sdk-macos, xioTechnologies Fusion, and BSD-licensed hidapi.</string>
+    <string>© Paul Ketelle. PolyForm Noncommercial 1.0.0 — noncommercial use only. Includes MIT code from nrealAirLinuxDriver/xrealair-sdk-macos and xioTechnologies Fusion, and BSD-licensed hidapi.</string>
 </dict>
 </plist>
