@@ -5,8 +5,11 @@ import AppKit
 /// keeps it *inside* one display (focus mode), clamping to the edge if it tries to leave.
 final class CursorConfiner {
     enum Mode: Equatable {
-        case offDisplay(CGDirectDisplayID)   // keep the cursor OFF this display (AR output)
-        case confineTo(CGDirectDisplayID)    // keep the cursor INSIDE this display (focus mode)
+        case offDisplay(CGDirectDisplayID)        // keep the cursor OFF this display (AR output)
+        case confineTo(CGDirectDisplayID)         // keep the cursor INSIDE this display (focus mode)
+        case confineToDisplays(Set<CGDirectDisplayID>) // keep it INSIDE this set (headless: the
+                                                  // virtual AR screens, when the glasses are the
+                                                  // only physical display)
     }
 
     private var monitors: [Any] = []
@@ -69,6 +72,26 @@ final class CursorConfiner {
                 let x = min(max(location.x, frame.minX + 1), frame.maxX - 1)
                 let y = min(max(location.y, frame.minY + 1), frame.maxY - 1)
                 CGWarpMouseCursorPosition(toCG(NSPoint(x: x, y: y)))
+                CGAssociateMouseAndMouseCursorPosition(1)
+            }
+        case .confineToDisplays(let ids):
+            let frames = ids.compactMap { frame(of: $0) }
+            guard !frames.isEmpty else { return }                 // nothing to confine to → no-op
+            if frames.contains(where: { $0.contains(location) }) {
+                lastAllowed = toCG(location)
+                return
+            }
+            // Outside every allowed display → warp to the nearest point just inside the closest one.
+            var best: NSPoint?
+            var bestDist = CGFloat.greatestFiniteMagnitude
+            for f in frames {
+                let cx = min(max(location.x, f.minX + 1), f.maxX - 1)
+                let cy = min(max(location.y, f.minY + 1), f.maxY - 1)
+                let d = hypot(location.x - cx, location.y - cy)
+                if d < bestDist { bestDist = d; best = NSPoint(x: cx, y: cy) }
+            }
+            if let b = best {
+                CGWarpMouseCursorPosition(toCG(b))
                 CGAssociateMouseAndMouseCursorPosition(1)
             }
         }
