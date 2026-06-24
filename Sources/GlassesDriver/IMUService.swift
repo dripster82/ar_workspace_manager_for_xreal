@@ -31,6 +31,10 @@ public final class IMUService: @unchecked Sendable {
     private var device = device_imu_type()
     private var thread: Thread?
     private var running = false
+    /// Latest IMU temperature (°C), read AFTER each `device_imu_read` returns. We must NOT touch
+    /// `device` inside `handleUpdate` (the callback runs while `&device` is held inout by the read,
+    /// and a concurrent access trips Swift's exclusivity check → abort), so we stash it here.
+    private var lastTemperature: Float = 0
     private let queue = DispatchQueue(label: "imu.control")
 
     private init() {}
@@ -90,6 +94,7 @@ public final class IMUService: @unchecked Sendable {
                 if r == DEVICE_IMU_ERROR_UNPLUGGED || r == DEVICE_IMU_ERROR_NO_DEVICE || r == DEVICE_IMU_ERROR_NO_HANDLE {
                     break
                 }
+                lastTemperature = device.temperature  // safe here: the read's inout access has ended
             }
             device_imu_close(&device)
             DispatchQueue.main.async { self.state = .disconnected }
@@ -168,7 +173,7 @@ public final class IMUService: @unchecked Sendable {
         let la = device_imu_get_linear_acceleration(ahrs)
         let accel = SIMD3<Float>(la.x, la.y, la.z)
         poseStore.update(Pose(orientation: corrected, angularVelocity: velFiltered, timestamp: now,
-                              acceleration: accel, temperature: device.temperature))
+                              acceleration: accel, temperature: lastTemperature))
 
         // Raw/filtered diagnostics for head-movement testing (throttled to ~60 Hz).
         if rawLoggingEnabled, let rawLog, now - lastRawLog >= 0.016 {
