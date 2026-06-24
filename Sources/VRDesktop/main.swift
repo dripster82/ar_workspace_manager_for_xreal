@@ -60,8 +60,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // the only exit is ⌃⌥F, which is easy to miss and unreachable if the cursor is trapped away
         // from the control panel.
         coordinator.onFocusChanged = { [weak self] focused in
-            self?.escForFocus = focused
-            self?.updateEscArming()
+            guard let self else { return }
+            switch self.coordinator.focusEscape {
+            case .fnFOnly:
+                self.escForFocus = false
+                self.stopDoubleEscTap()
+            case .singleEsc:
+                self.escForFocus = focused          // single Esc exits (consumes Esc)
+                self.stopDoubleEscTap()
+            case .doubleEsc:
+                self.escForFocus = false            // don't consume Esc; observe instead
+                if focused { self.startDoubleEscTap() } else { self.stopDoubleEscTap() }
+            }
+            self.updateEscArming()
         }
         calibrationController = CalibrationController(coordinator: coordinator)
         coordinator.onCalibrationRequested = { [weak self] in self?.calibrationController.show() }
@@ -257,6 +268,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @MainActor func unregisterEscDismiss() {
         if let ref = escDismissHotKeyRef { UnregisterEventHotKey(ref); escDismissHotKeyRef = nil }
+    }
+
+    // MARK: Double-tap Esc (observe-only)
+    // A passive event tap that watches Esc WITHOUT consuming it, so single Esc still reaches the
+    // focused app; only a quick double-press exits Focus. Active only while Focus is on in that mode.
+    private var doubleEscTap: CFMachPort?
+    private var doubleEscSource: CFRunLoopSource?
+    private var lastEscTime: CFTimeInterval = 0
+
+    @MainActor func startDoubleEscTap() {
+        guard doubleEscTap == nil else { return }
+        let mask = CGEventMask(1 << CGEventType.keyDown.rawValue)
+        let me = Unmanaged.passUnretained(self).toOpaque()
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap, place: .headInsertEventTap, options: .listenOnly,
+            eventsOfInterest: mask,
+            callback: { _, type, event, userInfo in
+                if type == .keyDown,
+                   event.getIntegerValueField(.keyboardEventKeycode) == 53,   // Esc
+                   let userInfo {
+                    let d = Unmanaged<AppDelegate>.fromOpaque(userInfo).takeUnretainedValue()
+                    DispatchQueue.main.async { d.handleEscObserved() }
+                }
+                return Unmanaged.passUnretained(event)   // never consume — app still gets Esc
+            }, userInfo: me) else {
+            NSLog("Double-tap Esc tap failed (needs Accessibility) — Focus exit via ⌃⌥F only")
+            return
+        }
+        doubleEscTap = tap
+        let src = CFMachPortCreateRunLoopSource(nil, tap, 0)
+        doubleEscSource = src
+        CFRunLoopAddSource(CFRunLoopGetMain(), src, .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
+    }
+
+    @MainActor func stopDoubleEscTap() {
+        if let tap = doubleEscTap { CGEvent.tapEnable(tap: tap, enable: false) }
+        if let src = doubleEscSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), src, .commonModes) }
+        doubleEscTap = nil
+        doubleEscSource = nil
+        lastEscTime = 0
+    }
+
+    @MainActor func handleEscObserved() {
+        let now = CACurrentMediaTime()
+        if now - lastEscTime < 0.4 {   // second press within the window → exit Focus
+            lastEscTime = 0
+            coordinator.exitFocus()
+        } else {
+            lastEscTime = now
+        }
     }
 
     // MARK: Menu bar

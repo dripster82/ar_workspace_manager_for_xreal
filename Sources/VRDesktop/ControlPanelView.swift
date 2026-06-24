@@ -1000,6 +1000,17 @@ struct ControlPanelView: View {
                 .help("On: a window moved with ⌃⌥W resizes to fill the target screen. Off: it keeps "
                       + "its size and just moves there.")
             HStack {
+                Text("Exit Focus with").font(.caption)
+                Spacer()
+                Picker("", selection: $coordinator.focusEscape) {
+                    ForEach(AppCoordinator.FocusEscape.allCases) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.segmented).labelsHidden().fixedSize()
+            }
+            .help("⌃⌥F always toggles Focus. This sets whether Esc also exits: ‘Esc’ exits on one press "
+                  + "but apps that use Esc won't receive it while focused; ‘Double-tap Esc’ leaves single "
+                  + "Esc working in your apps and exits only on a quick double-press (needs Accessibility).")
+            HStack {
                 Text("Recording microphone").font(.caption)
                 Spacer()
                 Picker("", selection: $coordinator.selectedMicID) {

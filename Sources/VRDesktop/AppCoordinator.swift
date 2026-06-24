@@ -115,6 +115,29 @@ final class AppCoordinator: ObservableObject {
             onFocusChanged?(focusedScreenID != nil)
         }
     }
+    /// How Esc behaves for leaving Focus mode (⌃⌥F always toggles regardless). Read by the app
+    /// delegate when focus is entered. `.fnFOnly` leaves Esc untouched; `.singleEsc` exits on one Esc
+    /// (but swallows Esc from the focused app); `.doubleEsc` watches Esc observe-only so single Esc
+    /// still reaches the app and only a quick double-press exits.
+    enum FocusEscape: String, CaseIterable, Identifiable {
+        case fnFOnly, singleEsc, doubleEsc
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .fnFOnly: return "⌃⌥F only"
+            case .singleEsc: return "Esc"
+            case .doubleEsc: return "Double-tap Esc"
+            }
+        }
+    }
+    @Published var focusEscape: FocusEscape =
+        FocusEscape(rawValue: UserDefaults.standard.string(forKey: "focusEscape") ?? "") ?? .fnFOnly {
+        didSet {
+            UserDefaults.standard.set(focusEscape.rawValue, forKey: "focusEscape")
+            onFocusChanged?(focusedScreenID != nil)   // re-arm for the new mode if focus is active
+        }
+    }
+
     /// Global cursor position captured on entering focus, restored on exit.
     private var preFocusCursor: CGPoint?
     /// Distance (m) of the focused screen; its angular size depends only on width/distance.
@@ -1858,7 +1881,13 @@ final class AppCoordinator: ObservableObject {
         applyRenderedScene()        // draw the focused screen alone (no display reconfig)
         moveCursorToGaze()          // drop the cursor onto it
         updateCursorConfinement()   // confine the cursor inside the focused display
-        statusMessage = "Focused on \(cfg.name) — ⌃⌥F or Esc to exit"
+        let exitHint: String
+        switch focusEscape {
+        case .fnFOnly: exitHint = "⌃⌥F to exit"
+        case .singleEsc: exitHint = "⌃⌥F or Esc to exit"
+        case .doubleEsc: exitHint = "⌃⌥F or double-tap Esc to exit"
+        }
+        statusMessage = "Focused on \(cfg.name) — \(exitHint)"
     }
 
     /// Called when entering/leaving Focus mode, so the app can arm/disarm the Esc escape hatch.
