@@ -84,7 +84,7 @@ struct SidebarView: View {
                     .font(.title3).foregroundStyle(PanelTheme.accent)
                 VStack(alignment: .leading, spacing: 1) {
                     Text("AR Workspace Manager").font(.subheadline.weight(.semibold))
-                    Text("v2.0").font(.caption2).foregroundStyle(.secondary)
+                    Text("v\(coordinator.appVersion)").font(.caption2).foregroundStyle(.secondary)
                 }
             }
             .padding(.horizontal, 16).padding(.top, 18).padding(.bottom, 14)

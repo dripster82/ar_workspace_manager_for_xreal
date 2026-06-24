@@ -439,37 +439,53 @@ final class AppCoordinator: ObservableObject {
     /// Calibration progress for the UI: nil = idle, otherwise a short status line.
     @Published var driftCalibrationStatus: String?
     @Published var driftCalibrating = false
-    private let driftCalibrationSeconds: TimeInterval = 4.0
+    /// Measurement window (seconds); the calibration popup counts down for this long.
+    let driftCalibrationSeconds: TimeInterval = 15
 
-    /// Ask the user to rest the glasses still, measure the residual yaw drift, and subtract it.
-    func calibrateDrift() {
+    /// Set by the app delegate to present the calibration popup. Triggered by the ⌃⌥B hotkey, the
+    /// menu, and the Settings button via `requestCalibration()`.
+    var onCalibrationRequested: (() -> Void)?
+    func requestCalibration() { onCalibrationRequested?() }
+
+    /// Measure the residual yaw drift over `duration` seconds and subtract it. Reports `(ok, message)`
+    /// via `completion` (also mirrored to `driftCalibrationStatus`). The popup drives the countdown.
+    func calibrateDrift(duration: TimeInterval, completion: @escaping (Bool, String) -> Void) {
         guard !driftCalibrating else { return }
         guard case .connected = glassesState else {
-            driftCalibrationStatus = "Connect the glasses first."
-            return
+            let m = "Connect the glasses first."; driftCalibrationStatus = m; completion(false, m); return
         }
         driftCalibrating = true
-        driftCalibrationStatus = "Lay the glasses flat and still — measuring…"
-        IMUService.shared.calibrateDrift(duration: driftCalibrationSeconds) { [weak self] result in
+        driftCalibrationStatus = "Measuring…"
+        IMUService.shared.calibrateDrift(duration: duration) { [weak self] result in
             // completion arrives on the main queue; hop to the main actor for the @Published writes
             Task { @MainActor in
                 guard let self else { return }
                 self.driftCalibrating = false
+                let ok: Bool
+                let msg: String
                 switch result {
                 case .success(let degPerMin):
                     UserDefaults.standard.set(Double(IMUService.shared.gyroYawBiasRate), forKey: "gyroYawBiasRate")
-                    self.driftCalibrationStatus = String(format: "Calibrated — corrected %.1f°/min of drift.", abs(degPerMin))
+                    ok = true
+                    msg = String(format: "Calibrated — corrected %.1f°/min of drift.", abs(degPerMin))
                     DebugLog.shared.log(String(format: "drift calibration: %.2f°/min", degPerMin))
                 case .movedTooMuch:
-                    self.driftCalibrationStatus = "Glasses moved — keep them still and try again."
+                    ok = false; msg = "Glasses moved — keep them still and try again."
                 case .noData:
-                    self.driftCalibrationStatus = "Calibration failed — are the glasses connected?"
+                    ok = false; msg = "Calibration failed — are the glasses connected?"
                 }
+                self.driftCalibrationStatus = msg
+                completion(ok, msg)
             }
         }
     }
 
     // MARK: Update check (GitHub releases)
+
+    /// When set, the control panel switches to this page / settings sub-tab (e.g. the menu-bar
+    /// "Update available" item opens Settings → About). Cleared by the view once consumed.
+    @Published var pendingRoute: PanelRoute?
+    @Published var pendingSettingsTab: SettingsTab?
 
     /// Set when a newer release than this build is published on GitHub.
     @Published var updateAvailableVersion: String?

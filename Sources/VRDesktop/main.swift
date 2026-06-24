@@ -32,6 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var windowPicker: WindowPickerController!
     var brightnessHUD: BrightnessHUDController!
     var alarmController: AlarmController!
+    var calibrationController: CalibrationController!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let icon = NSImage(named: "AppIcon") { NSApp.applicationIconImage = icon }
@@ -54,6 +55,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         alarmController.escArmer = { [weak self] on in
             if on { self?.registerEscDismiss() } else { self?.unregisterEscDismiss() }
         }
+        calibrationController = CalibrationController(coordinator: coordinator)
+        coordinator.onCalibrationRequested = { [weak self] in self?.calibrationController.show() }
         coordinator.calendar.onAlarm = { [weak self] event, lead in
             self?.alarmController.fire(event: event, leadMinutes: lead)
         }
@@ -181,7 +184,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 case AppDelegate.passthroughHotKeyID: delegate.coordinator.togglePassthrough()
                 case AppDelegate.labelsHotKeyID: delegate.coordinator.toggleLabels()
                 case AppDelegate.windowPickerHotKeyID: delegate.windowPicker.toggle()
-                case AppDelegate.recalibrateHotKeyID: delegate.coordinator.calibrateDrift()
+                case AppDelegate.recalibrateHotKeyID: delegate.coordinator.requestCalibration()
                 case AppDelegate.quitHotKeyID: NSApp.terminate(nil)
                 default: break
                 }
@@ -269,7 +272,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         add("Open AR Workspace Manager", #selector(openWindow))
         if let v = coordinator.updateAvailableVersion, coordinator.updateURL != nil {
-            add("⬇ Update available: v\(v) — Download…", #selector(openUpdatePage))
+            add("⬇ Update available: v\(v) — Update…", #selector(openUpdatePage))
         }
         menu.addItem(.separator())
 
@@ -346,7 +349,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @MainActor @objc private func toggleLaunchAtLogin() { coordinator.launchAtLogin.toggle() }
 
-    @MainActor @objc private func menuRecalibrate() { coordinator.calibrateDrift() }
+    @MainActor @objc private func menuRecalibrate() { coordinator.requestCalibration() }
     @MainActor @objc private func menuToggleFocus() { coordinator.toggleFocus() }
     @MainActor @objc private func menuTogglePassthrough() { coordinator.togglePassthrough() }
     @MainActor @objc private func menuToggleHUD() { coordinator.toggleHUD() }
@@ -356,7 +359,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @MainActor @objc private func menuRecord() { coordinator.toggleRecording() }
     @MainActor @objc private func menuMicMute() { coordinator.toggleMicMute() }
     @MainActor @objc private func openUpdatePage() {
-        if let url = coordinator.updateURL { NSWorkspace.shared.open(url) }
+        // Open the in-app About page (Settings → About) where Download & Install lives.
+        coordinator.pendingRoute = .settings
+        coordinator.pendingSettingsTab = .about
+        openWindow()
     }
 
     func applicationWillTerminate(_ notification: Notification) {

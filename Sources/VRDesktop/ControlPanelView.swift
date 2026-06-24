@@ -33,6 +33,13 @@ struct ControlPanelView: View {
         .frame(minWidth: 940, idealWidth: 1040, minHeight: 640, idealHeight: 720)
         .preferredColorScheme(.dark)
         .tint(PanelTheme.accent)
+        // External navigation requests (e.g. the menu-bar "Update available" → Settings → About).
+        .onChange(of: coordinator.pendingRoute) { r in
+            if let r { route = r; coordinator.pendingRoute = nil }
+        }
+        .onChange(of: coordinator.pendingSettingsTab) { t in
+            if let t { settingsTab = t; coordinator.pendingSettingsTab = nil }
+        }
     }
 
     private var topBar: some View {
@@ -151,6 +158,12 @@ struct ControlPanelView: View {
                                 Text(s).font(.caption).foregroundStyle(.secondary)
                             }
                         }
+                        Divider().padding(.vertical, 2)
+                        HStack(spacing: 14) {
+                            Link("GitHub repo", destination: URL(string: "https://github.com/dripster82/ar_workspace_manager_for_xreal")!)
+                            Link("Releases", destination: URL(string: "https://github.com/dripster82/ar_workspace_manager_for_xreal/releases")!)
+                        }
+                        .font(.caption).controlSize(.small)
                     }
                 }
             }
@@ -1134,7 +1147,7 @@ struct ControlPanelView: View {
                       + "works even while turning your head. No effect until you've calibrated.")
             HStack(spacing: 8) {
                 Button(coordinator.driftCalibrating ? "Calibrating…" : "Calibrate drift") {
-                    coordinator.calibrateDrift()
+                    coordinator.requestCalibration()
                 }
                 .controlSize(.small)
                 .disabled(coordinator.driftCalibrating || !glassesConnected)
