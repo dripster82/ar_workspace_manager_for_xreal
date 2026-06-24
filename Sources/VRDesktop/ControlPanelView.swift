@@ -1245,6 +1245,16 @@ struct ControlPanelView: View {
                 .pickerStyle(.segmented).labelsHidden()
             }
             .help("Renders the scene above display resolution then downscales — smooths edges AND keeps text crisp; 2× has real GPU cost")
+            HStack {
+                Text("Capture fps").frame(width: 78, alignment: .leading).font(.caption)
+                Picker("", selection: $coordinator.captureFPS) {
+                    Text("30").tag(30)
+                    Text("60").tag(60)
+                    Text("120").tag(120)
+                }
+                .pickerStyle(.segmented).labelsHidden()
+            }
+            .help("How often captured screen content refreshes — higher is smoother (scrolling/video/cursor) but costs more, especially with many screens. Reprojection runs at full display rate regardless.")
             Divider()
             Toggle("Fake head pose (no glasses needed)", isOn: $coordinator.useFakePose)
             if coordinator.useFakePose {

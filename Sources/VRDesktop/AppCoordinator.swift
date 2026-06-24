@@ -69,6 +69,14 @@ final class AppCoordinator: ObservableObject {
         didSet { renderer?.setRenderScale(Double(renderScalePercent) / 100)
                  UserDefaults.standard.set(renderScalePercent, forKey: "renderScalePercent") }
     }
+    /// Screen-capture frame rate (CaptureSource reads it when a capture starts). Restarts AR so the
+    /// new rate takes effect immediately.
+    @Published var captureFPS: Int = UserDefaults.standard.object(forKey: "captureFPS") as? Int ?? 60 {
+        didSet {
+            UserDefaults.standard.set(captureFPS, forKey: "captureFPS")
+            if captureFPS != oldValue, arActive { restartARIfActive(preserveLayout: true) }
+        }
+    }
 
     // Fake pose for glasses-free testing.
     @Published var useFakePose = false { didSet { applyFakePose() } }
