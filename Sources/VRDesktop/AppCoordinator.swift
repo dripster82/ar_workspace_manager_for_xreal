@@ -14,6 +14,8 @@ final class AppCoordinator: ObservableObject {
     @Published var imuRate: Double = 0
     @Published var renderFPS: Double = 0
     @Published var euler: (yaw: Double, pitch: Double, roll: Double) = (0, 0, 0)
+    @Published var imuTemperature: Double = 0   // °C
+    @Published var linearAccel: (x: Double, y: Double, z: Double) = (0, 0, 0)  // g, gravity removed
     @Published var arActive = false
     @Published var outputWindowInfo: String = "—"
     @Published var screenList: [String] = []
@@ -330,7 +332,8 @@ final class AppCoordinator: ObservableObject {
         lastSampleCount = count
         let fps = renderer?.framesPerSecond ?? 0
 
-        let q = IMUService.shared.poseStore.latest().orientation
+        let pose = IMUService.shared.poseStore.latest()
+        let q = pose.orientation
         let toDeg = 180.0 / Double.pi
         let e = (
             yaw: Double(atan2f(2 * (q.real * q.imag.y + q.imag.x * q.imag.z),
@@ -391,6 +394,8 @@ final class AppCoordinator: ObservableObject {
         imuRate = rate
         renderFPS = fps
         euler = e
+        imuTemperature = Double(pose.temperature)
+        linearAccel = (Double(pose.acceleration.x), Double(pose.acceleration.y), Double(pose.acceleration.z))
 
         refreshDisplayDiagnostics()
         updateLookedAtScreen()
@@ -446,6 +451,12 @@ final class AppCoordinator: ObservableObject {
     /// menu, and the Settings button via `requestCalibration()`.
     var onCalibrationRequested: (() -> Void)?
     func requestCalibration() { onCalibrationRequested?() }
+
+    /// App-delegate-owned overlays, exposed so the Dashboard quick actions can trigger them too
+    /// (normally driven by the global ⌃⌥H / ⌃⌥C / ⌃⌥W hotkeys).
+    var onToggleHelp: (() -> Void)?
+    var onToggleCursorInfo: (() -> Void)?
+    var onToggleWindowPicker: (() -> Void)?
 
     /// Measure the residual yaw drift over `duration` seconds and subtract it. Reports `(ok, message)`
     /// via `completion` (also mirrored to `driftCalibrationStatus`). The popup drives the countdown.

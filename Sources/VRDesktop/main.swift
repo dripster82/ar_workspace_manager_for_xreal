@@ -57,6 +57,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         calibrationController = CalibrationController(coordinator: coordinator)
         coordinator.onCalibrationRequested = { [weak self] in self?.calibrationController.show() }
+        coordinator.onToggleHelp = { [weak self] in self?.helpOverlay.toggle() }
+        coordinator.onToggleCursorInfo = { [weak self] in self?.cursorInfoOverlay.toggle() }
+        coordinator.onToggleWindowPicker = { [weak self] in self?.windowPicker.toggle() }
         coordinator.calendar.onAlarm = { [weak self] event, lead in
             self?.alarmController.fire(event: event, leadMinutes: lead)
         }

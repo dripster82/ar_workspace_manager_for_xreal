@@ -47,6 +47,8 @@ struct OneEuroOrientation {
 public struct Pose: Sendable {
     public var orientation: simd_quatf
     public var angularVelocity: SIMD3<Float> // rad/s, device frame
+    public var acceleration: SIMD3<Float>    // g, linear (gravity removed), device frame
+    public var temperature: Float            // °C, from the IMU
     public var timestamp: TimeInterval       // host clock (CACurrentMediaTime base)
 
     public static let identity = Pose(
@@ -55,9 +57,12 @@ public struct Pose: Sendable {
         timestamp: 0
     )
 
-    public init(orientation: simd_quatf, angularVelocity: SIMD3<Float>, timestamp: TimeInterval) {
+    public init(orientation: simd_quatf, angularVelocity: SIMD3<Float>, timestamp: TimeInterval,
+                acceleration: SIMD3<Float> = .zero, temperature: Float = 0) {
         self.orientation = orientation
         self.angularVelocity = angularVelocity
+        self.acceleration = acceleration
+        self.temperature = temperature
         self.timestamp = timestamp
     }
 

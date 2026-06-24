@@ -163,7 +163,12 @@ public final class IMUService: @unchecked Sendable {
             ? simd_normalize(simd_quatf(angle: totalYawCorrection, axis: SIMD3(0, 1, 0)) * qSmooth)
             : qSmooth
 
-        poseStore.update(Pose(orientation: corrected, angularVelocity: velFiltered, timestamp: now))
+        // Linear acceleration (gravity removed) from the fusion, and the IMU temperature (on the
+        // device struct, updated by the read that triggered this callback).
+        let la = device_imu_get_linear_acceleration(ahrs)
+        let accel = SIMD3<Float>(la.x, la.y, la.z)
+        poseStore.update(Pose(orientation: corrected, angularVelocity: velFiltered, timestamp: now,
+                              acceleration: accel, temperature: device.temperature))
 
         // Raw/filtered diagnostics for head-movement testing (throttled to ~60 Hz).
         if rawLoggingEnabled, let rawLog, now - lastRawLog >= 0.016 {

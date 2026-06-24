@@ -19,6 +19,7 @@ final class CalibrationController: NSObject, ObservableObject {
     private var panel: NSPanel?
     private var timer: Timer?
     private var sound: NSSound?
+    private var succeeded = false   // recenter on dismiss if the last run calibrated OK
 
     init(coordinator: AppCoordinator) {
         self.coordinator = coordinator
@@ -63,11 +64,18 @@ final class CalibrationController: NSObject, ObservableObject {
         sound?.stop()
         sound = nil
         panel?.orderOut(nil)
+        // Recenter once dismissed after a good run — by now the glasses are on and facing forward,
+        // so the view snaps to where you're actually looking.
+        if succeeded {
+            succeeded = false
+            coordinator.recenter()
+        }
     }
 
     private func finish(ok: Bool, message: String) {
         timer?.invalidate()
         timer = nil
+        succeeded = ok
         phase = .done(ok: ok, message: message)
         // Tone signals "measurement finished — safe to pick the glasses back up".
         let s = NSSound(named: NSSound.Name("Glass")) ?? NSSound(named: NSSound.Name("Ping"))

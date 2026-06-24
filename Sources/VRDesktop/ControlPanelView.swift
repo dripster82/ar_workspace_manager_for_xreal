@@ -90,14 +90,22 @@ struct ControlPanelView: View {
         VStack(spacing: 14) {
             statusCard
             card("Quick actions", "bolt") {
-                HStack(spacing: 10) {
-                    quickAction("Recenter", "scope") { coordinator.recenter() }
-                    quickAction("Focus", "viewfinder") { coordinator.toggleFocus() }
-                    quickAction("Passthrough", "eye") { coordinator.togglePassthrough() }
-                    quickAction("Labels", "tag") { coordinator.toggleLabels() }
-                    quickAction("Screenshot", "camera") { coordinator.takeGlassesScreenshot() }
-                    quickAction("Record", "record.circle") { coordinator.toggleRecording() }
-                    Spacer()
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 88), spacing: 10)],
+                          alignment: .leading, spacing: 10) {
+                    quickAction("Recenter", "scope", "⌃⌥Space") { coordinator.recenter() }
+                    quickAction("Recalibrate", "gyroscope", "⌃⌥B") { coordinator.requestCalibration() }
+                    quickAction("Focus", "viewfinder", "⌃⌥F", arOnly: true) { coordinator.toggleFocus() }
+                    quickAction("Passthrough", "eye", "⌃⌥V", arOnly: true) { coordinator.togglePassthrough() }
+                    quickAction("HUD", "rectangle.on.rectangle", "⌃⌥I", arOnly: true) { coordinator.toggleHUD() }
+                    quickAction("Labels", "tag", "⌃⌥L", arOnly: true) { coordinator.toggleLabels() }
+                    quickAction("Stereo", "view.3d", "⌃⌥D", arOnly: true) { coordinator.setStereo(!coordinator.stereoEnabled) }
+                    quickAction("Move Window", "macwindow.on.rectangle", "⌃⌥W", arOnly: true) { coordinator.onToggleWindowPicker?() }
+                    quickAction("Find Cursor", "cursorarrow.rays", "⌃⌥C") { coordinator.onToggleCursorInfo?() }
+                    quickAction("Cursor→Gaze", "cursorarrow.motionlines", "⌃⌥X", arOnly: true) { coordinator.moveCursorToGaze() }
+                    quickAction("Screenshot", "camera", "⌃⌥P", arOnly: true) { coordinator.takeGlassesScreenshot() }
+                    quickAction("Record", "record.circle", "⌃⌥R", arOnly: true) { coordinator.toggleRecording() }
+                    quickAction("Mute Mic", "mic.slash", "⌃⌥M", arOnly: true) { coordinator.toggleMicMute() }
+                    quickAction("Help", "keyboard", "⌃⌥H") { coordinator.onToggleHelp?() }
                 }
             }
         }
@@ -447,17 +455,24 @@ struct ControlPanelView: View {
         }
     }
 
-    private func quickAction(_ title: String, _ icon: String, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(spacing: 6) {
+    /// A dashboard quick-action tile mirroring a keyboard shortcut. `arOnly` disables it when AR isn't
+    /// running (the action would be a no-op).
+    private func quickAction(_ title: String, _ icon: String, _ key: String,
+                             arOnly: Bool = false, _ action: @escaping () -> Void) -> some View {
+        let enabled = !arOnly || coordinator.arActive
+        return Button(action: action) {
+            VStack(spacing: 3) {
                 Image(systemName: icon).font(.title3)
-                Text(title).font(.caption2)
+                Text(title).font(.caption2).lineLimit(1)
+                Text(key).font(.system(size: 9, design: .monospaced)).foregroundStyle(.secondary)
             }
-            .frame(width: 80, height: 62)
+            .frame(width: 88, height: 66)
             .background(PanelTheme.card, in: RoundedRectangle(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(PanelTheme.border))
         }
         .buttonStyle(.plain)
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.45)
     }
 
     private var bottomBar: some View {
@@ -508,6 +523,10 @@ struct ControlPanelView: View {
                 HStack(spacing: 16) {
                     Label(String(format: "%.0f Hz", coordinator.imuRate), systemImage: "gyroscope")
                     Label(String(format: "%.0f fps", coordinator.renderFPS), systemImage: "speedometer")
+                    if coordinator.imuTemperature > 0 {
+                        Label(String(format: "%.0f°C", coordinator.imuTemperature), systemImage: "thermometer.medium")
+                            .help("Glasses IMU temperature — gyro drift tends to increase as it warms up.")
+                    }
                 }
                 .font(.caption).foregroundStyle(.secondary).monospacedDigit()
                 Text(String(format: "yaw %+6.1f°   pitch %+6.1f°   roll %+6.1f°",
@@ -1007,6 +1026,19 @@ struct ControlPanelView: View {
                     }
                 }
             }
+            card("IMU", "gyroscope") {
+                let a = coordinator.linearAccel
+                let mag = (a.x * a.x + a.y * a.y + a.z * a.z).squareRoot()
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(String(format: "Temperature   %.1f °C", coordinator.imuTemperature))
+                        .font(.system(.caption, design: .monospaced))
+                    Text(String(format: "Linear accel (g)   x %+.2f   y %+.2f   z %+.2f   |a| %.2f",
+                                a.x, a.y, a.z, mag))
+                        .font(.system(.caption, design: .monospaced))
+                    Text(String(format: "Sample rate   %.0f Hz", coordinator.imuRate))
+                        .font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
+                }
+            }
             card("System health", "waveform.path.ecg") { systemHealthSection }
             card("Displays", "rectangle.on.rectangle") { diagnosticsInfo }
             #if DEBUG
@@ -1138,13 +1170,13 @@ struct ControlPanelView: View {
                          help: "higher = snappier on fast head turns (less lag)")
             tuningSlider("Prediction", $coordinator.predictionLeadMs, 0...50, unit: "ms", decimals: 0,
                          help: "higher = compensates lag, may overshoot")
-            Toggle("Anti-drift (hold yaw when still)", isOn: $coordinator.driftCorrection)
+            Toggle("Ignore small movements", isOn: $coordinator.driftCorrection)
                 .font(.caption)
-                .help("Freezes heading while your head is still, cancelling the slow sideways slide. Safe; doesn't affect head turns.")
-            Toggle("Subtract calibrated drift (during turns too)", isOn: $coordinator.biasDriftCorrection)
+                .help("Holds your heading steady while your head is still, so tiny movements don't slowly shift the view sideways. Safe; doesn't affect real head turns.")
+            Toggle("Anti Drift", isOn: $coordinator.biasDriftCorrection)
                 .font(.caption)
-                .help("Applies the constant gyro-bias correction measured by 'Calibrate drift' — "
-                      + "works even while turning your head. No effect until you've calibrated.")
+                .help("Continuously subtracts the calibrated drift rate (works even while turning your head). "
+                      + "Calibrate it with the button below first.")
             HStack(spacing: 8) {
                 Button(coordinator.driftCalibrating ? "Calibrating…" : "Calibrate drift") {
                     coordinator.requestCalibration()
