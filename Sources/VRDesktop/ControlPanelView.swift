@@ -88,7 +88,55 @@ struct ControlPanelView: View {
 
     private var dashboardPage: some View {
         VStack(spacing: 14) {
-            statusCard
+            card("Status", "gauge.with.dots.needle.33percent") {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 116), spacing: 10)],
+                          alignment: .leading, spacing: 10) {
+                    kpiTile("Glasses", glassesConnected ? "Connected" : "Not connected",
+                            "eyeglasses", glassesConnected ? .green : .secondary)
+                    kpiTile("AR", coordinator.arActive ? "On" : "Off",
+                            coordinator.arActive ? "dot.radiowaves.left.and.right" : "pause.circle",
+                            coordinator.arActive ? .green : .secondary) { coordinator.toggleAR() }
+                    kpiTile("IMU rate", String(format: "%.0f Hz", coordinator.imuRate), "gyroscope", .secondary)
+                    kpiTile("Render", String(format: "%.0f fps", coordinator.renderFPS), "speedometer", .secondary)
+                    kpiTile("Temp", coordinator.imuTemperature > 0 ? String(format: "%.0f°C", coordinator.imuTemperature) : "—",
+                            "thermometer.medium", coordinator.imuTemperature >= 45 ? .orange : .secondary)
+                    kpiTile("Yaw", String(format: "%+.1f°", coordinator.euler.yaw), "arrow.left.arrow.right", .secondary)
+                    kpiTile("Pitch", String(format: "%+.1f°", coordinator.euler.pitch), "arrow.up.arrow.down", .secondary)
+                    kpiTile("Roll", String(format: "%+.1f°", coordinator.euler.roll), "rotate.3d", .secondary)
+                    updateKPI
+                    kpiTile("Screen Rec", coordinator.hasScreenRecordingPermission ? "Granted" : "Needs access",
+                            coordinator.hasScreenRecordingPermission ? "checkmark.seal.fill" : "exclamationmark.triangle.fill",
+                            coordinator.hasScreenRecordingPermission ? .green : .orange,
+                            action: coordinator.hasScreenRecordingPermission ? nil : { coordinator.requestScreenRecordingPermission() })
+                    kpiTile("Accessibility", coordinator.hasAccessibilityPermission ? "Granted" : "Needs access",
+                            coordinator.hasAccessibilityPermission ? "checkmark.seal.fill" : "exclamationmark.triangle.fill",
+                            coordinator.hasAccessibilityPermission ? .green : .orange,
+                            action: coordinator.hasAccessibilityPermission ? nil : { coordinator.requestAccessibilityPermission() })
+                    kpiTile("Microphone", coordinator.hasMicrophonePermission ? "Granted" : "Needs access",
+                            coordinator.hasMicrophonePermission ? "checkmark.seal.fill" : "exclamationmark.triangle.fill",
+                            coordinator.hasMicrophonePermission ? .green : .orange,
+                            action: coordinator.hasMicrophonePermission ? nil : { coordinator.requestMicrophonePermission() })
+                }
+            }
+            card("Head tracking", "scope") {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 8) {
+                        Button("Recenter") { coordinator.recenter() }
+                        Text("⌃⌥Space").font(.caption2).foregroundStyle(.secondary)
+                        Button("Recalibrate") { coordinator.requestCalibration() }
+                        Text("⌃⌥B").font(.caption2).foregroundStyle(.secondary)
+                        Spacer()
+                        Toggle("Include roll", isOn: $coordinator.recenterRoll).toggleStyle(.checkbox)
+                            .help("Off: horizon stays gravity-level when recentering")
+                    }
+                    .controlSize(.small)
+                    if coordinator.brightnessAvailable { brightnessControl }
+                    if let looking = coordinator.lookedAtScreenName {
+                        Label("Looking at: \(looking)", systemImage: "eye")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
             card("Quick actions", "bolt") {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 88), spacing: 10)],
                           alignment: .leading, spacing: 10) {
@@ -108,6 +156,10 @@ struct ControlPanelView: View {
                     quickAction("Help", "keyboard", "⌃⌥H") { coordinator.onToggleHelp?() }
                 }
             }
+        }
+        .onAppear { coordinator.refreshPermissions() }
+        .onReceive(Timer.publish(every: 3, on: .main, in: .common).autoconnect()) { _ in
+            coordinator.refreshPermissions()
         }
     }
 
@@ -470,6 +522,43 @@ struct ControlPanelView: View {
 
     /// A dashboard quick-action tile mirroring a keyboard shortcut. `arOnly` disables it when AR isn't
     /// running (the action would be a no-op).
+    /// A compact KPI tile: icon, a big value, and a label. Optional `action` makes it tappable.
+    @ViewBuilder
+    private func kpiTile(_ title: String, _ value: String, _ system: String, _ tint: Color,
+                         action: (() -> Void)? = nil) -> some View {
+        let tile = VStack(alignment: .leading, spacing: 5) {
+            Image(systemName: system).font(.callout).foregroundStyle(tint)
+            Text(value).font(.system(.title3, design: .rounded).weight(.semibold))
+                .lineLimit(1).minimumScaleFactor(0.55)
+            Text(title).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
+        .padding(10)
+        .background(PanelTheme.card, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(tint.opacity(0.35)))
+        if let action {
+            Button(action: action) { tile }.buttonStyle(.plain)
+        } else {
+            tile
+        }
+    }
+
+    /// Update status KPI — checking / update-ready (opens About) / up to date (re-checks on tap).
+    @ViewBuilder private var updateKPI: some View {
+        if coordinator.checkingForUpdate {
+            kpiTile("Updates", "Checking…", "arrow.triangle.2.circlepath", .secondary)
+        } else if let v = coordinator.updateAvailableVersion {
+            kpiTile("Update ready", "v\(v)", "arrow.down.circle.fill", .orange) {
+                coordinator.pendingRoute = .settings
+                coordinator.pendingSettingsTab = .about
+            }
+        } else {
+            kpiTile("Updates", "Up to date", "checkmark.seal.fill", .green) {
+                coordinator.checkForUpdates()
+            }
+        }
+    }
+
     private func quickAction(_ title: String, _ icon: String, _ key: String,
                              arOnly: Bool = false, _ action: @escaping () -> Void) -> some View {
         let enabled = !arOnly || coordinator.arActive
@@ -514,53 +603,6 @@ struct ControlPanelView: View {
                 .padding(.top, 4)
         } label: {
             Label(title, systemImage: icon).font(.headline)
-        }
-    }
-
-    // MARK: Status (header card)
-
-    private var statusCard: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    Circle().fill(glassesConnected ? Color.green : Color.secondary)
-                        .frame(width: 9, height: 9)
-                    Text(glassesLabel).font(.headline)
-                    Spacer()
-                    if coordinator.arActive {
-                        Text("AR ON").font(.caption.bold())
-                            .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(Color.accentColor.opacity(0.2), in: Capsule())
-                    }
-                }
-                HStack(spacing: 16) {
-                    Label(String(format: "%.0f Hz", coordinator.imuRate), systemImage: "gyroscope")
-                    Label(String(format: "%.0f fps", coordinator.renderFPS), systemImage: "speedometer")
-                    if coordinator.imuTemperature > 0 {
-                        Label(String(format: "%.0f°C", coordinator.imuTemperature), systemImage: "thermometer.medium")
-                            .help("Glasses IMU temperature — gyro drift tends to increase as it warms up.")
-                    }
-                }
-                .font(.caption).foregroundStyle(.secondary).monospacedDigit()
-                Text(String(format: "yaw %+6.1f°   pitch %+6.1f°   roll %+6.1f°",
-                            coordinator.euler.yaw, coordinator.euler.pitch, coordinator.euler.roll))
-                    .font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
-                if let looking = coordinator.lookedAtScreenName {
-                    Label("Looking at: \(looking)", systemImage: "eye")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                HStack {
-                    Button("Recenter") { coordinator.recenter() }
-                    Text("⌃⌥Space").font(.caption2).foregroundStyle(.secondary)
-                    Spacer()
-                    Toggle("Include roll", isOn: $coordinator.recenterRoll)
-                        .toggleStyle(.checkbox)
-                        .help("Off: horizon stays gravity-level when recentering")
-                }
-                if coordinator.brightnessAvailable { brightnessControl }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 2)
         }
     }
 
