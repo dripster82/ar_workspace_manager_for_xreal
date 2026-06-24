@@ -47,7 +47,7 @@ final class GitHubService: ObservableObject {
     /// the Org field is appended automatically. Defaults match the verified GitHub queries.
     static let queryDefs: [(key: String, label: String, def: String)] = [
         ("needsReview", "Needs your review", "is:pr user-review-requested:@me state:open archived:false {fresh}"),
-        ("teamReview", "Team review", "is:pr team-review-requested-user:@me state:open archived:false {fresh}"),
+        ("teamReview", "Team review", "is:pr review-requested:@me -user-review-requested:@me state:open -is:draft archived:false {fresh}"),
         ("changesRequested", "Changes requested", "is:pr author:@me state:open review:changes_requested archived:false -is:draft {fresh}"),
         ("failingChecks", "Failing checks", "is:pr author:@me state:open status:failure archived:false -is:draft {fresh}"),
         ("readyToMerge", "Ready to merge", "is:pr author:@me state:open -is:draft review:approved -review:changes_requested -status:failure -is:queued archived:false {fresh}"),
