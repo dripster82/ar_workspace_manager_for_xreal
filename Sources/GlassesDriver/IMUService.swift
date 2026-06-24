@@ -29,6 +29,7 @@ public final class IMUService: @unchecked Sendable {
     public var stateChanged: ((GlassesState) -> Void)?
 
     private var device = device_imu_type()
+    private var netDevice = device_imu_net_type()
     private var thread: Thread?
     private var running = false
     /// Latest IMU temperature (°C), read AFTER each `device_imu_read` returns. We must NOT touch
@@ -36,6 +37,25 @@ public final class IMUService: @unchecked Sendable {
     /// and a concurrent access trips Swift's exclusivity check → abort), so we stash it here.
     private var lastTemperature: Float = 0
     private let queue = DispatchQueue(label: "imu.control")
+
+    /// True while the network (XREAL One series) IMU transport is active. The One-series IMU sits
+    /// physically tilted in the frame (~39° pitch), so its orientation needs a fixed body-frame
+    /// mount correction to bring a level head to level — the Air's IMU is mounted flat and doesn't.
+    /// Also used by the app to warn that the glasses' own X1 spatial modes must be off (the One
+    /// series can anchor the screen onboard, which double-tracks against this app).
+    public private(set) var usingNetworkIMU = false
+
+    /// Body-frame mount correction for the One-series IMU, applied as `raw * correction`. Pitch/roll
+    /// validated against real XREAL One Pro motion capture (levels the rest pose and decouples
+    /// head-turns from roll). Overridable via ARWM_ONE_TILT_PITCH / ARWM_ONE_TILT_ROLL (degrees).
+    private let oneMountCorrection: simd_quatf = {
+        let env = ProcessInfo.processInfo.environment
+        let pitch = (env["ARWM_ONE_TILT_PITCH"].flatMap { Float($0) } ?? -39) * .pi / 180
+        let roll  = (env["ARWM_ONE_TILT_ROLL"].flatMap { Float($0) } ?? -2) * .pi / 180
+        let p = simd_quatf(angle: pitch, axis: SIMD3(1, 0, 0))
+        let r = simd_quatf(angle: roll,  axis: SIMD3(0, 0, 1))
+        return simd_normalize(p * r)
+    }()
 
     private init() {}
 
@@ -76,29 +96,57 @@ public final class IMUService: @unchecked Sendable {
 
     private func readLoop() {
         while running {
+            // 1) XREAL Air series — IMU is a HID report stream. Unchanged behaviour for Air users.
             var dev = device_imu_type()
-            let err = device_imu_open(&dev, imuEventCallback)
-            if err != DEVICE_IMU_ERROR_NO_ERROR {
+            if device_imu_open(&dev, imuEventCallback) == DEVICE_IMU_ERROR_NO_ERROR {
+                device = dev
+                device_imu_clear(&device)
+                usingNetworkIMU = false
+                announceConnected(productID: device.product_id, transport: "HID")
+                NSLog("IMUService: opened (HID) VID 0x%04x PID 0x%04x", device.vendor_id, device.product_id)
+                while running {
+                    let r = device_imu_read(&device, 100) // ms timeout
+                    if r == DEVICE_IMU_ERROR_UNPLUGGED || r == DEVICE_IMU_ERROR_NO_DEVICE || r == DEVICE_IMU_ERROR_NO_HANDLE {
+                        break
+                    }
+                    lastTemperature = device.temperature  // safe here: the read's inout access has ended
+                }
+                device_imu_close(&device)
                 DispatchQueue.main.async { self.state = .disconnected }
-                Thread.sleep(forTimeInterval: 2.0) // retry until plugged in
                 continue
             }
-            device = dev
-            device_imu_clear(&device)
-            let product = "XREAL (PID 0x\(String(device.product_id, radix: 16)))"
-            DispatchQueue.main.async { self.state = .connected(product: product) }
-            NSLog("IMUService: opened VID 0x%04x PID 0x%04x", device.vendor_id, device.product_id)
 
-            while running {
-                let r = device_imu_read(&device, 100) // ms timeout
-                if r == DEVICE_IMU_ERROR_UNPLUGGED || r == DEVICE_IMU_ERROR_NO_DEVICE || r == DEVICE_IMU_ERROR_NO_HANDLE {
-                    break
+            // 2) XREAL One series — IMU streams over the glasses' USB-ethernet link (TCP). Only
+            //    attempted when no Air HID IMU was found; gated internally on a XREAL device being
+            //    plugged in, so it never probes the network otherwise.
+            var ndev = device_imu_net_type()
+            if device_imu_net_open(&ndev, imuEventCallback) == DEVICE_IMU_ERROR_NO_ERROR {
+                netDevice = ndev
+                usingNetworkIMU = true
+                announceConnected(productID: netDevice.product_id, transport: "network")
+                NSLog("IMUService: opened (network) PID 0x%04x", netDevice.product_id)
+                while running {
+                    let r = device_imu_net_read(&netDevice, 100) // ms timeout
+                    if r == DEVICE_IMU_ERROR_UNPLUGGED || r == DEVICE_IMU_ERROR_NO_DEVICE || r == DEVICE_IMU_ERROR_NO_HANDLE {
+                        break
+                    }
+                    lastTemperature = netDevice.temperature  // One-series IMU temperature
                 }
-                lastTemperature = device.temperature  // safe here: the read's inout access has ended
+                device_imu_net_close(&netDevice)
+                DispatchQueue.main.async { self.state = .disconnected }
+                continue
             }
-            device_imu_close(&device)
+
+            // 3) Nothing connected — wait and retry.
             DispatchQueue.main.async { self.state = .disconnected }
+            Thread.sleep(forTimeInterval: 2.0)
         }
+    }
+
+    private func announceConnected(productID: UInt16, transport: String) {
+        let name = String(cString: xreal_product_name(productID))
+        let product = productID != 0 ? "\(name) (PID 0x\(String(productID, radix: 16)))" : name
+        DispatchQueue.main.async { self.state = .connected(product: product) }
     }
 
     fileprivate func handleUpdate(_ ahrs: OpaquePointer?) {
@@ -107,7 +155,10 @@ public final class IMUService: @unchecked Sendable {
         // Driver axes are a cyclic permutation of the render world's (x=pitch, y=yaw, z=roll):
         // driver y carries pitch, z carries yaw, x carries roll. Remap (x,y,z) → (y,z,x),
         // with yaw and roll negated (driver's frame is mirrored on those axes vs. the render world).
-        let raw = simd_normalize(simd_quatf(ix: q.y, iy: -q.z, iz: -q.x, r: q.w))
+        var raw = simd_normalize(simd_quatf(ix: q.y, iy: -q.z, iz: -q.x, r: q.w))
+        // One-series IMU is mounted tilted in the frame; bring "level head" to level so the screen
+        // sits straight ahead and head-turns don't couple into roll. (No-op for the Air path.)
+        if usingNetworkIMU { raw = simd_normalize(raw * oneMountCorrection) }
         let now = CACurrentMediaTime()
 
         // Estimate instantaneous angular velocity from successive raw orientations.

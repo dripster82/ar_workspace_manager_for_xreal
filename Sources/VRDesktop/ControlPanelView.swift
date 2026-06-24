@@ -255,7 +255,20 @@ struct ControlPanelView: View {
                         .onSubmit { coordinator.renameActiveWorkspace(workspaceName) }
                         .onAppear { syncWorkspaceName() }
                     Button { coordinator.addWorkspace(); syncWorkspaceName() } label: { Image(systemName: "plus") }
-                        .help("New workspace")
+                        .help("New empty workspace")
+                    Menu {
+                        Section("New from template (sized for readable text)") {
+                            ForEach(WorkspaceTemplate.allCases) { t in
+                                Button("\(t.title) — \(t.subtitle)") {
+                                    coordinator.addWorkspaceFromTemplate(t); syncWorkspaceName()
+                                }
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "square.grid.2x2")
+                    }
+                    .menuStyle(.borderlessButton).fixedSize()
+                    .help("New workspace from a template")
                     Button(role: .destructive) { coordinator.deleteActiveWorkspace(); syncWorkspaceName() } label: {
                         Image(systemName: "trash")
                     }
@@ -642,6 +655,14 @@ struct ControlPanelView: View {
                           systemImage: "exclamationmark.triangle")
                         .font(.caption).foregroundStyle(.orange)
                     Button("Stop mirroring") { coordinator.stopMirroring() }
+                }
+            }
+            if !coordinator.hasScreenRecordingPermission {
+                HStack {
+                    Label("Screen Recording is off — required to show your screens in AR",
+                          systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.orange)
+                    Button("Grant") { coordinator.requestScreenRecordingPermission() }
                 }
             }
             Picker("Output screen", selection: $selectedScreenID) {

@@ -53,7 +53,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         coordinator.onBrightnessChanged = { [weak self] in self?.brightnessHUD.flash() }
         alarmController = AlarmController(coordinator: coordinator)
         alarmController.escArmer = { [weak self] on in
-            if on { self?.registerEscDismiss() } else { self?.unregisterEscDismiss() }
+            self?.escForAlarm = on
+            self?.updateEscArming()
+        }
+        // Esc also escapes Focus mode (which confines the cursor to the focused screen) — otherwise
+        // the only exit is ⌃⌥F, which is easy to miss and unreachable if the cursor is trapped away
+        // from the control panel.
+        coordinator.onFocusChanged = { [weak self] focused in
+            self?.escForFocus = focused
+            self?.updateEscArming()
         }
         calibrationController = CalibrationController(coordinator: coordinator)
         coordinator.onCalibrationRequested = { [weak self] in self?.calibrationController.show() }
@@ -79,6 +87,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         setupMenuBar()
         registerGlobalRecenterHotKey()
         startBrightnessHotKey()
+
+        // Ask for Screen Recording up front so it's granted before the user ever hits Start AR —
+        // rather than discovering the requirement mid-start. No-op once the choice has been made.
+        coordinator.requestScreenRecordingAtLaunch()
     }
 
     /// Install a standard main menu with an Edit menu so ⌘X/⌘C/⌘V/⌘A/⌘Z route to the focused
@@ -178,7 +190,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     delegate.coordinator.setStereo(!delegate.coordinator.stereoEnabled)
                 case AppDelegate.cursorInfoHotKeyID: delegate.cursorInfoOverlay.toggle()
                 case AppDelegate.cursorToGazeHotKeyID: delegate.coordinator.moveCursorToGaze()
-                case AppDelegate.escDismissHotKeyID: delegate.alarmController.dismiss()
+                case AppDelegate.escDismissHotKeyID: delegate.handleEscPressed()
                 case AppDelegate.screenshotHotKeyID: delegate.coordinator.takeGlassesScreenshot()
                 case AppDelegate.recordHotKeyID: delegate.coordinator.toggleRecording()
                 case AppDelegate.micMuteHotKeyID: delegate.coordinator.toggleMicMute()
@@ -223,8 +235,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         register(kVK_ANSI_B, AppDelegate.recalibrateHotKeyID, &recalibrateHotKeyRef)
     }
 
-    /// Esc-to-dismiss: a plain Escape hotkey registered only while an alarm is showing (so it
-    /// doesn't swallow Esc the rest of the time), routed through the same dispatcher.
+    /// A plain Escape hotkey is registered only while it's actually wanted — when an alarm is
+    /// showing OR Focus mode is active — so it doesn't swallow Esc the rest of the time.
+    private var escForAlarm = false
+    private var escForFocus = false
+
+    @MainActor func updateEscArming() {
+        if escForAlarm || escForFocus { registerEscDismiss() } else { unregisterEscDismiss() }
+    }
+
+    /// Route a plain-Esc press: dismiss an active alarm first, otherwise exit Focus mode.
+    @MainActor func handleEscPressed() {
+        if escForAlarm { alarmController.dismiss() } else { coordinator.exitFocus() }
+    }
+
     @MainActor func registerEscDismiss() {
         guard escDismissHotKeyRef == nil else { return }
         let id = EventHotKeyID(signature: AppDelegate.hotKeySignature, id: AppDelegate.escDismissHotKeyID)

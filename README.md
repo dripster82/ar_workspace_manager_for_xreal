@@ -4,8 +4,20 @@ Turn your XREAL glasses into a head-tracked, multi-monitor spatial workspace on 
 many virtual displays as you like, arrange them in the space around you, and drag your Mac windows
 onto them — all rendered into the glasses with low-latency head tracking.
 
-> **Requirements:** XREAL Air 2 / Air 2 Pro glasses connected over USB-C DisplayPort, and an
-> **Apple Silicon** Mac running **macOS 14 (Sonoma) or later**.
+> **Requirements:** XREAL **Air 2 / Air 2 Pro** *or* **One / One Pro** glasses connected over USB-C
+> DisplayPort, and an **Apple Silicon** Mac running **macOS 14 (Sonoma) or later**.
+
+> ### XREAL One / One Pro
+> The One series works, with three things to know (their onboard X1 chip behaves differently from the
+> Air):
+> - **Head tracking** comes over the glasses' built-in USB-ethernet link, so enable **Ethernet** in
+>   the glasses' side/developer menu (on by default on recent firmware). The Air streams its IMU over
+>   HID; the One series doesn't — see `Sources/CXrealDriver/device_imu_net.c`.
+> - Put the glasses in their plain flat **Follow** display mode — **not** the onboard **Anchor / Wide
+>   (3840×1080)** spatial mode. The X1 anchors the image itself in those modes, which double-tracks
+>   against this app's own head tracking. (The app warns you if it detects the Wide mode.)
+> - The One Pro's IMU sits tilted in the frame; the app corrects for it automatically. The Eye
+>   accessory's 6DoF is computed on-chip and isn't exposed to the host, so tracking here is 3DoF.
 
 ![AR Workspace Manager for XREAL](assets/hero.png?v=2)
 
@@ -115,6 +127,13 @@ between them from the top bar.
   DisplayPort video, and that macOS sees them as a display (System Settings → Displays). Pick your
   output under **Settings → Glasses → AR Output** if needed.
 - **Head tracking not moving?** Check the Dashboard shows *Connected*. Use **⌃⌥Space** to recenter.
+  On the One series, make sure **Ethernet** is enabled in the glasses' menu and they're in flat
+  **Follow** mode (not Anchor/Wide).
+- **Cursor stuck / menu bar missing?** The glasses should be an **extended** display next to your
+  Mac screen (cursor and menu bar live on the Mac). If they're your main/only display the pointer
+  has nowhere to go — set your Mac's screen as the main display in **System Settings → Displays**.
+  On a truly headless Mac (Mac mini, only the glasses), the app promotes a virtual screen to the
+  main display so the menu bar, Dock and cursor render inside AR.
 - **Microphone prompt never appeared?** Recording only requests the mic the first time you record;
   if it was previously denied, re-enable it in System Settings → Privacy & Security → Microphone.
 - **High CPU from `colorsync.displayservices`?** This is a macOS-side issue triggered by the glasses
@@ -149,7 +168,10 @@ header of `Scripts/notarize.sh`).
 
 ### Project layout
 
-- `Sources/GlassesDriver` — XREAL IMU read loop and pose store (recenter, prediction)
+- `Sources/GlassesDriver` — XREAL IMU read loop and pose store (recenter, prediction); picks the
+  HID path (Air) or the network path (One series) automatically
+- `Sources/CXrealDriver/device_imu_net.c` — XREAL One/One Pro IMU over the glasses' USB-ethernet
+  TCP link (gyro/accel → the same Fusion AHRS as the Air)
 - `Sources/CapturePipeline` — ScreenCaptureKit display capture → Metal textures
 - `Sources/Compositor` — Metal renderer (flat/curved meshes) driving the glasses display
 - `Sources/CPrivateDisplay` / `Sources/DisplayManager` — virtual displays + workspace persistence

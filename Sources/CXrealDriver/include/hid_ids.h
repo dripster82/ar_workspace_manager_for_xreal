@@ -47,6 +47,24 @@ bool is_xreal_product_id(uint16_t product_id);
 int xreal_imu_interface_id(uint16_t product_id);
 int xreal_mcu_interface_id(uint16_t product_id);
 
+// --- XREAL One series ---------------------------------------------------------------------------
+// The One / One Pro / One S use the same vendor id (0x3318) but DO NOT expose the Air's 64-byte HID
+// IMU protocol. Their head-tracking IMU streams over the glasses' built-in USB-ethernet (CDC-ECM)
+// link as a TCP service (see device_imu_net). These helpers are used only for classification and
+// naming — the Air HID tables above are deliberately left untouched so the Air path is unchanged.
+//
+// 0x0436 (XREAL One Pro) is hardware-confirmed. The other ids are best-effort from community
+// drivers and only affect the displayed product name, never device selection.
+bool is_xreal_one_series(uint16_t product_id);
+
+// Returns true if ANY XREAL HID device (vendor 0x3318) is currently connected, and writes the first
+// product id seen to *product_id_out (may be NULL). Used to gate the network IMU path so it never
+// probes link-local addresses unless XREAL glasses are actually plugged in.
+bool xreal_any_connected(uint16_t *product_id_out);
+
+// Human-readable model name for a product id ("XREAL One Pro", "XREAL Air 2", …) or "XREAL glasses".
+const char *xreal_product_name(uint16_t product_id);
+
 #ifdef __cplusplus
 } // extern "C"
 #endif
