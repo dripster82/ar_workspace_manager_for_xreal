@@ -97,7 +97,14 @@ final class AppCoordinator: ObservableObject {
     private let cursorConfiner = CursorConfiner()
     /// The screen currently focused (⌃⌥F): rendered alone, head-locked, filling the FOV. Render-only
     /// — no virtual displays are created/destroyed and the OS display arrangement is untouched.
-    @Published var focusedScreenID: UUID?
+    /// Entering/leaving focus (by any path — toggle, Esc, session stop, screen removed) fires
+    /// `onFocusChanged` so the Esc escape-hatch is armed exactly while the cursor is confined.
+    @Published var focusedScreenID: UUID? {
+        didSet {
+            guard (oldValue == nil) != (focusedScreenID == nil) else { return }
+            onFocusChanged?(focusedScreenID != nil)
+        }
+    }
     /// Global cursor position captured on entering focus, restored on exit.
     private var preFocusCursor: CGPoint?
     /// Distance (m) of the focused screen; its angular size depends only on width/distance.
@@ -839,13 +846,134 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
-    /// Trigger the Screen Recording system prompt (allow/deny). The OS dialog itself offers
-    /// to open Settings, so we never open it ourselves.
+    /// Trigger the Screen Recording system prompt (allow/deny). On a first request the OS shows its
+    /// dialog; once the user has answered once it never reappears, so the only way back is the
+    /// Settings pane — open it for them in that case rather than leaving a dead "Grant…" button.
     func requestScreenRecordingPermission() {
         if !CGRequestScreenCaptureAccess() {
-            statusMessage = "Allow Screen Recording in the prompt (or Privacy settings), then relaunch"
+            statusMessage = "Allow Screen Recording in the prompt (or System Settings), then relaunch"
+            openScreenRecordingSettings()
         }
         refreshPermissions()
+    }
+
+    /// Open System Settings ▸ Privacy & Security ▸ Screen Recording.
+    private func openScreenRecordingSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    /// AR capture (ScreenCaptureKit) hard-requires Screen Recording. Without it, capture delivers no
+    /// frames and the user is dropped into a black, frozen "space" they can only force-quit. So AR
+    /// start is gated on the permission up front: if it's missing we surface the prompt, jump to the
+    /// in-app Permissions page, open the Settings pane, and leave actionable guidance — rather than
+    /// starting a session that can never render.
+    @discardableResult
+    func ensureScreenRecordingPermission() -> Bool {
+        if CGPreflightScreenCaptureAccess() { return true }
+        _ = CGRequestScreenCaptureAccess() // first run shows the OS dialog and registers the app
+        refreshPermissions()
+        pendingSettingsTab = .permissions
+        statusMessage = "Screen Recording is required for AR. Turn on “AR Workspace Manager” under "
+            + "System Settings ▸ Privacy & Security ▸ Screen Recording, then relaunch and Start AR."
+        openScreenRecordingSettings()
+        return false
+    }
+
+    /// Ask for Screen Recording up front, at launch, so it's sorted before the user ever reaches
+    /// Start AR (AR can't capture without it). On first launch this shows the OS dialog immediately;
+    /// once the choice is made it's a no-op. Unlike the Start-AR gate it does NOT force System
+    /// Settings open, so it isn't intrusive on every launch while still surfacing the requirement.
+    func requestScreenRecordingAtLaunch() {
+        guard !CGPreflightScreenCaptureAccess() else { return }
+        _ = CGRequestScreenCaptureAccess()
+        refreshPermissions()
+        pendingSettingsTab = .permissions
+        statusMessage = "AR needs Screen Recording. Allow “AR Workspace Manager” (System Settings ▸ "
+            + "Privacy & Security ▸ Screen Recording), then relaunch — grant it now so Start AR just works."
+    }
+
+    /// One-series glasses (One / One Pro / One S) have onboard spatial display modes (Anchor, Wide,
+    /// Side-view) driven by the X1 chip. Those anchor/track the image themselves, which collides with
+    /// this app's own head-tracked rendering — two trackers fight and the screen drifts opposite your
+    /// head. The glasses must be in the plain flat "Follow" mode. Warn before entering AR (calling out
+    /// the 3840×1080 Wide mode when we can see it). Returns true to proceed, false to cancel.
+    private func confirmOneSeriesFlatMode(on screen: NSScreen) -> Bool {
+        guard IMUService.shared.usingNetworkIMU else { return true } // not a One-series device
+        if UserDefaults.standard.bool(forKey: "suppressOneSpatialWarning") { return true }
+
+        let bounds = CGDisplayBounds(Self.screenDisplayID(screen))
+        // The onboard Wide/anchored mode is the 32:9 ultrawide (3840×1080 ≈ 3.56:1) — key off the
+        // aspect ratio, not width, so a 16:9 4K (3840×2160) flat mode isn't mistaken for it.
+        let aspect = bounds.height > 0 ? bounds.width / bounds.height : 0
+        let wideMode = aspect >= 3.0
+
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = wideMode
+            ? "Turn off the glasses' Wide / Anchor mode first"
+            : "Set the glasses to flat “Follow” mode first"
+        alert.informativeText = (wideMode
+            ? "Your XREAL One is showing a \(Int(bounds.width))×\(Int(bounds.height)) ultrawide — that's its "
+              + "onboard Wide (anchored) mode. "
+            : "")
+            + "The One series can anchor the screen in space with its own X1 chip. This app does its own "
+            + "head-tracked anchoring, so with the glasses' Anchor/Wide mode on, two trackers fight and the "
+            + "screen drifts opposite your head.\n\nOn the glasses, switch to the plain flat 1920×1080 "
+            + "“Follow” display mode (their button menu), then start AR."
+        alert.addButton(withTitle: "Start anyway")
+        alert.addButton(withTitle: "Cancel")
+        alert.showsSuppressionButton = true
+        alert.suppressionButton?.title = "Don't warn me again"
+
+        let response = alert.runModal()
+        if alert.suppressionButton?.state == .on {
+            UserDefaults.standard.set(true, forKey: "suppressOneSpatialWarning")
+        }
+        return response == .alertFirstButtonReturn // "Start anyway"
+    }
+
+    /// AR expects the glasses to be an EXTENDED display next to your Mac screen — the cursor, menu
+    /// bar and windows live on the Mac, the glasses show the AR scene. If the glasses are your main
+    /// or only display (e.g. MacBook lid closed), the pointer has nowhere to go and can lock up.
+    /// Warn and point the user at Display settings. Returns true to proceed, false to cancel.
+    private func confirmGlassesExtendedDisplay(on screen: NSScreen) -> Bool {
+        let id = Self.screenDisplayID(screen)
+        let virtualIDs = Set(virtualDisplays.active.values.map { $0.displayID })
+        let physicalCount = Self.onlineDisplayIDs().filter { !virtualIDs.contains($0) }.count
+        let glassesAreMain = CGDisplayIsMain(id) != 0
+        guard glassesAreMain || physicalCount <= 1 else { return true } // already extended — fine
+        if UserDefaults.standard.bool(forKey: "suppressGlassesMainWarning") { return true }
+
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Set the glasses as an extended display"
+        alert.informativeText = (physicalCount <= 1
+            ? "The glasses are your only display (headless Mac like a Mac mini, or a closed MacBook "
+              + "lid). AR will keep the cursor on the virtual screens, but the menu bar and Dock live "
+              + "on the glasses' base desktop and can be hard to reach. For the smoothest setup add a "
+              + "second screen and set the glasses as Extended — otherwise you can carry on."
+            : "The glasses are set as your main display, so the cursor and menu bar live on them "
+              + "rather than your Mac screen. In System Settings ▸ Displays, make your Mac's screen "
+              + "the main display and arrange the glasses as Extended.")
+        alert.addButton(withTitle: "Open Display Settings")
+        alert.addButton(withTitle: "Start anyway")
+        alert.addButton(withTitle: "Cancel")
+        alert.showsSuppressionButton = true
+        alert.suppressionButton?.title = "Don't warn me again"
+
+        let r = alert.runModal()
+        if alert.suppressionButton?.state == .on {
+            UserDefaults.standard.set(true, forKey: "suppressGlassesMainWarning")
+        }
+        if r == .alertFirstButtonReturn {
+            if let u = URL(string: "x-apple.systempreferences:com.apple.preference.displays") {
+                NSWorkspace.shared.open(u)
+            }
+            return false // let them fix the arrangement first
+        }
+        return r == .alertSecondButtonReturn // "Start anyway"
     }
 
     /// Trigger the Accessibility system prompt (needed for the ⌃⌥+brightness keys).
@@ -1043,11 +1171,29 @@ final class AppCoordinator: ObservableObject {
     /// The display AR is currently rendering to (the glasses), if a session is active.
     var arOutputDisplayID: CGDirectDisplayID? { arActive ? glassesDisplayID : nil }
 
+    /// True when the glasses are the main display or the only physical display (e.g. MacBook lid
+    /// closed) — there's no separate Mac screen to hold the cursor. Confining the pointer "off the
+    /// glasses" then has nowhere to send it and HARD-LOCKS it, so we must not confine in that case.
+    private func glassesAreMainOrOnlyDisplay() -> Bool {
+        guard glassesDisplayID != 0 else { return false }
+        if CGDisplayIsMain(glassesDisplayID) != 0 { return true }
+        let virtualIDs = Set(virtualDisplays.active.values.map { $0.displayID })
+        let physical = Self.onlineDisplayIDs().filter { !virtualIDs.contains($0) }
+        return physical.count <= 1
+    }
+
     private func updateCursorConfinement() {
         guard arActive, confineCursor else { cursorConfiner.stop(); return }
-        // Focused: confine the cursor INSIDE the focused display. Otherwise keep it OFF the glasses.
+        // Focused: confine the cursor INSIDE the focused display. Otherwise keep it OFF the glasses —
+        // but never when the glasses are the main/only display (nowhere to send the cursor → lock).
         if let id = focusedScreenID, let displayID = displayID(forScreenID: id), displayID != 0 {
             cursorConfiner.start(mode: .confineTo(displayID))
+        } else if glassesAreMainOrOnlyDisplay() {
+            // Headless / glasses-only (e.g. Mac mini, or a closed-lid MacBook): there's no separate
+            // Mac screen to keep the cursor on, so don't confine it at all — leaving it free is far
+            // better than trapping it. (Polished headless — menu bar/cursor fully inside AR — needs
+            // more work; for now run the glasses as an extended display for the best experience.)
+            cursorConfiner.stop()
         } else if glassesDisplayID != 0 {
             cursorConfiner.start(mode: .offDisplay(glassesDisplayID))
         } else {
@@ -1280,6 +1426,15 @@ final class AppCoordinator: ObservableObject {
 
     func startAR(on screen: NSScreen) {
         guard !arActive else { return }
+        // Screen Recording is mandatory for capture — gate here so we never reconfigure displays or
+        // open a black, un-quittable AR session when the permission is missing.
+        guard ensureScreenRecordingPermission() else { return }
+        // XREAL One series: the glasses' own X1 spatial modes (Anchor / Wide) double-track against
+        // this app. Warn before entering AR so the user can switch to flat "Follow" mode first.
+        guard confirmOneSeriesFlatMode(on: screen) else { return }
+        // The glasses must be an EXTENDED display (cursor/menubar/windows live on the Mac screen).
+        // If they're the main/only display, warn — the pointer can get stuck with nowhere to go.
+        guard confirmGlassesExtendedDisplay(on: screen) else { return }
         let targetID = Self.screenDisplayID(screen)
         let targetName = screen.localizedName
 
@@ -1679,8 +1834,14 @@ final class AppCoordinator: ObservableObject {
         applyRenderedScene()        // draw the focused screen alone (no display reconfig)
         moveCursorToGaze()          // drop the cursor onto it
         updateCursorConfinement()   // confine the cursor inside the focused display
-        statusMessage = "Focused on \(cfg.name) — ⌃⌥F to exit"
+        statusMessage = "Focused on \(cfg.name) — ⌃⌥F or Esc to exit"
     }
+
+    /// Called when entering/leaving Focus mode, so the app can arm/disarm the Esc escape hatch.
+    var onFocusChanged: ((Bool) -> Void)?
+
+    /// Public entry point for the Esc escape hatch (Focus confines the cursor; Esc must free it).
+    func exitFocus() { dropFocus() }
 
     /// Exit focus: restore the full layout, free the cursor, and put it back where it was.
     private func dropFocus() {
@@ -2125,6 +2286,21 @@ final class AppCoordinator: ObservableObject {
         syncPhysicalMonitors()
         workspaceStore.save()
         objectWillChange.send()
+    }
+
+    /// Create a new workspace from a curated template (screens pre-placed for readable text on the
+    /// glasses) and switch the editor to it. Same flow as `addWorkspace`; the displayed workspace is
+    /// unchanged until the user picks it in the top bar.
+    func addWorkspaceFromTemplate(_ template: WorkspaceTemplate) {
+        let ws = template.makeWorkspace()
+        workspaceStore.append(ws)
+        editingWorkspaceID = ws.id
+        syncPhysicalMonitors()
+        workspaceStore.save()
+        objectWillChange.send()
+        // Show it immediately (the editor alone is easy to miss — the screens won't appear in AR
+        // until the workspace is the *displayed* one). Rebuilds the live session if AR is running.
+        setDisplayedWorkspace(ws.id)
     }
 
     func renameActiveWorkspace(_ name: String) {

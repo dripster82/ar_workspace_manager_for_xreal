@@ -34,6 +34,8 @@
 #include <cstdint>
 #endif
 
+#include <hidapi/hidapi.h>
+
 const uint16_t xreal_vendor_id = 0x3318;
 const uint16_t xreal_product_ids[NUM_SUPPORTED_PRODUCTS] = {
     0x0424, // XREAL Air
@@ -88,4 +90,68 @@ int xreal_mcu_interface_id(uint16_t product_id) {
     } else {
         return -1;
     }
+}
+
+// --- XREAL One series ---------------------------------------------------------------------------
+
+// One / One Pro / One S product ids. 0x0436 is confirmed on real hardware; the rest are taken from
+// community drivers and used for naming only (never for device selection — see header note).
+struct xreal_named_product { uint16_t id; const char *name; };
+
+static const struct xreal_named_product xreal_one_products[] = {
+    { 0x0436, "XREAL One Pro" }, // hardware-confirmed
+    { 0x0435, "XREAL One Pro" },
+    { 0x0437, "XREAL One" },
+    { 0x0438, "XREAL One" },
+    { 0x043d, "XREAL One S" },
+    { 0x043e, "XREAL One S" },
+};
+#define NUM_ONE_PRODUCTS (sizeof(xreal_one_products) / sizeof(xreal_one_products[0]))
+
+static const struct xreal_named_product xreal_air_products[] = {
+    { 0x0424, "XREAL Air" },
+    { 0x0428, "XREAL Air 2" },
+    { 0x0432, "XREAL Air 2 Pro" },
+    { 0x0426, "XREAL Air 2 Ultra" },
+};
+#define NUM_AIR_PRODUCTS (sizeof(xreal_air_products) / sizeof(xreal_air_products[0]))
+
+bool is_xreal_one_series(uint16_t product_id) {
+    for (size_t i = 0; i < NUM_ONE_PRODUCTS; i++) {
+        if (xreal_one_products[i].id == product_id) {
+            return true;
+        }
+    }
+    return false;
+}
+
+const char *xreal_product_name(uint16_t product_id) {
+    for (size_t i = 0; i < NUM_ONE_PRODUCTS; i++) {
+        if (xreal_one_products[i].id == product_id) {
+            return xreal_one_products[i].name;
+        }
+    }
+    for (size_t i = 0; i < NUM_AIR_PRODUCTS; i++) {
+        if (xreal_air_products[i].id == product_id) {
+            return xreal_air_products[i].name;
+        }
+    }
+    return "XREAL glasses";
+}
+
+bool xreal_any_connected(uint16_t *product_id_out) {
+    if (hid_init() != 0) {
+        return false;
+    }
+
+    struct hid_device_info *info = hid_enumerate(xreal_vendor_id, 0);
+    bool found = false;
+    if (info) {
+        found = true;
+        if (product_id_out) {
+            *product_id_out = info->product_id;
+        }
+    }
+    hid_free_enumeration(info);
+    return found;
 }

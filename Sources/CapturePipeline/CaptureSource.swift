@@ -55,10 +55,11 @@ public final class CaptureSource: NSObject, @unchecked Sendable {
             config.height = display.height
         }
         config.pixelFormat = kCVPixelFormatType_32BGRA
-        // 30fps capture: ample for desktop content and halves the system capture load
-        // (4 displays × 60fps was contending with rendering). Head-tracked reprojection
-        // still runs at full display rate, so this doesn't affect tracking smoothness.
-        config.minimumFrameInterval = CMTime(value: 1, timescale: 30)
+        // 60fps capture: smoother scrolling/video and a far less laggy captured cursor (it's baked
+        // into the frame at this rate). Head-tracked reprojection runs at full display rate
+        // independently, so this is purely content smoothness. With many screens at once (e.g. an
+        // 8-screen ring) this raises capture load — reduce the screen count if the framerate dips.
+        config.minimumFrameInterval = CMTime(value: 1, timescale: 60)
         config.queueDepth = 3
         config.showsCursor = true
 
