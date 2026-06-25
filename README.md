@@ -100,7 +100,10 @@ between them from the top bar.
   sharpening, supersampling)
 - Stereo side-by-side (experimental) with IPD adjustment
 - Configurable screen-capture frame rate (30 / 60 / 120 fps) under Settings → Performance
-- **Screenshot** (⌃⌥P) and **record** (⌃⌥R) the glasses view, with mic mute (⌃⌥M)
+- **Screenshot** (⌃⌥P) and **record** (⌃⌥R) the glasses view. Recordings capture your mic and,
+  optionally, the Mac's **system audio** (meeting voices, music, app SFX) mixed in — toggle it in
+  Settings → General; mute the mic live with ⌃⌥M (for system-audio-only). The in-AR REC indicator
+  shows an elapsed timer and what's being captured.
 
 ## Keyboard shortcuts
 
