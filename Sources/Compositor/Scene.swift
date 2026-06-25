@@ -57,6 +57,10 @@ public struct SceneScreen: Identifiable {
     public var labelText: String?
     public var labelImage: CGImage?
 
+    /// When set (transparent-background screens), a faint dot grid can be drawn over this screen as
+    /// a boundary reference while dragging windows. Value = (widthPx, heightPx) / 100 → dot spacing.
+    public var dotGridCells: SIMD2<Float>?
+
     /// One label per original screen merged into a wide canvas, anchored at the tile's top-left in
     /// atlas UV (so its world position is computed from the canvas surface, not a separate screen).
     public struct TileLabel {

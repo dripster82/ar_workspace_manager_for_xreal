@@ -71,6 +71,11 @@ public final class GlassesRenderer: NSObject {
     // Head-locked HUD widgets: small alpha-blended quads drawn always-on-top in view space.
     private var widgetPipeline: MTLRenderPipelineState!
     private var widgetDepthState: MTLDepthStencilState?
+
+    /// Draw the faint dot-grid boundary reference over transparent screens (set true while the user
+    /// is dragging a window). Cheap: one extra blended pass per transparent screen, only when on.
+    public var showDotGrid = false
+    private var dotGridPipeline: MTLRenderPipelineState!
     private struct WidgetEntry {
         let yaw, pitch, distance, widthMeters, aspect: Float
         let offsetX, offsetY: Float   // shift in the quad's local plane (metres) — for stack anchoring
@@ -198,6 +203,7 @@ public final class GlassesRenderer: NSObject {
             library = try device.makeLibrary(source: shaderSource, options: nil)
             screenPipeline = try makePipeline(library: library, fragment: "screen_fragment")
             placeholderPipeline = try makePipeline(library: library, fragment: "placeholder_fragment")
+            dotGridPipeline = try makePipeline(library: library, fragment: "dotgrid_fragment", blended: true)
         } catch {
             NSLog("GlassesRenderer: shader compile failed: \(error)")
             return nil
@@ -500,16 +506,25 @@ public final class GlassesRenderer: NSObject {
         do {
             screenPipeline = try makePipeline(library: library, fragment: "screen_fragment")
             placeholderPipeline = try makePipeline(library: library, fragment: "placeholder_fragment")
+            dotGridPipeline = try makePipeline(library: library, fragment: "dotgrid_fragment", blended: true)
         } catch { NSLog("GlassesRenderer: pipeline rebuild failed: \(error)") }
         msaaColorTexture = nil
         depthTextureMS = nil
     }
 
-    private func makePipeline(library: MTLLibrary, fragment: String) throws -> MTLRenderPipelineState {
+    private func makePipeline(library: MTLLibrary, fragment: String,
+                              blended: Bool = false) throws -> MTLRenderPipelineState {
         let desc = MTLRenderPipelineDescriptor()
         desc.vertexFunction = library.makeFunction(name: "screen_vertex")
         desc.fragmentFunction = library.makeFunction(name: fragment)
         desc.colorAttachments[0].pixelFormat = .bgra8Unorm
+        if blended {   // premultiplied-alpha over (matches the widget/overlay pipelines)
+            desc.colorAttachments[0].isBlendingEnabled = true
+            desc.colorAttachments[0].sourceRGBBlendFactor = .one
+            desc.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
+            desc.colorAttachments[0].sourceAlphaBlendFactor = .one
+            desc.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
+        }
         desc.depthAttachmentPixelFormat = Self.depthFormat
         desc.rasterSampleCount = sampleCount // MSAA
         return try device.makeRenderPipelineState(descriptor: desc)
@@ -1179,6 +1194,7 @@ public final class GlassesRenderer: NSObject {
                     encoder.setRenderPipelineState(placeholderPipeline)
                 }
                 encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: geometry.count)
+                drawDotGrid(screen, vertexCount: geometry.count, encoder: encoder)
                 continue
             }
             if let mipped = sharp[screen.id] {
@@ -1193,8 +1209,21 @@ public final class GlassesRenderer: NSObject {
                 encoder.setRenderPipelineState(placeholderPipeline)
             }
             encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: geometry.count)
+            drawDotGrid(screen, vertexCount: geometry.count, encoder: encoder)
         }
         if showLabels { drawLabels(screens, viewProjection: viewProjection, encoder: encoder) }
+    }
+
+    /// Overlay a faint dot grid on a transparent screen (boundary reference while dragging windows).
+    /// Reuses the screen's already-bound vertex buffer + uniforms; draws on top (no depth test).
+    private func drawDotGrid(_ screen: SceneScreen, vertexCount: Int, encoder: MTLRenderCommandEncoder) {
+        guard showDotGrid, let cells = screen.dotGridCells, let pipe = dotGridPipeline else { return }
+        encoder.setDepthStencilState(widgetDepthState)
+        encoder.setRenderPipelineState(pipe)
+        var c = cells
+        encoder.setFragmentBytes(&c, length: MemoryLayout<SIMD2<Float>>.size, index: 0)
+        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertexCount)
+        encoder.setDepthStencilState(depthState) // restore for the next screen's opaque draw
     }
 
     /// Draw each screen's top-left corner label (alpha-blended, always on top) using the same

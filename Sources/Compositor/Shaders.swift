@@ -75,4 +75,17 @@ fragment float4 placeholder_fragment(VertexOut in [[stage_in]]) {
     float grid = (fmod(floor(in.uv.x * 24.0) + floor(in.uv.y * 14.0), 2.0) < 1.0) ? 0.12 : 0.16;
     return float4(grid, grid, grid + 0.04, 1.0);
 }
+
+// Faint dot grid drawn over transparent screens while dragging windows — a "graph paper" reference
+// for the screen's boundaries/extent. `cells` = (widthPx, heightPx) / 100, so dots land every 100
+// content pixels. Premultiplied-alpha output (matches the over-blend pipeline).
+fragment float4 dotgrid_fragment(VertexOut in [[stage_in]],
+                                 constant float2 &cells [[buffer(0)]]) {
+    float2 fr = fract(in.uv * cells);
+    float2 dd = min(fr, 1.0 - fr) * 100.0;          // px distance to nearest lattice line (100px cells)
+    float dist = length(dd);
+    float a = (1.0 - smoothstep(2.0, 3.5, dist)) * 0.85;   // ~3px soft dot
+    float3 c = float3(0.5, 0.5, 0.6);
+    return float4(c * a, a);
+}
 """

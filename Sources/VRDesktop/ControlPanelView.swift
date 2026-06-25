@@ -1097,6 +1097,14 @@ struct ControlPanelView: View {
                 }
             }
             card("IMU", "gyroscope") { IMUDiagnosticsRows(live: coordinator.live) }
+            card("Input", "cursorarrow.rays") {
+                HStack(spacing: 8) {
+                    Circle().fill(coordinator.isDraggingWindow ? Color.green : .secondary)
+                        .frame(width: 9, height: 9)
+                    Text("Dragging a window: \(coordinator.isDraggingWindow ? "yes" : "no")")
+                        .font(.system(.caption, design: .monospaced))
+                }
+            }
             card("System health", "waveform.path.ecg") { systemHealthSection }
             card("Displays", "rectangle.on.rectangle") { diagnosticsInfo }
             #if DEBUG

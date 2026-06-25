@@ -41,6 +41,9 @@ final class AppCoordinator: ObservableObject {
     /// without re-rendering the whole panel.
     let live = LiveStats()
     @Published var arActive = false
+    /// True while the user is dragging a window around the desktop (see `WindowDragMonitor`).
+    @Published private(set) var isDraggingWindow = false
+    private let windowDragMonitor = WindowDragMonitor()
     @Published var outputWindowInfo: String = "—"
     @Published var screenList: [String] = []
     @Published var outputScreenName: String?
@@ -376,6 +379,16 @@ final class AppCoordinator: ObservableObject {
         updateHealthTimer() // resume the process/health monitor if persisted on
         // Populate the layout with the currently-connected monitors (positioning-only/green).
         syncPhysicalMonitors()
+
+        // Detect when the user is dragging a window around. While dragging, the renderer overlays a
+        // faint dot grid on transparent screens (a boundary reference) — an instant, GPU-side toggle.
+        windowDragMonitor.onChange = { [weak self] dragging in
+            guard let self else { return }
+            self.isDraggingWindow = dragging
+            self.renderer?.showDotGrid = dragging
+            DebugLog.shared.log("window drag: \(dragging ? "started" : "ended")")
+        }
+        windowDragMonitor.start()
     }
 
     /// Localized name for a display, cached (see `screenNameCache`) — only hits the expensive
@@ -1693,6 +1706,10 @@ final class AppCoordinator: ObservableObject {
         )
         screen.labelText = config.name
         screen.labelImage = labelCGImage(for: config.name)
+        // Transparent (black/see-through) screens get a dot-grid boundary reference while dragging.
+        if config.background.kind == .transparent {
+            screen.dotGridCells = SIMD2(Float(config.width) / 100, Float(config.height) / 100)
+        }
         return screen
     }
 
