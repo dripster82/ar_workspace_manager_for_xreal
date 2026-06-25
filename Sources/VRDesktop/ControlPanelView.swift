@@ -89,33 +89,21 @@ struct ControlPanelView: View {
     private var dashboardPage: some View {
         VStack(spacing: 14) {
             card("Status", "gauge.with.dots.needle.33percent") {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 116), spacing: 10)],
-                          alignment: .leading, spacing: 10) {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4),
+                          spacing: 10) {
                     kpiTile("Glasses", glassesConnected ? "Connected" : "Not connected",
                             "eyeglasses", glassesConnected ? .green : .secondary)
-                    kpiTile("AR", coordinator.arActive ? "On" : "Off",
-                            coordinator.arActive ? "dot.radiowaves.left.and.right" : "pause.circle",
-                            coordinator.arActive ? .green : .secondary) { coordinator.toggleAR() }
-                    kpiTile("IMU rate", String(format: "%.0f Hz", coordinator.imuRate), "gyroscope", .secondary)
                     kpiTile("Render", String(format: "%.0f fps", coordinator.renderFPS), "speedometer", .secondary)
                     kpiTile("Temp", coordinator.imuTemperature > 0 ? String(format: "%.0f°C", coordinator.imuTemperature) : "—",
                             "thermometer.medium", coordinator.imuTemperature >= 45 ? .orange : .secondary)
-                    kpiTile("Yaw", String(format: "%+.1f°", coordinator.euler.yaw), "arrow.left.arrow.right", .secondary)
-                    kpiTile("Pitch", String(format: "%+.1f°", coordinator.euler.pitch), "arrow.up.arrow.down", .secondary)
-                    kpiTile("Roll", String(format: "%+.1f°", coordinator.euler.roll), "rotate.3d", .secondary)
+                    orientationTile
                     updateKPI
-                    kpiTile("Screen Rec", coordinator.hasScreenRecordingPermission ? "Granted" : "Needs access",
-                            coordinator.hasScreenRecordingPermission ? "checkmark.seal.fill" : "exclamationmark.triangle.fill",
-                            coordinator.hasScreenRecordingPermission ? .green : .orange,
-                            action: coordinator.hasScreenRecordingPermission ? nil : { coordinator.requestScreenRecordingPermission() })
-                    kpiTile("Accessibility", coordinator.hasAccessibilityPermission ? "Granted" : "Needs access",
-                            coordinator.hasAccessibilityPermission ? "checkmark.seal.fill" : "exclamationmark.triangle.fill",
-                            coordinator.hasAccessibilityPermission ? .green : .orange,
-                            action: coordinator.hasAccessibilityPermission ? nil : { coordinator.requestAccessibilityPermission() })
-                    kpiTile("Microphone", coordinator.hasMicrophonePermission ? "Granted" : "Needs access",
-                            coordinator.hasMicrophonePermission ? "checkmark.seal.fill" : "exclamationmark.triangle.fill",
-                            coordinator.hasMicrophonePermission ? .green : .orange,
-                            action: coordinator.hasMicrophonePermission ? nil : { coordinator.requestMicrophonePermission() })
+                    permissionTile("Screen Rec", granted: coordinator.hasScreenRecordingPermission,
+                                   request: coordinator.requestScreenRecordingPermission)
+                    permissionTile("Accessibility", granted: coordinator.hasAccessibilityPermission,
+                                   request: coordinator.requestAccessibilityPermission)
+                    permissionTile("Microphone", granted: coordinator.hasMicrophonePermission,
+                                   request: coordinator.requestMicrophonePermission)
                 }
             }
             card("Head tracking", "scope") {
@@ -532,7 +520,7 @@ struct ControlPanelView: View {
                 .lineLimit(1).minimumScaleFactor(0.55)
             Text(title).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
         }
-        .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: 74, maxHeight: 74, alignment: .leading)
         .padding(10)
         .background(PanelTheme.card, in: RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(tint.opacity(0.35)))
@@ -541,6 +529,58 @@ struct ControlPanelView: View {
         } else {
             tile
         }
+    }
+
+    /// Combined head-orientation tile: one row per axis — icon, signed value, axis label.
+    @ViewBuilder private var orientationTile: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            orientationRow("arrow.left.arrow.right", coordinator.euler.yaw, "Yaw")
+            orientationRow("arrow.up.arrow.down", coordinator.euler.pitch, "Pitch")
+            orientationRow("rotate.3d", coordinator.euler.roll, "Roll")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(PanelTheme.card, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.secondary.opacity(0.35)))
+    }
+
+    private func orientationRow(_ system: String, _ value: Double, _ label: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: system).font(.caption).foregroundStyle(.secondary).frame(width: 16)
+            Text(String(format: "%+.1f°", value))
+                .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                .monospacedDigit()
+            Text(label).font(.caption2).foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// A permission KPI: shows "Granted" when allowed, otherwise a tappable Grant button that
+    /// requests access in place.
+    @ViewBuilder
+    private func permissionTile(_ title: String, granted: Bool,
+                                request: @escaping () -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Image(systemName: granted ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                .font(.callout).foregroundStyle(granted ? .green : .orange)
+            if granted {
+                Text("Granted").font(.system(.title3, design: .rounded).weight(.semibold))
+            } else {
+                Button(action: request) {
+                    Text("Grant")
+                        .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                        .padding(.horizontal, 12).padding(.vertical, 4)
+                        .background(Color.orange, in: Capsule())
+                        .foregroundStyle(.white)
+                }
+                .buttonStyle(.plain)
+            }
+            Text(title).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
+        .padding(10)
+        .background(PanelTheme.card, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder((granted ? Color.green : .orange).opacity(0.35)))
     }
 
     /// Update status KPI — checking / update-ready (opens About) / up to date (re-checks on tap).
