@@ -511,24 +511,21 @@ struct ControlPanelView: View {
     /// A dashboard quick-action tile mirroring a keyboard shortcut. `arOnly` disables it when AR isn't
     /// running (the action would be a no-op).
     /// A compact KPI tile: icon, a big value, and a label. Optional `action` makes it tappable.
-    @ViewBuilder
+    /// Uses a tap gesture (not a Button) so every tile is structurally identical and the same size.
     private func kpiTile(_ title: String, _ value: String, _ system: String, _ tint: Color,
                          action: (() -> Void)? = nil) -> some View {
-        let tile = VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 5) {
             Image(systemName: system).font(.callout).foregroundStyle(tint)
             Text(value).font(.system(.title3, design: .rounded).weight(.semibold))
                 .lineLimit(1).minimumScaleFactor(0.55)
             Text(title).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
         }
-        .frame(maxWidth: .infinity, minHeight: 74, maxHeight: 74, alignment: .leading)
         .padding(10)
+        .frame(maxWidth: .infinity, minHeight: 74, maxHeight: 74, alignment: .topLeading)
         .background(PanelTheme.card, in: RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(tint.opacity(0.35)))
-        if let action {
-            Button(action: action) { tile }.buttonStyle(.plain)
-        } else {
-            tile
-        }
+        .contentShape(Rectangle())
+        .onTapGesture { action?() }
     }
 
     /// Combined head-orientation tile: one row per axis — icon, signed value, axis label.
