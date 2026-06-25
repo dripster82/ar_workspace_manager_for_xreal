@@ -88,6 +88,11 @@ public final class GlassesRenderer: NSObject {
     private let poseStore: PoseStore
     private let lock = NSLock()
     private var screens: [SceneScreen] = []
+    /// Set under `lock` when the screen set / sharpening changes; the render thread clears the
+    /// per-screen caches below on its next frame. The caches are otherwise touched ONLY on the
+    /// render thread, so clearing them there (rather than from the caller's thread) avoids a data
+    /// race that corrupted the dictionaries' storage → crashes in prepareSharpTextures.
+    private var pendingCacheReset = false
     private var cachedVertexBuffers: [UUID: (buffer: MTLBuffer, count: Int)] = [:]
     // Wide-canvas atlas textures, keyed by canvas screen id (recreated when the pixel size
     // changes). Each frame the member tiles are composited into the atlas, then the canvas
@@ -474,7 +479,8 @@ public final class GlassesRenderer: NSObject {
         guard valid != sharpenAnisotropy else { return }
         sharpenAnisotropy = valid
         rebuildSharpSampler()
-        if valid == 1 { mipTargets.removeAll(); mipSourceVersion.removeAll() }
+        // Let the render thread drop the mip caches (don't mutate them from here — see pendingCacheReset).
+        if valid == 1 { lock.lock(); pendingCacheReset = true; lock.unlock() }
     }
 
     /// MSAA levels this GPU actually supports (1 = off is always allowed).
@@ -596,11 +602,8 @@ public final class GlassesRenderer: NSObject {
     public func setScreens(_ newScreens: [SceneScreen]) {
         lock.lock()
         screens = newScreens
-        cachedVertexBuffers.removeAll()
+        pendingCacheReset = true   // render thread clears the per-screen caches on its next frame
         lock.unlock()
-        mipTargets.removeAll()
-        mipSourceVersion.removeAll()
-        canvasAtlases.removeAll()
     }
 
     /// Atlas render target for a wide-canvas screen (recreated on size change). Mipmapped so
@@ -886,7 +889,18 @@ public final class GlassesRenderer: NSObject {
 
         lock.lock()
         let currentScreens = screens
+        let resetCaches = pendingCacheReset
+        pendingCacheReset = false
         lock.unlock()
+
+        // Invalidate the per-screen caches HERE (render thread) when the screen set changed, so they
+        // are only ever mutated from this thread (see pendingCacheReset).
+        if resetCaches {
+            mipTargets.removeAll()
+            mipSourceVersion.removeAll()
+            canvasAtlases.removeAll()
+            cachedVertexBuffers.removeAll()
+        }
 
         // Wide-canvas atlases and mipmap blits (if sharpening) must run before the scene pass.
         compositeCanvases(currentScreens, commandBuffer: commandBuffer)
