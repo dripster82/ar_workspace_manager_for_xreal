@@ -19,7 +19,7 @@ onto them — all rendered into the glasses with low-latency head tracking.
 > - The One Pro's IMU sits tilted in the frame; the app corrects for it automatically. The Eye
 >   accessory's 6DoF is computed on-chip and isn't exposed to the host, so tracking here is 3DoF.
 
-![AR Workspace Manager for XREAL](assets/hero.png?v=2)
+![AR Workspace Manager for XREAL](assets/hero.png?v=3)
 
 ---
 
@@ -50,7 +50,8 @@ The app asks for these the first time each is needed (you can manage them under
 
 ## Quick start
 
-1. **Connect** the glasses — the **Dashboard** shows *Connected* with live head tracking.
+1. **Connect** the glasses — the **Dashboard** shows the connected model (e.g. *One Pro*, *Air 2*)
+   with live head-tracking readouts.
 2. Click **Start AR** (top bar, or ⌃⌥S). Your screens appear floating in front of you.
 3. Open the **Workspace** page and click **Add Display** to create virtual monitors at the
    resolution you choose (it defaults to your main display's resolution). Each one is a *real* macOS
@@ -61,12 +62,12 @@ The app asks for these the first time each is needed (you can manage them under
 5. **Recenter** any time with **⌃⌥Space** so the layout sits straight ahead of you.
 6. **Stop AR** with **⌃⌥Esc** (or the top bar).
 
-![Quick start](assets/demo.gif?v=2)
+![Quick start](assets/demo.gif?v=3)
 
 Your layout is saved automatically. Create multiple **workspaces** for different setups and switch
 between them from the top bar.
 
-![Workspace layout editor](assets/workspace-editor.png?v=2)
+![Workspace layout editor](assets/workspace-editor.png?v=3)
 
 ## What it does
 
@@ -75,36 +76,40 @@ between them from the top bar.
 - Anchored (world-fixed) or floating (head-locked) placement; flat or curved screens; a wide-canvas
   mode that wraps all screens into one continuous curved surface
 - Named, saved workspaces; per-screen backgrounds (colour / image / see-through)
-- Mirror a virtual screen to a physical monitor (or vice-versa); real monitors auto-appear for
-  positioning
+- Mirror a virtual screen to a physical monitor (or vice-versa)
+- Every workspace always includes your physical monitors as layout references, so the editor knows
+  where the real screens sit; template workspaces place them centred beneath the virtual screens
 
 **Head tracking & view**
 - 3DoF head tracking with motion prediction and adaptive smoothing for low perceived latency
-- **Focus mode** (⌃⌥F) to blow the screen you're looking at up to fill your view
+- **Focus mode** (⌃⌥F) to blow the screen you're looking at up to fill your view (exit with ⌃⌥F, or
+  optionally a single Esc or double-tap Esc — your choice in Settings → General)
 - **Passthrough** (⌃⌥V) to hide the screens and see the room (HUD stays)
 - Gaze tracking, **find-my-cursor** (⌃⌥C), **move-cursor-to-gaze** (⌃⌥X), and
   **move-window-to-the-screen-you're-looking-at** (⌃⌥W)
 
 **HUD widgets** (head-locked, optional)
 - Clock, battery, **Slack** unreads, **GitHub** PR-triage counts, **Google Calendar** agenda with
-  **meeting alarms**
+  **meeting alarms** (shown centre-FOV while AR runs; optionally also as a desktop panel when AR is off)
 - Reusable HUD profiles; group widgets into stacks; per-widget styling
 
-![HUD widgets](assets/hud-widgets.png?v=2)
+![HUD widgets](assets/hud-widgets.png?v=3)
 
 **Glasses & capture**
 - Brightness and refresh-rate (60/72/90/120 Hz) control; quality settings (anti-aliasing,
   sharpening, supersampling)
 - Stereo side-by-side (experimental) with IPD adjustment
+- Configurable screen-capture frame rate (30 / 60 / 120 fps) under Settings → Performance
 - **Screenshot** (⌃⌥P) and **record** (⌃⌥R) the glasses view, with mic mute (⌃⌥M)
 
 ## Keyboard shortcuts
 
 | Shortcut | Action |
 |----------|--------|
-| ⌃⌥Space | Recenter the view |
 | ⌃⌥S | Start / stop AR |
 | ⌃⌥Esc | Stop AR |
+| ⌃⌥B | Recalibrate drift (hold the glasses still ~15s) |
+| ⌃⌥Space | Recenter the view |
 | ⌃⌥F | Focus the screen you're looking at (toggle) |
 | ⌃⌥V | Passthrough — hide / show the screens (HUD stays) |
 | ⌃⌥I | Show / hide the HUD widgets |
@@ -120,6 +125,11 @@ between them from the top bar.
 | ⌃⌥Q | Quit AR Workspace Manager |
 | ⌃⌥ + brightness keys | Dim / brighten the glasses |
 | Esc | Dismiss an active meeting alarm |
+
+> Most shortcuts (and their dashboard buttons) only do something while AR is running, so they're
+> disabled until you start AR. The exceptions, always available: **Help (⌃⌥H)**, **Quit (⌃⌥Q)**,
+> **Start/Stop AR (⌃⌥S)**, and **Recalibrate (⌃⌥B)**. Brightness control needs the Air series' MCU
+> channel — the One series has no host brightness channel, so adjust it on the glasses themselves.
 
 ## Notes & troubleshooting
 
@@ -145,7 +155,7 @@ between them from the top bar.
 - Virtual displays rely on macOS's private display APIs, so exact behaviour can vary between macOS
   releases.
 
-![Diagnostics — system health](assets/diagnostics.png?v=2)
+![Diagnostics — system health](assets/diagnostics.png?v=3)
 
 ---
 
