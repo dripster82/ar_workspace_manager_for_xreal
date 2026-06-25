@@ -884,6 +884,13 @@ final class AppCoordinator: ObservableObject {
                  recorder.preferredMicID = selectedMicID.isEmpty ? nil : selectedMicID }
     }
 
+    /// Include the Mac's system output audio (meeting voices, music, app SFX) in recordings, mixed
+    /// with the mic. Uses ScreenCaptureKit (the Screen Recording permission we already hold).
+    @Published var recordSystemAudio: Bool = UserDefaults.standard.bool(forKey: "recordSystemAudio") {
+        didSet { UserDefaults.standard.set(recordSystemAudio, forKey: "recordSystemAudio")
+                 recorder.recordSystemAudio = recordSystemAudio }
+    }
+
     /// Available audio input devices, plus the implicit "System default" first.
     func availableMicrophones() -> [(id: String, name: String)] {
         let session = AVCaptureDevice.DiscoverySession(
@@ -2279,6 +2286,9 @@ final class AppCoordinator: ObservableObject {
     // MARK: Recording the glasses view (⌃⌥R), mic mute (⌃⌥M)
 
     let recorder = GlassesRecorder()
+    private let systemAudioCapture = SystemAudioCapture()
+    private var recordingStartTime: CFTimeInterval = 0
+    private var recordingTimer: Timer?
     @Published private(set) var isRecording = false
     @Published var micMuted = false {
         didSet { recorder.micMuted = micMuted; if isRecording { updateRecordingIndicator() } }
@@ -2292,6 +2302,11 @@ final class AppCoordinator: ObservableObject {
             renderer.recordingSink = nil
             renderer.clearRecording()
             isRecording = false
+            recordingTimer?.invalidate(); recordingTimer = nil
+            if recordSystemAudio {
+                let cap = systemAudioCapture
+                Task { await cap.stop() }
+            }
             recorder.stop { [weak self] url in
                 NSSound(named: NSSound.Name("Pop"))?.play()
                 if let url {
@@ -2304,10 +2319,23 @@ final class AppCoordinator: ObservableObject {
         } else {
             guard recorder.start() != nil else { statusMessage = "Couldn't start recording"; return }
             recorder.micMuted = micMuted
+            recorder.recordSystemAudio = recordSystemAudio
             let rec = recorder
             renderer.recordingSink = { pb, t in rec.appendVideo(pb, time: t) }
+            if recordSystemAudio {
+                let cap = systemAudioCapture
+                Task {
+                    do { try await cap.start { sb in rec.appendSystemAudio(sb) } }
+                    catch { await MainActor.run { self.statusMessage = "System audio capture failed: \(error.localizedDescription)" } }
+                }
+            }
+            recordingStartTime = CACurrentMediaTime()
             updateRecordingIndicator()
             isRecording = true
+            // Tick the in-AR indicator's elapsed timer once a second.
+            recordingTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+                Task { @MainActor in self?.updateRecordingIndicator() }
+            }
             NSSound(named: NSSound.Name("Pop"))?.play()
             statusMessage = "Recording the glasses view…"
         }
@@ -2316,7 +2344,9 @@ final class AppCoordinator: ObservableObject {
     func toggleMicMute() { micMuted.toggle() }
 
     private func updateRecordingIndicator() {
-        let r = ImageRenderer(content: RecordingIndicatorView(muted: micMuted))
+        let elapsed = CACurrentMediaTime() - recordingStartTime
+        let view = RecordingIndicatorView(muted: micMuted, systemAudio: recordSystemAudio, elapsed: elapsed)
+        let r = ImageRenderer(content: view)
         r.scale = 2; r.isOpaque = false
         if let img = r.cgImage { renderer?.setRecordingImage(img) }
     }

@@ -225,11 +225,25 @@ struct CalendarWidgetView: View {
 /// The in-FOV recording indicator (top-centre). Not composited into the recorded video.
 struct RecordingIndicatorView: View {
     let muted: Bool
+    var systemAudio: Bool = false
+    var elapsed: TimeInterval = 0
+
+    private var timeText: String {
+        let t = max(0, Int(elapsed))
+        let h = t / 3600, m = (t % 3600) / 60, s = t % 60
+        return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
+    }
+
     var body: some View {
         HStack(spacing: 8) {
             Circle().fill(.red).frame(width: 14, height: 14)
             Text("REC").font(.system(size: 18, weight: .bold, design: .rounded))
-            if muted { Image(systemName: "mic.slash.fill").font(.system(size: 15)) }
+            Text(timeText).font(.system(size: 17, weight: .semibold, design: .rounded)).monospacedDigit()
+            // Mic state — always shown: on (white) vs muted (red slash).
+            Image(systemName: muted ? "mic.slash.fill" : "mic.fill")
+                .font(.system(size: 15)).foregroundStyle(muted ? Color.red : .white)
+            // System audio is being captured too.
+            if systemAudio { Image(systemName: "speaker.wave.2.fill").font(.system(size: 14)) }
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 18).padding(.vertical, 8)

@@ -1051,6 +1051,11 @@ struct ControlPanelView: View {
                 }.labelsHidden().fixedSize()
             }
             .help("Which mic is used when recording the glasses view (⌃⌥R). Mute live with ⌃⌥M.")
+            Toggle("Record system audio (app & meeting sound)", isOn: $coordinator.recordSystemAudio)
+                .font(.caption)
+                .help("Mix the Mac's output audio — meeting voices, music, app SFX — into recordings, "
+                      + "alongside the mic. Mute the mic (⌃⌥M) to record system audio only. Uses the "
+                      + "Screen Recording permission.")
             HStack {
                 Text("Restore windows on start").font(.caption)
                 Spacer()
