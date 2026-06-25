@@ -16,6 +16,12 @@ final class AlarmController {
     init(coordinator: AppCoordinator) { self.coordinator = coordinator }
 
     func fire(event: CalEvent, leadMinutes: Int) {
+        // Meeting alarms are gated behind a running AR session (they're meant for the glasses),
+        // unless the user opted to allow them when AR is off (then they show as a desktop panel).
+        guard coordinator.arActive || coordinator.calendar.allowAlarmsWhenAROff else {
+            DebugLog.shared.log("gcal alarm suppressed (AR off): '\(event.title)'")
+            return
+        }
         let view = AlarmView(title: event.title, when: Self.whenText(event: event, lead: leadMinutes),
                              time: Self.timeText(event))
         if coordinator.arActive, let renderer = coordinator.renderer,

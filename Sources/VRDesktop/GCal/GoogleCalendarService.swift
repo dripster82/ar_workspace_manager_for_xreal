@@ -49,6 +49,11 @@ final class GoogleCalendarService: ObservableObject {
     @Published var alarmsEnabled: Bool = UserDefaults.standard.bool(forKey: "gcalAlarmsEnabled") {
         didSet { UserDefaults.standard.set(alarmsEnabled, forKey: "gcalAlarmsEnabled") }
     }
+    /// Meeting alarms are gated behind a running AR session by default (they show in the glasses).
+    /// Turn this on to let them still fire — as a centred desktop panel + tone — when AR is off.
+    @Published var allowAlarmsWhenAROff: Bool = UserDefaults.standard.bool(forKey: "gcalAlarmsWhenAROff") {
+        didSet { UserDefaults.standard.set(allowAlarmsWhenAROff, forKey: "gcalAlarmsWhenAROff") }
+    }
     @Published var alarm1Lead: Int = UserDefaults.standard.object(forKey: "gcalAlarm1") as? Int ?? 5 {
         didSet { UserDefaults.standard.set(alarm1Lead, forKey: "gcalAlarm1") }
     }

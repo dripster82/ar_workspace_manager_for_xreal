@@ -87,6 +87,13 @@ struct CalendarAlarmOptions: View {
             if calendar.alarmsEnabled {
                 leadPicker("Alarm 1", $calendar.alarm1Lead)
                 leadPicker("Alarm 2", $calendar.alarm2Lead)
+                Toggle("Also alarm when AR is off (shows a desktop panel)",
+                       isOn: $calendar.allowAlarmsWhenAROff)
+                    .font(.caption)
+                Text(calendar.allowAlarmsWhenAROff
+                     ? "Alarms fire whether or not AR is running."
+                     : "Alarms only fire while AR is running.")
+                    .font(.caption2).foregroundStyle(.secondary)
             }
         }
     }
