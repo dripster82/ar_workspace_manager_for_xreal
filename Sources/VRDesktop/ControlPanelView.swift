@@ -91,12 +91,10 @@ struct ControlPanelView: View {
             card("Status", "gauge.with.dots.needle.33percent") {
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4),
                           spacing: 10) {
-                    kpiTile("Glasses", glassesConnected ? "Connected" : "Not connected",
+                    kpiTile("Glasses",
+                            glassesConnected ? (coordinator.glassesModelName ?? "Connected") : "Not connected",
                             "eyeglasses", glassesConnected ? .green : .secondary)
-                    kpiTile("Render", String(format: "%.0f fps", coordinator.renderFPS), "speedometer", .secondary)
-                    kpiTile("Temp", coordinator.imuTemperature > 0 ? String(format: "%.0f°C", coordinator.imuTemperature) : "—",
-                            "thermometer.medium", coordinator.imuTemperature >= 45 ? .orange : .secondary)
-                    orientationTile
+                    DashboardLiveTiles(live: coordinator.live)
                     updateKPI
                     permissionTile("Screen Rec", granted: coordinator.hasScreenRecordingPermission,
                                    request: coordinator.requestScreenRecordingPermission)
@@ -106,29 +104,20 @@ struct ControlPanelView: View {
                                    request: coordinator.requestMicrophonePermission)
                 }
             }
-            card("Head tracking", "scope") {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 8) {
-                        Button("Recenter") { coordinator.recenter() }
-                        Text("⌃⌥Space").font(.caption2).foregroundStyle(.secondary)
-                        Button("Recalibrate") { coordinator.requestCalibration() }
-                        Text("⌃⌥B").font(.caption2).foregroundStyle(.secondary)
-                        Spacer()
-                        Toggle("Include roll", isOn: $coordinator.recenterRoll).toggleStyle(.checkbox)
-                            .help("Off: horizon stays gravity-level when recentering")
-                    }
-                    .controlSize(.small)
-                    if coordinator.brightnessAvailable { brightnessControl }
-                    if let looking = coordinator.lookedAtScreenName {
-                        Label("Looking at: \(looking)", systemImage: "eye")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
+            card("Brightness", "sun.max") {
+                if coordinator.brightnessAvailable {
+                    brightnessControl
+                } else {
+                    Label("Brightness control needs the glasses' MCU channel (XREAL Air series). "
+                          + "The One series doesn't expose it — use the brightness button on the glasses.",
+                          systemImage: "info.circle")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
             card("Quick actions", "bolt") {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 88), spacing: 10)],
                           alignment: .leading, spacing: 10) {
-                    quickAction("Recenter", "scope", "⌃⌥Space") { coordinator.recenter() }
+                    quickAction("Recenter", "scope", "⌃⌥Space", arOnly: true) { coordinator.recenter() }
                     quickAction("Recalibrate", "gyroscope", "⌃⌥B") { coordinator.requestCalibration() }
                     quickAction("Focus", "viewfinder", "⌃⌥F", arOnly: true) { coordinator.toggleFocus() }
                     quickAction("Passthrough", "eye", "⌃⌥V", arOnly: true) { coordinator.togglePassthrough() }
@@ -136,7 +125,7 @@ struct ControlPanelView: View {
                     quickAction("Labels", "tag", "⌃⌥L", arOnly: true) { coordinator.toggleLabels() }
                     quickAction("Stereo", "view.3d", "⌃⌥D", arOnly: true) { coordinator.setStereo(!coordinator.stereoEnabled) }
                     quickAction("Move Window", "macwindow.on.rectangle", "⌃⌥W", arOnly: true) { coordinator.onToggleWindowPicker?() }
-                    quickAction("Find Cursor", "cursorarrow.rays", "⌃⌥C") { coordinator.onToggleCursorInfo?() }
+                    quickAction("Find Cursor", "cursorarrow.rays", "⌃⌥C", arOnly: true) { coordinator.onToggleCursorInfo?() }
                     quickAction("Cursor→Gaze", "cursorarrow.motionlines", "⌃⌥X", arOnly: true) { coordinator.moveCursorToGaze() }
                     quickAction("Screenshot", "camera", "⌃⌥P", arOnly: true) { coordinator.takeGlassesScreenshot() }
                     quickAction("Record", "record.circle", "⌃⌥R", arOnly: true) { coordinator.toggleRecording() }
@@ -514,42 +503,7 @@ struct ControlPanelView: View {
     /// Uses a tap gesture (not a Button) so every tile is structurally identical and the same size.
     private func kpiTile(_ title: String, _ value: String, _ system: String, _ tint: Color,
                          action: (() -> Void)? = nil) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Image(systemName: system).font(.callout).foregroundStyle(tint)
-            Text(value).font(.system(.title3, design: .rounded).weight(.semibold))
-                .lineLimit(1).minimumScaleFactor(0.55)
-            Text(title).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, minHeight: 74, maxHeight: 74, alignment: .topLeading)
-        .background(PanelTheme.card, in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(tint.opacity(0.35)))
-        .contentShape(Rectangle())
-        .onTapGesture { action?() }
-    }
-
-    /// Combined head-orientation tile: one row per axis — icon, signed value, axis label.
-    @ViewBuilder private var orientationTile: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            orientationRow("arrow.left.arrow.right", coordinator.euler.yaw, "Yaw")
-            orientationRow("arrow.up.arrow.down", coordinator.euler.pitch, "Pitch")
-            orientationRow("rotate.3d", coordinator.euler.roll, "Roll")
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
-        .background(PanelTheme.card, in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.secondary.opacity(0.35)))
-    }
-
-    private func orientationRow(_ system: String, _ value: Double, _ label: String) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: system).font(.caption).foregroundStyle(.secondary).frame(width: 16)
-            Text(String(format: "%+.1f°", value))
-                .font(.system(.subheadline, design: .rounded).weight(.semibold))
-                .monospacedDigit()
-            Text(label).font(.caption2).foregroundStyle(.secondary)
-            Spacer(minLength: 0)
-        }
+        KPITile(title: title, value: value, system: system, tint: tint, action: action)
     }
 
     /// A permission KPI: shows "Granted" when allowed, otherwise a tappable Grant button that
@@ -1137,19 +1091,7 @@ struct ControlPanelView: View {
                     }
                 }
             }
-            card("IMU", "gyroscope") {
-                let a = coordinator.linearAccel
-                let mag = (a.x * a.x + a.y * a.y + a.z * a.z).squareRoot()
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(String(format: "Temperature   %.1f °C", coordinator.imuTemperature))
-                        .font(.system(.caption, design: .monospaced))
-                    Text(String(format: "Linear accel (g)   x %+.2f   y %+.2f   z %+.2f   |a| %.2f",
-                                a.x, a.y, a.z, mag))
-                        .font(.system(.caption, design: .monospaced))
-                    Text(String(format: "Sample rate   %.0f Hz", coordinator.imuRate))
-                        .font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
-                }
-            }
+            card("IMU", "gyroscope") { IMUDiagnosticsRows(live: coordinator.live) }
             card("System health", "waveform.path.ecg") { systemHealthSection }
             card("Displays", "rectangle.on.rectangle") { diagnosticsInfo }
             #if DEBUG
@@ -2151,5 +2093,95 @@ struct NonChainingScrollView<Content: View>: NSViewRepresentable {
 
         // Trackpad pinch → zoom (handled by the SwiftUI binding via the closure).
         override func magnify(with event: NSEvent) { onMagnify?(event.magnification) }
+    }
+}
+
+/// A compact KPI tile: icon, big value, label. Tappable when `action` is set. Standalone (not a
+/// method on the panel) so the live-telemetry tiles — which observe the lightweight `LiveStats`
+/// rather than the whole coordinator — can build identical tiles.
+struct KPITile: View {
+    let title: String
+    let value: String
+    let system: String
+    let tint: Color
+    var action: (() -> Void)? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Image(systemName: system).font(.callout).foregroundStyle(tint)
+            Text(value).font(.system(.title3, design: .rounded).weight(.semibold))
+                .lineLimit(1).minimumScaleFactor(0.55)
+            Text(title).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, minHeight: 74, maxHeight: 74, alignment: .topLeading)
+        .background(PanelTheme.card, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(tint.opacity(0.35)))
+        .contentShape(Rectangle())
+        .onTapGesture { action?() }
+    }
+}
+
+/// The dashboard's live readout tiles (Render fps, IMU temp, head orientation). Observes `LiveStats`
+/// directly, so it keeps updating during AR while re-rendering only these three cells — not the
+/// whole control panel (which is what used to cause head-tracking judder, so they were frozen in AR).
+/// Rendered as three grid cells via `Group`, so they flow into the parent `LazyVGrid`.
+private struct DashboardLiveTiles: View {
+    @ObservedObject var live: LiveStats
+
+    var body: some View {
+        Group {
+            KPITile(title: "Render", value: String(format: "%.0f fps", live.renderFPS),
+                    system: "speedometer", tint: .secondary)
+            KPITile(title: "Temp",
+                    value: live.imuTemperature > 0 ? String(format: "%.0f°C", live.imuTemperature) : "—",
+                    system: "thermometer.medium",
+                    tint: live.imuTemperature >= 45 ? .orange : .secondary)
+            orientationTile
+        }
+    }
+
+    /// Combined head-orientation tile: one row per axis — icon, signed value, axis label.
+    private var orientationTile: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            row("arrow.left.arrow.right", live.euler.yaw, "Yaw")
+            row("arrow.up.arrow.down", live.euler.pitch, "Pitch")
+            row("rotate.3d", live.euler.roll, "Roll")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(PanelTheme.card, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.secondary.opacity(0.35)))
+    }
+
+    private func row(_ system: String, _ value: Double, _ label: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: system).font(.caption).foregroundStyle(.secondary).frame(width: 16)
+            Text(String(format: "%+.1f°", value))
+                .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                .monospacedDigit()
+            Text(label).font(.caption2).foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+/// Diagnostics → IMU live rows (temperature, linear accel, sample rate). Observes `LiveStats` so it
+/// refreshes during AR too, without re-rendering the rest of the Diagnostics page.
+private struct IMUDiagnosticsRows: View {
+    @ObservedObject var live: LiveStats
+
+    var body: some View {
+        let a = live.linearAccel
+        let mag = (a.x * a.x + a.y * a.y + a.z * a.z).squareRoot()
+        VStack(alignment: .leading, spacing: 4) {
+            Text(String(format: "Temperature   %.1f °C", live.imuTemperature))
+                .font(.system(.caption, design: .monospaced))
+            Text(String(format: "Linear accel (g)   x %+.2f   y %+.2f   z %+.2f   |a| %.2f",
+                        a.x, a.y, a.z, mag))
+                .font(.system(.caption, design: .monospaced))
+            Text(String(format: "Sample rate   %.0f Hz", live.imuRate))
+                .font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
+        }
     }
 }

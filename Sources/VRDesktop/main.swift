@@ -192,6 +192,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                               MemoryLayout<EventHotKeyID>.size, nil, &hotKeyID)
             let delegate = Unmanaged<AppDelegate>.fromOpaque(userData).takeUnretainedValue()
             DispatchQueue.main.async {
+                // Until AR is running, only these work: Help, Quit, Start/Stop AR, Recalibrate (and
+                // the Esc-to-dismiss helper for the overlays). Every other shortcut is inert — there's
+                // no AR session for it to act on. Keep this in sync with the dashboard's `arOnly` tiles.
+                let alwaysAllowed: Set<UInt32> = [
+                    AppDelegate.helpHotKeyID, AppDelegate.quitHotKeyID,
+                    AppDelegate.toggleARHotKeyID, AppDelegate.stopARHotKeyID,
+                    AppDelegate.recalibrateHotKeyID, AppDelegate.escDismissHotKeyID,
+                ]
+                guard delegate.coordinator.arActive || alwaysAllowed.contains(hotKeyID.id) else { return }
                 switch hotKeyID.id {
                 case AppDelegate.recenterHotKeyID: delegate.coordinator.recenter()
                 case AppDelegate.stopARHotKeyID: delegate.coordinator.stopAR()
@@ -367,7 +376,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         // AR & view
         add(ar ? "Stop AR  (⌃⌥S)" : "Start AR  (⌃⌥S)", #selector(toggleAR))
-        add("Recenter  (⌃⌥Space)", #selector(menuRecenter))
+        add("Recenter  (⌃⌥Space)", #selector(menuRecenter), enabled: ar)
         add("Recalibrate drift  (⌃⌥B)", #selector(menuRecalibrate))
         add("Focus looked-at screen  (⌃⌥F)", #selector(menuToggleFocus), enabled: ar)
         add("Passthrough  (⌃⌥V)", #selector(menuTogglePassthrough), enabled: ar)
@@ -381,7 +390,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
 
         // Cursor & windows
-        add("Where's My Cursor?  (⌃⌥C)", #selector(toggleCursorInfo))
+        add("Where's My Cursor?  (⌃⌥C)", #selector(toggleCursorInfo), enabled: ar)
         add("Move Cursor to Gaze  (⌃⌥X)", #selector(moveCursorToGaze), enabled: ar)
         add("Move Window to Gaze  (⌃⌥W)", #selector(menuWindowPicker), enabled: ar)
         menu.addItem(.separator())

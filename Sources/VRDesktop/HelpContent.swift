@@ -10,39 +10,49 @@ enum HelpContent {
     struct Section: Identifiable {
         let id = UUID()
         let title: String
-        let column: Int            // 0 = left column, 1 = right column
+        let column: Int  // 0 = left column, 1 = right column
         let shortcuts: [Shortcut]
     }
 
     static let sections: [Section] = [
-        Section(title: "AR & view", column: 0, shortcuts: [
-            Shortcut(keys: "⌃⌥S", action: "Start / stop AR"),
-            Shortcut(keys: "⌃⌥Esc", action: "Stop AR"),
-            Shortcut(keys: "⌃⌥Space", action: "Recenter the view"),
-            Shortcut(keys: "⌃⌥B", action: "Recalibrate drift (hold still ~4s)"),
-            Shortcut(keys: "⌃⌥D", action: "Depth — Stereo (SBS) on / off"),
-            Shortcut(keys: "⌃⌥F", action: "Focus the screen you're looking at (toggle)"),
-            Shortcut(keys: "⌃⌥V", action: "Passthrough — hide / show the screens (HUD stays)"),
-            Shortcut(keys: "⌃⌥W", action: "Move a window to the screen you're looking at"),
-        ]),
-        Section(title: "Cursor", column: 0, shortcuts: [
-            Shortcut(keys: "⌃⌥C", action: "Find the cursor (screen + arrow)"),
-            Shortcut(keys: "⌃⌥X", action: "Move cursor to where you're looking"),
-        ]),
-        Section(title: "Capture", column: 1, shortcuts: [
-            Shortcut(keys: "⌃⌥P", action: "Screenshot the glasses view → Desktop"),
-            Shortcut(keys: "⌃⌥R", action: "Record the glasses view → Movies"),
-            Shortcut(keys: "⌃⌥M", action: "Mute / unmute the recording mic"),
-        ]),
-        Section(title: "Display & HUD", column: 1, shortcuts: [
-            Shortcut(keys: "⌃⌥ + brightness", action: "Dim / brighten the glasses"),
-            Shortcut(keys: "⌃⌥I", action: "Show / hide the HUD widgets"),
-            Shortcut(keys: "⌃⌥L", action: "Show / hide screen name labels"),
-        ]),
-        Section(title: "App", column: 1, shortcuts: [
-            Shortcut(keys: "⌃⌥H", action: "Show / hide this help"),
-            Shortcut(keys: "⌃⌥Q", action: "Quit AR Workspace Manager"),
-        ]),
+        Section(
+            title: "AR & view", column: 0,
+            shortcuts: [
+                Shortcut(keys: "⌃⌥S", action: "Start / stop AR"),
+                Shortcut(keys: "⌃⌥Esc", action: "Stop AR"),
+                Shortcut(keys: "⌃⌥Space", action: "Recenter the view"),
+                Shortcut(keys: "⌃⌥B", action: "Recalibrate drift (hold still ~15s)"),
+                Shortcut(keys: "⌃⌥D", action: "Depth — Stereo (SBS) on / off"),
+                Shortcut(keys: "⌃⌥F", action: "Focus the screen you're looking at (toggle)"),
+                Shortcut(keys: "⌃⌥V", action: "Passthrough — hide / show the screens (HUD stays)"),
+                Shortcut(keys: "⌃⌥W", action: "Move a window to the screen you're looking at"),
+            ]),
+        Section(
+            title: "Cursor", column: 0,
+            shortcuts: [
+                Shortcut(keys: "⌃⌥C", action: "Find the cursor (screen + arrow)"),
+                Shortcut(keys: "⌃⌥X", action: "Move cursor to where you're looking"),
+            ]),
+        Section(
+            title: "Capture", column: 1,
+            shortcuts: [
+                Shortcut(keys: "⌃⌥P", action: "Screenshot the glasses view → Desktop"),
+                Shortcut(keys: "⌃⌥R", action: "Record the glasses view → Movies"),
+                Shortcut(keys: "⌃⌥M", action: "Mute / unmute the recording mic"),
+            ]),
+        Section(
+            title: "Display & HUD", column: 1,
+            shortcuts: [
+                Shortcut(keys: "⌃⌥ + brightness", action: "Dim / brighten the glasses"),
+                Shortcut(keys: "⌃⌥I", action: "Show / hide the HUD widgets"),
+                Shortcut(keys: "⌃⌥L", action: "Show / hide screen name labels"),
+            ]),
+        Section(
+            title: "App", column: 1,
+            shortcuts: [
+                Shortcut(keys: "⌃⌥H", action: "Show / hide this help"),
+                Shortcut(keys: "⌃⌥Q", action: "Quit AR Workspace Manager"),
+            ]),
     ]
 
     /// Sections grouped by their target column (for the two-column layout).

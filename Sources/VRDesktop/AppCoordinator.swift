@@ -8,14 +8,38 @@ import GlassesDriver
 import SwiftUI
 import simd
 
+/// High-frequency telemetry readouts (head orientation, IMU temp/accel, sample + render rates),
+/// split out of `AppCoordinator` into their own lightweight `ObservableObject`. Only the small
+/// dashboard/diagnostics tiles observe this, so updating it — including while AR runs — re-renders
+/// just those tiles instead of the entire control panel (a ~45 ms whole-panel re-evaluation that
+/// starved the renderer and caused head-tracking judder, which is why these used to freeze in AR).
 @MainActor
-final class AppCoordinator: ObservableObject {
-    @Published var glassesState: GlassesState = .disconnected
+final class LiveStats: ObservableObject {
     @Published var imuRate: Double = 0
     @Published var renderFPS: Double = 0
     @Published var euler: (yaw: Double, pitch: Double, roll: Double) = (0, 0, 0)
     @Published var imuTemperature: Double = 0   // °C
     @Published var linearAccel: (x: Double, y: Double, z: Double) = (0, 0, 0)  // g, gravity removed
+}
+
+@MainActor
+final class AppCoordinator: ObservableObject {
+    @Published var glassesState: GlassesState = .disconnected
+    /// Short model name of the connected glasses for display — e.g. "One Pro", "Air 2", "Air 2 Pro".
+    /// Derived from the driver's product name (which already maps the USB product id to the exact
+    /// model); strips the "XREAL " brand prefix and the "(PID …)" suffix. nil when disconnected or
+    /// when the model is unknown (generic "XREAL glasses").
+    var glassesModelName: String? {
+        guard case .connected(let product) = glassesState else { return nil }
+        var name = product
+        if let r = name.range(of: " (PID") { name = String(name[..<r.lowerBound]) }
+        if name.hasPrefix("XREAL ") { name = String(name.dropFirst("XREAL ".count)) }
+        name = name.trimmingCharacters(in: .whitespaces)
+        return (name.isEmpty || name.caseInsensitiveCompare("glasses") == .orderedSame) ? nil : name
+    }
+    /// Live telemetry tiles observe this directly (see `LiveStats`) so they refresh during AR
+    /// without re-rendering the whole panel.
+    let live = LiveStats()
     @Published var arActive = false
     @Published var outputWindowInfo: String = "—"
     @Published var screenList: [String] = []
@@ -423,17 +447,19 @@ final class AppCoordinator: ObservableObject {
             }
         }
 
-        // CRITICAL: while AR is active, do NOT write the live @Published UI readouts below. Each
-        // write re-evaluates the entire Control Panel (a persistent NSHostingView) on the main
-        // thread — ~45ms — which starves the render display link and produces the ~2Hz head-
-        // tracking judder. The panel is behind the glasses during AR; it resumes when AR stops.
-        guard !arActive else { return }
+        // Live telemetry tiles (orientation, temp, accel, rates) observe the lightweight `LiveStats`
+        // object, so these writes re-render only those few tiles — cheap enough to keep updating
+        // during AR. (Previously everything lived on the coordinator and a write re-evaluated the
+        // entire panel — a ~45 ms hitch that starved the renderer — so the readouts were frozen in AR.)
+        live.imuRate = rate
+        live.renderFPS = fps
+        live.euler = e
+        live.imuTemperature = Double(pose.temperature)
+        live.linearAccel = (Double(pose.acceleration.x), Double(pose.acceleration.y), Double(pose.acceleration.z))
 
-        imuRate = rate
-        renderFPS = fps
-        euler = e
-        imuTemperature = Double(pose.temperature)
-        linearAccel = (Double(pose.acceleration.x), Double(pose.acceleration.y), Double(pose.acceleration.z))
+        // The heavier, panel-wide @Published writes below still re-render the whole control panel, so
+        // keep skipping them in AR (they'd reintroduce the judder, and the panel is behind the glasses).
+        guard !arActive else { return }
 
         refreshDisplayDiagnostics()
         updateLookedAtScreen()
@@ -1941,39 +1967,87 @@ final class AppCoordinator: ObservableObject {
     /// but never captured or rendered into the glasses. The Mac's main display anchors the
     /// arrangement. No-op when nothing new is found.
     func syncPhysicalMonitors() {
-        guard var ws = workspaceStore.activeWorkspace else { return }
         let glasses = effectiveGlassesID
         let virtualIDs = Set(virtualDisplays.active.values.map { $0.displayID })
         let mirrorTargets = physicalMirrorTargetUUIDs()
-        var changed = false
 
-        // Purge phantom physicalInAR entries that actually resolve to one of our virtual displays
-        // (named after a virtual screen, e.g. "Code Screen" — they pollute the OS arrangement).
-        for uuid in Array(ws.physicalInAR.keys) {
-            if let id = Self.resolvePhysicalDisplay(uuidString: uuid), virtualIDs.contains(id) {
-                ws.physicalInAR.removeValue(forKey: uuid)
-                changed = true
-                DebugLog.shared.log("layout: pruned phantom physical entry \(uuid.prefix(8)) (a virtual display)")
-            }
-        }
-
+        // Snapshot the currently-connected physical monitors that should appear in a layout as a
+        // positioning reference: everything except the glasses output, our own virtual displays,
+        // and mirror targets.
+        var connected: [(uuid: String, name: String, w: Int, h: Int)] = []
         for screen in NSScreen.screens {
             let id = Self.screenDisplayID(screen)
             guard id != glasses, id != 0, !virtualIDs.contains(id),
-                  let uuid = Self.displayUUIDString(id), !mirrorTargets.contains(uuid),
-                  ws.physicalInAR[uuid] == nil else { continue }
+                  let uuid = Self.displayUUIDString(id), !mirrorTargets.contains(uuid) else { continue }
             let size = screen.frame.size
-            ws.physicalInAR[uuid] = VirtualScreenConfig(
-                name: screen.localizedName,
-                width: Int(size.width), height: Int(size.height),
-                showInAR: false) // positioning-only (green) until the user opts it into AR
-            changed = true
-            DebugLog.shared.log("layout: added physical monitor '\(screen.localizedName)' (positioning-only)")
+            connected.append((uuid, screen.localizedName, Int(size.width), Int(size.height)))
         }
-        if changed {
-            workspaceStore.activeWorkspace = ws
+
+        // Apply to EVERY workspace, not just the active one — a workspace should always include the
+        // physical monitors as positioning references, so the layout editor knows where the real
+        // screens sit even for a freshly-created or not-yet-displayed workspace. The Mac's main
+        // display anchors the arrangement. New monitors default to positioning-only (showInAR=false,
+        // green) — visible in the GUI and the OS arrangement but never captured/rendered.
+        var anyChanged = false
+        for original in workspaceStore.workspaces {
+            var ws = original
+            var changed = false
+
+            // Purge phantom physicalInAR entries that actually resolve to one of our virtual displays
+            // (named after a virtual screen, e.g. "Code Screen" — they pollute the OS arrangement).
+            for uuid in Array(ws.physicalInAR.keys) {
+                if let id = Self.resolvePhysicalDisplay(uuidString: uuid), virtualIDs.contains(id) {
+                    ws.physicalInAR.removeValue(forKey: uuid)
+                    changed = true
+                    DebugLog.shared.log("layout: pruned phantom physical entry \(uuid.prefix(8)) (a virtual display) from '\(ws.name)'")
+                }
+            }
+
+            for m in connected where ws.physicalInAR[m.uuid] == nil {
+                ws.physicalInAR[m.uuid] = VirtualScreenConfig(
+                    name: m.name, width: m.w, height: m.h,
+                    showInAR: false) // positioning-only (green) until the user opts it into AR
+                changed = true
+                DebugLog.shared.log("layout: added physical monitor '\(m.name)' (positioning-only) to '\(ws.name)'")
+            }
+
+            if changed {
+                workspaceStore.updateWorkspace(ws)
+                anyChanged = true
+            }
+        }
+        if anyChanged {
             workspaceStore.save()
             objectWillChange.send()
+        }
+    }
+
+    /// Arrange a workspace's physical monitors as a single row centred horizontally **under** the
+    /// virtual screens, so a template lays out as e.g. `V1-V2-V3` over a centred `P1` (or `P1-P2`).
+    /// Physical monitors are positioning references, so they sit just below the lowest virtual tile.
+    /// Ordered left→right by their real desktop arrangement (+yaw is to the left) so the layout map
+    /// mirrors reality. Only entries that resolve to a connected display are placed.
+    private func arrangePhysicalBelowVirtual(_ ws: inout Workspace) {
+        let virtuals = ws.virtualScreens
+        guard !virtuals.isEmpty, !ws.physicalInAR.isEmpty else { return }
+        let yaws = virtuals.map(\.yawDegrees)
+        let centerYaw = (yaws.min()! + yaws.max()!) / 2
+        let belowPitch = max(-80, (virtuals.map(\.pitchDegrees).min()!) - 24)
+
+        // Order the physical monitors left→right by their real desktop x origin.
+        let ordered = ws.physicalInAR.keys.compactMap { uuid -> (uuid: String, x: CGFloat)? in
+            guard let id = Self.resolvePhysicalDisplay(uuidString: uuid) else { return nil }
+            return (uuid, CGDisplayBounds(id).origin.x)
+        }.sorted { $0.x < $1.x }
+        guard !ordered.isEmpty else { return }
+
+        let stepYaw = 26.0
+        let mid = Double(ordered.count - 1) / 2
+        for (i, item) in ordered.enumerated() {
+            // i = 0 is the leftmost real monitor → most positive yaw (left side of the map).
+            let offset = (Double(i) - mid) * stepYaw
+            ws.physicalInAR[item.uuid]?.yawDegrees = centerYaw - offset
+            ws.physicalInAR[item.uuid]?.pitchDegrees = belowPitch
         }
     }
 
@@ -2356,7 +2430,12 @@ final class AppCoordinator: ObservableObject {
         let ws = template.makeWorkspace()
         workspaceStore.append(ws)
         editingWorkspaceID = ws.id
-        syncPhysicalMonitors()
+        syncPhysicalMonitors() // inject the physical monitors (positioning-only) into every workspace
+        // Then place this template's physical monitors centred under its virtual screens.
+        if var created = workspaceStore.workspace(ws.id) {
+            arrangePhysicalBelowVirtual(&created)
+            workspaceStore.updateWorkspace(created)
+        }
         workspaceStore.save()
         objectWillChange.send()
     }
