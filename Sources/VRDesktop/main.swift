@@ -161,6 +161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var labelsHotKeyRef: EventHotKeyRef?
     private var windowPickerHotKeyRef: EventHotKeyRef?
     private var recalibrateHotKeyRef: EventHotKeyRef?
+    private var pushToTalkHotKeyRef: EventHotKeyRef?
     private static let recenterHotKeyID: UInt32 = 1
     private static let stopARHotKeyID: UInt32 = 2
     private static let helpHotKeyID: UInt32 = 3
@@ -179,6 +180,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private static let labelsHotKeyID: UInt32 = 16
     private static let windowPickerHotKeyID: UInt32 = 17
     private static let recalibrateHotKeyID: UInt32 = 18
+    private static let pushToTalkHotKeyID: UInt32 = 19
 
     private func registerGlobalRecenterHotKey() {
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
@@ -199,6 +201,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     AppDelegate.helpHotKeyID, AppDelegate.quitHotKeyID,
                     AppDelegate.toggleARHotKeyID, AppDelegate.stopARHotKeyID,
                     AppDelegate.recalibrateHotKeyID, AppDelegate.escDismissHotKeyID,
+                    AppDelegate.pushToTalkHotKeyID,
                 ]
                 guard delegate.coordinator.arActive || alwaysAllowed.contains(hotKeyID.id) else { return }
                 switch hotKeyID.id {
@@ -220,6 +223,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 case AppDelegate.labelsHotKeyID: delegate.coordinator.toggleLabels()
                 case AppDelegate.windowPickerHotKeyID: delegate.windowPicker.toggle()
                 case AppDelegate.recalibrateHotKeyID: delegate.coordinator.requestCalibration()
+                case AppDelegate.pushToTalkHotKeyID: delegate.coordinator.startPushToTalk()
                 case AppDelegate.quitHotKeyID: NSApp.terminate(nil)
                 default: break
                 }
@@ -253,6 +257,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         register(kVK_ANSI_L, AppDelegate.labelsHotKeyID, &labelsHotKeyRef)
         register(kVK_ANSI_W, AppDelegate.windowPickerHotKeyID, &windowPickerHotKeyRef)
         register(kVK_ANSI_B, AppDelegate.recalibrateHotKeyID, &recalibrateHotKeyRef)
+        register(kVK_ANSI_A, AppDelegate.pushToTalkHotKeyID, &pushToTalkHotKeyRef)
     }
 
     /// A plain Escape hotkey is registered only while it's actually wanted — when an alarm is
@@ -464,6 +469,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        coordinator.voice.stop()
         coordinator.stopAR()
         coordinator.saveWorkspaces()
     }

@@ -31,4 +31,23 @@ final class HelperService: NSObject, HelperProtocol {
         NSLog("VRDesktopHelper: removed \(removed) ColorSync profile(s) for \(validUUIDs.count) UUID(s)")
         reply(removed, nil)
     }
+
+    /// Kill the two ColorSync daemons so launchd relaunches them clean. The process names are fixed
+    /// constants here — never derived from caller input — so this can only ever target these two
+    /// system daemons. `killall` exits non-zero only if neither was running (already gone), which we
+    /// still treat as success since the post-condition (no wedged daemon) holds.
+    func bounceColorSyncDaemons(withReply reply: @escaping (Bool, String?) -> Void) {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
+        p.arguments = ["colorsyncd", "colorsync.displayservices"]
+        do {
+            try p.run()
+            p.waitUntilExit()
+            NSLog("VRDesktopHelper: bounced ColorSync daemons (killall status \(p.terminationStatus))")
+            reply(true, nil)
+        } catch {
+            NSLog("VRDesktopHelper: bounce failed: \(error.localizedDescription)")
+            reply(false, error.localizedDescription)
+        }
+    }
 }

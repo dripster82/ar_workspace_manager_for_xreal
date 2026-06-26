@@ -65,6 +65,8 @@ public final class GlassesRenderer: NSObject {
     public var showBrightness = false
     private var recordingTexture: MTLTexture?
     public var showRecording = false
+    private var voiceTexture: MTLTexture?
+    public var showVoice = false
     private var pickerTexture: MTLTexture?
     public var showPicker = false
 
@@ -332,6 +334,17 @@ public final class GlassesRenderer: NSObject {
     }
 
     public func clearRecording() { showRecording = false }
+
+    /// Set the bottom-centre voice "Listening…" indicator.
+    @discardableResult
+    public func setVoiceImage(_ cgImage: CGImage) -> Bool {
+        guard let tex = makeOverlayTexture(cgImage) else { return false }
+        voiceTexture = tex
+        showVoice = true
+        return true
+    }
+
+    public func clearVoice() { showVoice = false }
 
     /// Set the centred window-picker overlay (⌃⌥W). Large, centred — same upload path as the help HUD.
     @discardableResult
@@ -986,6 +999,7 @@ public final class GlassesRenderer: NSObject {
         drawPickerOverlay(commandBuffer: commandBuffer, target: drawable.texture)
         drawBrightnessOverlay(commandBuffer: commandBuffer, target: drawable.texture)
         drawRecordingOverlay(commandBuffer: commandBuffer, target: drawable.texture)
+        drawVoiceOverlay(commandBuffer: commandBuffer, target: drawable.texture)
         // For a debug dump or screenshot, also composite the HUD overlays into the readable scene
         // target so the captured image matches what's on screen (the drawable is unreadable).
         if dumpDir != nil || shotURL != nil || recording {
@@ -1043,6 +1057,13 @@ public final class GlassesRenderer: NSObject {
         guard showRecording, let tex = recordingTexture else { return }
         drawOverlay(tex, commandBuffer: commandBuffer, target: target,
                     heightFraction: 0.07, maxWidthFraction: 0.4, anchor: .top(marginNDC: 0.1))
+    }
+
+    /// Draw the voice "Listening…" indicator, bottom-centre (clear of the top REC indicator).
+    private func drawVoiceOverlay(commandBuffer: MTLCommandBuffer, target: MTLTexture) {
+        guard showVoice, let tex = voiceTexture else { return }
+        drawOverlay(tex, commandBuffer: commandBuffer, target: target,
+                    heightFraction: 0.08, maxWidthFraction: 0.7, anchor: .bottom(marginNDC: 0.06))
     }
 
     /// Draw the centred help/cursor HUD as an alpha-blended quad on top of the given target.

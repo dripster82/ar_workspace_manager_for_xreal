@@ -87,4 +87,19 @@ final class PrivilegedHelperClient {
             completion(count)
         }
     }
+
+    /// Ask the helper to restart the root-owned ColorSync daemons (the watchdog's remediation for the
+    /// `colorsync.displayservices` runaway). `completion` receives false if the helper is unavailable
+    /// or the user hasn't approved it.
+    func bounceColorSyncDaemons(completion: @escaping (Bool) -> Void) {
+        guard ensureRegistered() else { completion(false); return }
+        guard let proxy = proxy({ error in
+            NSLog("PrivilegedHelperClient: XPC error: \(error.localizedDescription)")
+            completion(false)
+        }) else { completion(false); return }
+        proxy.bounceColorSyncDaemons { ok, errString in
+            if let errString { NSLog("PrivilegedHelperClient: helper error: \(errString)") }
+            completion(ok)
+        }
+    }
 }

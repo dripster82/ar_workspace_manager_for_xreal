@@ -79,8 +79,7 @@ struct ControlPanelView: View {
             ComingSoon(title: "Window Rules",
                        detail: "Automatically place apps on screens. The rule editor is coming; for "
                              + "now use ⌃⌥W to move a window to the screen you're looking at.")
-        case .voiceCommands:
-            ComingSoon(title: "Voice Commands", detail: "Hands-free control — coming soon.")
+        case .voiceCommands: voiceCommandsPage
         case .settings: settingsPage
         case .diagnostics: diagnosticsSection
         }
@@ -95,13 +94,14 @@ struct ControlPanelView: View {
                             glassesConnected ? (coordinator.glassesModelName ?? "Connected") : "Not connected",
                             "eyeglasses", glassesConnected ? .green : .secondary)
                     DashboardLiveTiles(live: coordinator.live)
-                    updateKPI
                     permissionTile("Screen Rec", granted: coordinator.hasScreenRecordingPermission,
                                    request: coordinator.requestScreenRecordingPermission)
                     permissionTile("Accessibility", granted: coordinator.hasAccessibilityPermission,
                                    request: coordinator.requestAccessibilityPermission)
                     permissionTile("Microphone", granted: coordinator.hasMicrophonePermission,
                                    request: coordinator.requestMicrophonePermission)
+                    permissionTile("Voice", granted: coordinator.hasSpeechPermission,
+                                   request: coordinator.requestSpeechPermission)
                 }
             }
             card("Brightness", "sun.max") {
@@ -535,21 +535,6 @@ struct ControlPanelView: View {
     }
 
     /// Update status KPI — checking / update-ready (opens About) / up to date (re-checks on tap).
-    @ViewBuilder private var updateKPI: some View {
-        if coordinator.checkingForUpdate {
-            kpiTile("Updates", "Checking…", "arrow.triangle.2.circlepath", .secondary)
-        } else if let v = coordinator.updateAvailableVersion {
-            kpiTile("Update ready", "v\(v)", "arrow.down.circle.fill", .orange) {
-                coordinator.pendingRoute = .settings
-                coordinator.pendingSettingsTab = .about
-            }
-        } else {
-            kpiTile("Updates", "Up to date", "checkmark.seal.fill", .green) {
-                coordinator.checkForUpdates()
-            }
-        }
-    }
-
     private func quickAction(_ title: String, _ icon: String, _ key: String,
                              arOnly: Bool = false, _ action: @escaping () -> Void) -> some View {
         let enabled = !arOnly || coordinator.arActive
@@ -657,6 +642,12 @@ struct ControlPanelView: View {
                 detail: "Record your voice when capturing the glasses view (⌃⌥R)",
                 granted: coordinator.hasMicrophonePermission,
                 grant: { coordinator.requestMicrophonePermission() })
+            Divider()
+            permissionRow(
+                title: "Speech Recognition",
+                detail: "Run hands-free voice commands (⌃⌥A)",
+                granted: coordinator.hasSpeechPermission,
+                grant: { coordinator.requestSpeechPermission() })
             Text("Grants take effect after relaunching.")
                 .font(.caption2).foregroundStyle(.secondary)
         }
@@ -678,6 +669,71 @@ struct ControlPanelView: View {
                 Button("Grant…", action: grant).controlSize(.small)
             }
         }
+    }
+
+    // MARK: Voice Commands page
+
+    private func voiceTimingSlider(_ label: String, _ value: Binding<Double>,
+                                   _ range: ClosedRange<Double>) -> some View {
+        HStack(spacing: 8) {
+            Text(label).font(.caption).frame(width: 92, alignment: .leading)
+            Slider(value: value, in: range)
+            Text(String(format: "%.1fs", value.wrappedValue))
+                .font(.caption2).monospacedDigit().foregroundStyle(.secondary)
+                .frame(width: 34, alignment: .trailing)
+        }
+    }
+
+    private var voiceCommandsPage: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            card("Voice control", "mic") {
+                Toggle("Enable voice control", isOn: $coordinator.voiceEnabled)
+                Picker("", selection: $coordinator.voiceMode) {
+                    ForEach(AppCoordinator.VoiceMode.allCases) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.segmented).labelsHidden()
+                if coordinator.voiceMode == .wakeWord {
+                    HStack(spacing: 8) {
+                        Text("Wake word").font(.caption)
+                        TextField("wake word", text: $coordinator.wakeWord)
+                            .textFieldStyle(.roundedBorder).frame(width: 160)
+                    }
+                }
+                if coordinator.voiceMode == .pushToTalk {
+                    voiceTimingSlider("Wait to start", $coordinator.voiceStartTimeout, 1...8)
+                    voiceTimingSlider("End pause", $coordinator.voiceSilenceTimeout, 0.5...4)
+                }
+                Text(coordinator.voiceMode == .pushToTalk
+                     ? "Press ⌃⌥A, say a command, and it runs after a short pause."
+                     : "Always listening — say \u{201C}\(coordinator.wakeWord) <command>\u{201D}.")
+                    .font(.caption2).foregroundStyle(.secondary)
+                Toggle("Higher accuracy (uses Apple servers)", isOn: $coordinator.voiceAllowRemote)
+                Text(coordinator.voiceAllowRemote
+                     ? "Audio is sent to Apple for recognition — more accurate, less private."
+                     : "Recognition runs on-device — audio stays on your Mac.")
+                    .font(.caption2).foregroundStyle(.secondary)
+                Text("Uses the system default microphone (set a close mic in System Settings → Sound for best results).")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            card("Permissions", "lock.shield") {
+                permissionRow(title: "Speech Recognition",
+                              detail: "Convert your speech to commands (on-device)",
+                              granted: coordinator.hasSpeechPermission) { coordinator.requestSpeechPermission() }
+                permissionRow(title: "Microphone", detail: "Listen to your voice",
+                              granted: coordinator.hasMicrophonePermission) { coordinator.requestMicrophonePermission() }
+            }
+            card("Commands", "text.bubble") {
+                Text("Edit the phrases that trigger each command (comma-separated). You can also say "
+                     + "\u{201C}switch to <workspace name>\u{201D}.")
+                    .font(.caption2).foregroundStyle(.secondary)
+                ForEach(coordinator.voiceBindings) { binding in
+                    VoiceBindingRow(binding: binding) { coordinator.updateVoiceBinding($0) }
+                }
+                Button("Reset to defaults") { coordinator.resetVoiceCommands() }
+                    .controlSize(.small).padding(.top, 4)
+            }
+        }
+        .onAppear { coordinator.refreshPermissions() }
     }
 
     private var outputSection: some View {
@@ -1153,13 +1209,42 @@ struct ControlPanelView: View {
                 Text("Updates every 3 s while enabled.").font(.caption2).foregroundStyle(.secondary)
             }
             Divider()
+            Toggle("Auto-fix ColorSync runaway (recommended)", isOn: $coordinator.colorSyncWatchdogEnabled)
+                .font(.caption)
+            Text("Watches colorsync.displayservices; if it pins the CPU it clears stale profiles and restarts the colour daemons automatically.")
+                .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if coordinator.colorSyncRunawayWarning {
+                HStack(alignment: .top, spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle.fill").font(.caption2).foregroundStyle(.red)
+                    Text("Runaway persists after auto-fix — this is the Air 2 colour self-loop. Unplug/replug the Air 2 or reboot to clear it.")
+                        .font(.caption2).foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Divider()
             healthRow("ColorSync display profiles", coordinator.displayProfileCount, warn: 30,
                       hint: "Lots of stale per-display profiles bloat the ColorSync registry.")
             healthRow("Saved display configs", coordinator.displayConfigCount, warn: 50,
                       hint: "Excessive saved arrangements make ColorSync re-parse a huge plist.")
-            Button("Refresh") { coordinator.refreshHealthNow() }.controlSize(.small)
+            HStack {
+                Button("Refresh") { coordinator.refreshHealthNow() }.controlSize(.small)
+                Button("Clean ColorSync now") { coordinator.cleanColorSyncNow() }.controlSize(.small)
+                Button("Clear saved configs…") { showClearConfigsConfirm = true }.controlSize(.small)
+            }
+            .confirmationDialog("Clear saved display arrangements?",
+                                isPresented: $showClearConfigsConfirm, titleVisibility: .visible) {
+                Button("Clear (log out to apply)", role: .destructive) {
+                    coordinator.clearSavedDisplayConfigs()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Removes the bloated WindowServer arrangement plist (backed up as .bak). Takes effect after you log out and back in.")
+            }
         }
     }
+
+    @State private var showClearConfigsConfirm = false
 
     private func healthRow(_ label: String, _ count: Int, warn: Int, hint: String) -> some View {
         let over = count >= warn
@@ -2106,6 +2191,45 @@ struct NonChainingScrollView<Content: View>: NSViewRepresentable {
 
         // Trackpad pinch → zoom (handled by the SwiftUI binding via the closure).
         override func magnify(with event: NSEvent) { onMagnify?(event.magnification) }
+    }
+}
+
+/// One editable voice-command row: an enable toggle, the action title, and a comma-separated phrases
+/// field. Commits to the store on toggle change or when editing the field ends.
+private struct VoiceBindingRow: View {
+    let binding: VoiceBinding
+    let onChange: (VoiceBinding) -> Void
+    @State private var phrasesText: String
+    @State private var enabled: Bool
+
+    init(binding: VoiceBinding, onChange: @escaping (VoiceBinding) -> Void) {
+        self.binding = binding
+        self.onChange = onChange
+        _phrasesText = State(initialValue: binding.phrases.joined(separator: ", "))
+        _enabled = State(initialValue: binding.enabled)
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Toggle("", isOn: $enabled).labelsHidden().controlSize(.small)
+                .onChange(of: enabled) { _ in commit() }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(binding.intent.title).font(.caption).fontWeight(.medium)
+                TextField("phrases, comma separated", text: $phrasesText)
+                    .textFieldStyle(.roundedBorder).font(.system(.caption2, design: .monospaced))
+                    .onSubmit { commit() }
+            }
+        }
+        .opacity(enabled ? 1 : 0.5)
+    }
+
+    private func commit() {
+        var b = binding
+        b.enabled = enabled
+        b.phrases = phrasesText.split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        onChange(b)
     }
 }
 

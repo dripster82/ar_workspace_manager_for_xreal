@@ -252,6 +252,23 @@ struct RecordingIndicatorView: View {
     }
 }
 
+/// In-AR "Listening…" pill shown while voice control is capturing, with the live transcript.
+struct VoiceListeningView: View {
+    var transcript: String = ""
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "mic.fill").font(.system(size: 15)).foregroundStyle(.green)
+            Text(transcript.isEmpty ? "Listening…" : transcript)
+                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                .lineLimit(1).truncationMode(.head)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 18).padding(.vertical, 8)
+        .background(Color.black.opacity(0.55), in: Capsule())
+        .overlay(Capsule().strokeBorder(.white.opacity(0.15)))
+    }
+}
+
 struct GitHubWidgetView: View {
     let style: WidgetStyle
     let connected: Bool

@@ -16,7 +16,8 @@ public enum HelperConstants {
     public static let teamID = "834D8P4J32"
 
     /// Bumped manually; lets the app confirm the installed daemon matches the expected build.
-    public static let version = "1"
+    /// v2: added `bounceColorSyncDaemons`.
+    public static let version = "2"
 }
 
 /// XPC interface the helper exposes. Kept deliberately narrow: the only privileged operation is
@@ -27,6 +28,12 @@ public enum HelperConstants {
     /// Delete every `*-<uuid>.icc` in `/Library/ColorSync/Profiles/Displays` for each well-formed
     /// UUID in `uuids`. Replies with the count removed and an optional error string.
     func removeColorSyncProfiles(uuids: [String], withReply reply: @escaping (Int, String?) -> Void)
+
+    /// Restart the root-owned ColorSync daemons (`colorsyncd`, `colorsync.displayservices`) by
+    /// killing them — launchd relaunches them clean. Used by the app's watchdog to break the
+    /// `colorsync.displayservices` runaway when it pins the CPU. Both daemons run as root, so this
+    /// is the only way the app can bounce them. Replies with success and an optional error string.
+    func bounceColorSyncDaemons(withReply reply: @escaping (Bool, String?) -> Void)
 
     /// Returns the helper's `HelperConstants.version`, so the app can detect a stale installed daemon.
     func getVersion(withReply reply: @escaping (String) -> Void)

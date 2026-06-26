@@ -204,3 +204,38 @@ This pairs with the Mac-App-Store-incompatible reality: a sandboxed app can't wr
 App Store. App rebranded to **AR Workspace Manager for XRE** (`uk.co.ketelle.ar.workspace.manager`).
 First notarized + stapled build confirmed Gatekeeper-accepted 2026-06-23. Build/sign/notarize:
 `Scripts/release.sh` (local dev testing uses `Scripts/build-app.sh debug` — no notarization needed).
+
+---
+
+## Recurrence (2026-06-25) — accumulation gap + always-on watchdog
+
+Came back at ~74% after a few hours of use. The folder had **10 profiles**, 8 of them stale virtual
+displays (`Browser`, `Code Screen`, `Screen 4/5/6/7`, `Slack`, `XrealVirtualR-1`) dated across the
+prior three days. Root cause of the *accumulation*: the 06-23 pruning only fired on
+`AppCoordinator.removeScreen` (manual single-screen removal). The **whole-session teardown paths —
+`stopAR` (which calls `virtualDisplays.destroyAll()`), app quit, and crashes — left every virtual
+display's profile behind**, so they piled up every session and re-bloated the registry. Manual
+`rm *.icc` + `killall` didn't settle it this time (macOS regenerates and re-wedges while the Air 2 is
+connected), confirming a one-shot clear isn't enough — it needs continuous remediation.
+
+### Fixes shipped (in-app)
+
+1. **Plug the leak** — `stopAR` now captures the virtual displays' UUIDs *before* `destroyAll()` and
+   deletes their orphaned profiles (mirrors what `removeScreen` already did for single removals).
+2. **Sweep on launch** — `AppCoordinator.init` runs `SystemHealth.sweepOrphanProfiles()`, clearing
+   anything a previous quit/crash left behind. The sweep deletes every `*-<uuid>.icc` whose UUID is
+   **not currently online** (via `CGGetOnlineDisplayList`) — so built-in/externals/live glasses and
+   in-use virtuals are kept, orphans (dead virtuals, the Air 2's churned old UUIDs) go.
+3. **Always-on watchdog** (`ColorSyncWatchdog.swift`, default on, toggle on Diagnostics) — samples
+   `colorsync.displayservices` CPU every 30 s; if it stays ≥65% for 3 samples (~90 s sustained, above
+   the benign 30–53% AR bursts) it remediates: `sweepOrphanProfiles()` + bounce the daemons. The
+   bounce needs root (both daemons run as root), so it goes through the privileged helper's new
+   `bounceColorSyncDaemons` XPC op (`killall colorsyncd colorsync.displayservices` — process names are
+   fixed constants, never caller input). Rate-limited to once / 5 min; after 3 attempts that don't
+   settle it (the pure Air-2 self-loop, which only a replug/reboot cures) it stops bouncing and
+   surfaces a one-off warning on the Diagnostics page instead of looping.
+4. **Manual Diagnostics buttons** — "Clean ColorSync now" (sweep + bounce on demand) and
+   "Clear saved configs…" (`SystemHealth.clearSavedDisplayConfigs()` backs up + removes the bloated
+   `com.apple.windowserver.displays.*.plist`; takes effect after logout, so it's confirmation-gated).
+
+Helper protocol version bumped to **2**. Build confirmed clean (`Scripts/build-app.sh debug`).

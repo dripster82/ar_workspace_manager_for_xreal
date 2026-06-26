@@ -85,6 +85,18 @@ struct SidebarView: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text("AR Workspace Manager").font(.subheadline.weight(.semibold))
                     Text("v\(coordinator.appVersion)").font(.caption2).foregroundStyle(.secondary)
+                    if let v = coordinator.updateAvailableVersion {
+                        Button {
+                            coordinator.pendingRoute = .settings
+                            coordinator.pendingSettingsTab = .about
+                        } label: {
+                            Label("Update available: v\(v)", systemImage: "arrow.down.circle.fill")
+                                .font(.caption2.weight(.medium)).foregroundStyle(.orange)
+                        }
+                        .buttonStyle(.plain).padding(.top, 2)
+                    } else if coordinator.checkingForUpdate {
+                        Text("Checking for updates…").font(.caption2).foregroundStyle(.secondary)
+                    }
                 }
             }
             .padding(.horizontal, 16).padding(.top, 18).padding(.bottom, 14)

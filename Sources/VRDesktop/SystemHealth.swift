@@ -78,6 +78,43 @@ enum SystemHealth {
         return CFUUIDCreateString(nil, ref) as String?
     }
 
+    /// UUID strings of every display currently online (built-in, externals, glasses, and any live
+    /// virtual displays). The orphan sweep keeps these and removes everything else. Uppercased to
+    /// match the casing macOS uses in the generated filenames.
+    static func onlineDisplayUUIDs() -> Set<String> {
+        var ids = [CGDirectDisplayID](repeating: 0, count: 32)
+        var count: UInt32 = 0
+        guard CGGetOnlineDisplayList(32, &ids, &count) == .success else { return [] }
+        return Set(ids.prefix(Int(count)).compactMap { displayUUID($0)?.uppercased() })
+    }
+
+    /// Extract the trailing CGDisplay UUID from a macOS-generated profile filename
+    /// (`<display name>-<UUID>.icc`), or nil if the name doesn't end in a well-formed UUID.
+    private static func uuid(fromProfileName name: String) -> String? {
+        guard name.hasSuffix(".icc") else { return nil }
+        let base = name.dropLast(4)              // strip ".icc"
+        guard base.count >= 36 else { return nil }
+        let candidate = String(base.suffix(36))
+        return UUID(uuidString: candidate) != nil ? candidate.uppercased() : nil
+    }
+
+    /// Delete every generated per-display profile whose UUID is **not currently online** — i.e. the
+    /// orphans left behind when virtual displays are torn down (app quit/crash, AR stop) or by the
+    /// Air 2's display UUID churning between sessions. These accumulate and bloat the ColorSync
+    /// registry, whose repeated re-parse drives the `colorsync.displayservices` runaway (see
+    /// Docs/ColorSync-AirII-investigation.md). Online displays — built-in, externals, the live
+    /// glasses, in-use virtuals — are always kept; macOS regenerates any profile it actually needs.
+    /// Safe to call on launch, on AR stop, and from the watchdog. Returns the count removed directly.
+    @discardableResult
+    static func sweepOrphanProfiles() -> Int {
+        let fm = FileManager.default
+        let live = onlineDisplayUUIDs()
+        let all = (try? fm.contentsOfDirectory(atPath: displayProfilesDir)) ?? []
+        let orphans = all.compactMap { uuid(fromProfileName: $0) }.filter { !live.contains($0) }
+        guard !orphans.isEmpty else { return 0 }
+        return removeDisplayProfiles(uuids: Array(Set(orphans)))
+    }
+
     /// Remove the per-display ColorSync profile(s) macOS generated for `uuid`. Called when a virtual
     /// display is permanently removed from a workspace so its now-orphaned profile doesn't linger and
     /// bloat the ColorSync registry (the re-parse of which drives the colorsync.displayservices
@@ -91,25 +128,63 @@ enum SystemHealth {
     /// async). Passing the UUID — not paths — means the helper, not us, decides which files it touches.
     @discardableResult
     static func removeDisplayProfiles(uuid: String) -> Int {
+        removeDisplayProfiles(uuids: [uuid])
+    }
+
+    /// Batch form of `removeDisplayProfiles(uuid:)`: removes the `*-<uuid>.icc` for every UUID,
+    /// deleting directly where permitted and handing any denied UUIDs to the privileged helper in a
+    /// single XPC call (instead of one per UUID). Returns the count removed *directly*.
+    @discardableResult
+    static func removeDisplayProfiles(uuids: [String]) -> Int {
         let fm = FileManager.default
         let all = (try? fm.contentsOfDirectory(atPath: displayProfilesDir)) ?? []
-        let suffix = "-\(uuid).icc".lowercased()
-        let matches = all.filter { $0.lowercased().hasSuffix(suffix) }
-            .map { "\(displayProfilesDir)/\($0)" }
         var removed = 0
-        var denied = false
-        for path in matches {
-            do { try fm.removeItem(atPath: path); removed += 1 }
-            catch { if fm.fileExists(atPath: path) { denied = true } }
+        var denied: [String] = []
+        for uuid in uuids {
+            let suffix = "-\(uuid).icc".lowercased()
+            let matches = all.filter { $0.lowercased().hasSuffix(suffix) }
+                .map { "\(displayProfilesDir)/\($0)" }
+            var anyDenied = false
+            for path in matches {
+                do { try fm.removeItem(atPath: path); removed += 1 }
+                catch { if fm.fileExists(atPath: path) { anyDenied = true } }
+            }
+            if anyDenied { denied.append(uuid) }
         }
-        if removed > 0 { NSLog("SystemHealth: removed \(removed) ColorSync profile(s) for display \(uuid)") }
-        if denied {
+        if removed > 0 { NSLog("SystemHealth: removed \(removed) ColorSync profile(s)") }
+        if !denied.isEmpty {
             Task { @MainActor in
-                PrivilegedHelperClient.shared.removeColorSyncProfiles(uuids: [uuid]) { n in
+                PrivilegedHelperClient.shared.removeColorSyncProfiles(uuids: denied) { n in
                     if n > 0 { NSLog("SystemHealth: removed \(n) ColorSync profile(s) via privileged helper") }
                 }
             }
         }
+        return removed
+    }
+
+    /// Delete the per-host WindowServer display-arrangement plist(s)
+    /// (`com.apple.windowserver.displays.*.plist`), backing each up alongside as `.bak` first. These
+    /// accumulate one saved arrangement per distinct display-set combination and, once huge, force
+    /// ColorSync to re-parse a giant plist on every display query (the other half of the runaway).
+    /// The file lives in the user's `ByHost` prefs so no elevation is needed; cfprefsd caches it,
+    /// so this only takes full effect after a logout/WindowServer restart — the caller should tell
+    /// the user. Returns the number of plists removed.
+    @discardableResult
+    static func clearSavedDisplayConfigs() -> Int {
+        let fm = FileManager.default
+        let byHost = fm.urls(for: .libraryDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Preferences/ByHost", isDirectory: true)
+        guard let files = try? fm.contentsOfDirectory(at: byHost, includingPropertiesForKeys: nil)
+        else { return 0 }
+        var removed = 0
+        for f in files where f.lastPathComponent.hasPrefix("com.apple.windowserver.displays.")
+            && f.pathExtension == "plist" {
+            let backup = f.appendingPathExtension("bak")
+            try? fm.removeItem(at: backup)
+            try? fm.copyItem(at: f, to: backup)
+            if (try? fm.removeItem(at: f)) != nil { removed += 1 }
+        }
+        if removed > 0 { NSLog("SystemHealth: cleared \(removed) saved display-config plist(s)") }
         return removed
     }
 }

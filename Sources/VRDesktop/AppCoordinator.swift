@@ -5,6 +5,7 @@ import Compositor
 import CoreGraphics
 import DisplayManager
 import GlassesDriver
+import Speech
 import SwiftUI
 import simd
 
@@ -164,6 +165,51 @@ final class AppCoordinator: ObservableObject {
             onFocusChanged?(focusedScreenID != nil)   // re-arm for the new mode if focus is active
         }
     }
+
+    // MARK: Voice control
+
+    enum VoiceMode: String, CaseIterable, Identifiable {
+        case pushToTalk, wakeWord
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .pushToTalk: return "Push-to-talk (⌃⌥A)"
+            case .wakeWord:   return "Wake word"
+            }
+        }
+    }
+    @Published var voiceEnabled: Bool = UserDefaults.standard.bool(forKey: "voiceEnabled") {
+        didSet { UserDefaults.standard.set(voiceEnabled, forKey: "voiceEnabled"); applyVoiceMode() }
+    }
+    @Published var voiceMode: VoiceMode =
+        VoiceMode(rawValue: UserDefaults.standard.string(forKey: "voiceMode") ?? "") ?? .pushToTalk {
+        didSet { UserDefaults.standard.set(voiceMode.rawValue, forKey: "voiceMode"); applyVoiceMode() }
+    }
+    @Published var wakeWord: String = UserDefaults.standard.string(forKey: "wakeWord") ?? "computer" {
+        didSet {
+            UserDefaults.standard.set(wakeWord, forKey: "wakeWord")
+            voice.wakeWord = wakeWord
+            if voiceEnabled, voiceMode == .wakeWord { applyVoiceMode() }   // restart with the new word
+        }
+    }
+    @Published var hasSpeechPermission = SFSpeechRecognizer.authorizationStatus() == .authorized
+    /// Push-to-talk: seconds to wait for speech to begin after ⌃⌥A.
+    @Published var voiceStartTimeout: Double = UserDefaults.standard.object(forKey: "voiceStartTimeout") as? Double ?? 4.0 {
+        didSet { UserDefaults.standard.set(voiceStartTimeout, forKey: "voiceStartTimeout"); voice.pttStartTimeout = voiceStartTimeout }
+    }
+    /// Push-to-talk: seconds of silence after the last word that ends the command.
+    @Published var voiceSilenceTimeout: Double = UserDefaults.standard.object(forKey: "voiceSilenceTimeout") as? Double ?? 2.0 {
+        didSet { UserDefaults.standard.set(voiceSilenceTimeout, forKey: "voiceSilenceTimeout"); voice.pttSilenceTimeout = voiceSilenceTimeout }
+    }
+    /// Allow Apple's server (cloud) recognition for better accuracy (audio leaves the Mac).
+    @Published var voiceAllowRemote: Bool = UserDefaults.standard.bool(forKey: "voiceAllowRemote") {
+        didSet { UserDefaults.standard.set(voiceAllowRemote, forKey: "voiceAllowRemote"); voice.allowRemote = voiceAllowRemote; applyVoiceMode() }
+    }
+
+    let voiceStore = VoiceCommandStore()
+    let voice = VoiceController()
+    private var lastVoiceIntent: VoiceIntent?
+    private var lastVoiceFireTime: CFTimeInterval = 0
 
     /// Global cursor position captured on entering focus, restored on exit.
     private var preFocusCursor: CGPoint?
@@ -377,6 +423,16 @@ final class AppCoordinator: ObservableObject {
         }
         updateSystemLoadTimer() // resume if the toggle was persisted on
         updateHealthTimer() // resume the process/health monitor if persisted on
+
+        // Clear any ColorSync profiles orphaned by a previous quit/crash before they bloat the
+        // registry, then arm the watchdog that auto-clears the runaway if it recurs while running.
+        let sweptAtLaunch = SystemHealth.sweepOrphanProfiles()
+        if sweptAtLaunch > 0 { DebugLog.shared.log("Launch: swept \(sweptAtLaunch) orphaned ColorSync profile(s)") }
+        colorSyncWatchdog.onPersistentRunaway = { [weak self] in
+            self?.colorSyncRunawayWarning = true
+            self?.statusMessage = "Display colour service is stuck — unplug/replug the Air 2 or reboot to clear it."
+        }
+        colorSyncWatchdog.setEnabled(colorSyncWatchdogEnabled)
         // Populate the layout with the currently-connected monitors (positioning-only/green).
         syncPhysicalMonitors()
 
@@ -389,6 +445,128 @@ final class AppCoordinator: ObservableObject {
             DebugLog.shared.log("window drag: \(dragging ? "started" : "ended")")
         }
         windowDragMonitor.start()
+
+        // Voice control: wire the recognizer callbacks, then start it if it was left enabled.
+        voice.wakeWord = wakeWord
+        voice.pttStartTimeout = voiceStartTimeout
+        voice.pttSilenceTimeout = voiceSilenceTimeout
+        voice.allowRemote = voiceAllowRemote
+        voice.onListeningChanged = { [weak self] listening in
+            self?.updateVoiceOverlay(listening: listening, transcript: "")
+            self?.statusMessage = listening ? "Listening…" : ""
+        }
+        voice.onPartial = { [weak self] text in
+            self?.updateVoiceOverlay(listening: true, transcript: text)
+        }
+        voice.onCommand = { [weak self] phrase in self?.handleVoiceCommand(phrase) }
+        voice.onError = { [weak self] msg in self?.statusMessage = msg }
+        applyVoiceMode()
+    }
+
+    // MARK: Voice control wiring
+
+    /// Start/stop continuous listening to match the current mode + enabled state.
+    func applyVoiceMode() {
+        voice.wakeWord = wakeWord
+        voice.contextualPhrases = voiceContextPhrases()
+        if voiceEnabled, voiceMode == .wakeWord, hasSpeechPermission {
+            voice.startWakeWord()
+        } else {
+            voice.stop()   // push-to-talk only listens on the hotkey
+        }
+    }
+
+    /// Push-to-talk: begin a single listen window (called from the ⌃⌥A hotkey).
+    func startPushToTalk() {
+        guard voiceEnabled else { statusMessage = "Enable Voice Control in the Voice Commands page"; return }
+        guard hasSpeechPermission else { statusMessage = "Grant Speech Recognition for voice control"; return }
+        voice.contextualPhrases = voiceContextPhrases()   // fresh bias each listen
+        voice.startPushToTalk()
+    }
+
+    /// Phrases fed to the recognizer to bias it toward our known commands + workspaces.
+    private func voiceContextPhrases() -> [String] {
+        var out: [String] = []
+        for b in voiceStore.bindings where b.enabled { out.append(contentsOf: b.phrases) }
+        let names = workspaceStore.workspaces.map(\.name)
+        out.append(contentsOf: names)
+        for n in names { out.append("switch to \(n)") }
+        out.append(wakeWord)
+        return Array(Set(out)).filter { !$0.isEmpty }
+    }
+
+    var voiceBindings: [VoiceBinding] { voiceStore.bindings }
+    func updateVoiceBinding(_ binding: VoiceBinding) {
+        voiceStore.update(binding); voice.contextualPhrases = voiceContextPhrases(); objectWillChange.send()
+    }
+    func resetVoiceCommands() {
+        voiceStore.resetToDefaults(); voice.contextualPhrases = voiceContextPhrases(); objectWillChange.send()
+    }
+
+    func requestSpeechPermission() {
+        requestMicrophonePermission()
+        voice.requestAuthorization { [weak self] granted in
+            guard let self else { return }
+            self.hasSpeechPermission = granted
+            if granted { self.applyVoiceMode() }
+            else { self.statusMessage = "Allow Speech Recognition in the prompt (or Privacy settings)" }
+        }
+    }
+
+    /// Resolve a recognized phrase to a command and run it (respecting the AR gate), with debounce.
+    private func handleVoiceCommand(_ phrase: String) {
+        guard let match = voiceStore.match(phrase, workspaceNames: workspaceStore.workspaces.map(\.name)) else {
+            statusMessage = "Didn't catch a command: \"\(phrase)\""
+            return
+        }
+        if case .intent(let intent) = match {
+            let now = CACurrentMediaTime()
+            if intent == lastVoiceIntent, now - lastVoiceFireTime < 0.8 { return }  // debounce repeats
+            lastVoiceIntent = intent; lastVoiceFireTime = now
+            guard arActive || !intent.arGated else { statusMessage = "Start AR first to: \(intent.title)"; return }
+            runVoiceIntent(intent)
+        } else if case .switchWorkspace(let name) = match {
+            if let ws = workspaceStore.workspaces.first(where: { $0.name == name }) {
+                setDisplayedWorkspace(ws.id)
+                statusMessage = "Voice: switched to \(name)"
+            }
+        }
+    }
+
+    private func runVoiceIntent(_ intent: VoiceIntent) {
+        statusMessage = "Voice: \(intent.title)"
+        switch intent {
+        case .recenter:        recenter()
+        case .recalibrate:     requestCalibration()
+        case .toggleAR:        toggleAR()
+        case .stopAR:          stopAR()
+        case .toggleStereo:    setStereo(!stereoEnabled)
+        case .toggleFocus:     toggleFocus()
+        case .togglePassthrough: togglePassthrough()
+        case .toggleHUD:       toggleHUD()
+        case .toggleLabels:    toggleLabels()
+        case .cursorToGaze:    moveCursorToGaze()
+        case .screenshot:      takeGlassesScreenshot()
+        case .toggleRecording: toggleRecording()
+        case .toggleMicMute:   toggleMicMute()
+        case .windowPicker:    onToggleWindowPicker?()
+        case .help:            onToggleHelp?()
+        case .quit:            NSApp.terminate(nil)
+        case .brightnessUp:    adjustBrightness(up: true)
+        case .brightnessDown:  adjustBrightness(up: false)
+        }
+    }
+
+    /// Show / hide the in-AR "Listening…" overlay (rasterized like the recording indicator).
+    private func updateVoiceOverlay(listening: Bool, transcript: String) {
+        guard let renderer else { return }
+        if listening {
+            let r = ImageRenderer(content: VoiceListeningView(transcript: transcript))
+            r.scale = 2; r.isOpaque = false
+            if let img = r.cgImage { renderer.setVoiceImage(img) }
+        } else {
+            renderer.clearVoice()
+        }
     }
 
     /// Localized name for a display, cached (see `screenNameCache`) — only hits the expensive
@@ -926,10 +1104,12 @@ final class AppCoordinator: ObservableObject {
             let screen = CGPreflightScreenCaptureAccess()
             let ax = BrightnessHotKey.accessibilityTrusted(prompt: false)
             let mic = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+            let speech = SFSpeechRecognizer.authorizationStatus() == .authorized
             Task { @MainActor [weak self] in
                 self?.hasScreenRecordingPermission = screen
                 self?.hasAccessibilityPermission = ax
                 self?.hasMicrophonePermission = mic
+                self?.hasSpeechPermission = speech
             }
         }
     }
@@ -2703,6 +2883,46 @@ final class AppCoordinator: ObservableObject {
     @Published var displayConfigCount = 0
     private var healthTimer: Timer?
 
+    /// Always-on guard that auto-clears the ColorSync runaway (the recurring "everything's sluggish
+    /// after a few hours" / colorsync stuck at ~75%). Defaults on; toggle persisted.
+    let colorSyncWatchdog = ColorSyncWatchdog()
+    @Published var colorSyncWatchdogEnabled: Bool =
+        UserDefaults.standard.object(forKey: "colorSyncWatchdogEnabled") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(colorSyncWatchdogEnabled, forKey: "colorSyncWatchdogEnabled")
+            colorSyncWatchdog.setEnabled(colorSyncWatchdogEnabled)
+        }
+    }
+    /// Set when the watchdog gives up because remediation didn't settle the runaway (the OS-side
+    /// Air-2 self-loop). Surfaced on the Diagnostics page; cleared on the next manual clean.
+    @Published var colorSyncRunawayWarning = false
+
+    /// Manually run the watchdog's remediation: sweep orphaned ColorSync profiles + bounce the
+    /// daemons. Exposed as a Diagnostics button for when the user wants to clear it on demand.
+    func cleanColorSyncNow() {
+        colorSyncRunawayWarning = false
+        let removed = SystemHealth.sweepOrphanProfiles()
+        statusMessage = "Cleared \(removed) stale ColorSync profile(s); restarting display colour service…"
+        PrivilegedHelperClient.shared.bounceColorSyncDaemons { [weak self] ok in
+            Task { @MainActor in
+                self?.statusMessage = ok
+                    ? "ColorSync reset — should settle in a few seconds."
+                    : "Swept profiles; couldn't restart the daemon (approve the helper in Login Items)."
+                self?.refreshHealthNow()
+            }
+        }
+    }
+
+    /// Clear the bloated WindowServer saved-arrangement plist(s) (the other runaway driver). Takes
+    /// full effect only after a logout/WindowServer restart, so we tell the user.
+    func clearSavedDisplayConfigs() {
+        let n = SystemHealth.clearSavedDisplayConfigs()
+        statusMessage = n > 0
+            ? "Cleared \(n) saved display-arrangement file(s). Log out and back in to apply (backed up as .bak)."
+            : "No saved display-arrangement files to clear."
+        refreshHealthNow()
+    }
+
     private func updateHealthTimer() {
         healthTimer?.invalidate(); healthTimer = nil
         guard processMonitorEnabled else { return }
@@ -2965,7 +3185,13 @@ final class AppCoordinator: ObservableObject {
         let activeCaptures = captures.values
         captures.removeAll()
         Task { for c in activeCaptures { await c.stop() } }
+        // Grab the virtual displays' UUIDs before tearing them down so we can delete their now-orphaned
+        // per-display ColorSync profiles — otherwise every AR session leaves them behind to accumulate
+        // and bloat the registry (the colorsync.displayservices runaway). removeScreen already does this
+        // for one-off removals; this covers the whole-session teardown / quit path.
+        let teardownUUIDs = virtualDisplays.active.values.compactMap { SystemHealth.displayUUID($0.displayID) }
         virtualDisplays.destroyAll() // destroying virtual displays auto-breaks their mirrors
+        if !teardownUUIDs.isEmpty { SystemHealth.removeDisplayProfiles(uuids: teardownUUIDs) }
         intentionalMirrors.removeAll()
         // Put the user's real desktop arrangement back the way it was before AR moved things.
         restoreDisplayArrangement()
