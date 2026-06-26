@@ -28,6 +28,8 @@
     <string>AR Workspace Manager records your microphone when you record the glasses view (you can mute it with ⌃⌥M).</string>
     <key>NSSpeechRecognitionUsageDescription</key>
     <string>AR Workspace Manager uses speech recognition to run hands-free voice commands. Recognition runs on-device.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>AR Workspace Manager asks macOS to log out when you choose "Log Out Now" after clearing saved display arrangements.</string>
     <key>NSHumanReadableCopyright</key>
     <string>© Paul Ketelle. PolyForm Noncommercial 1.0.0 — noncommercial use only. Includes MIT code from nrealAirLinuxDriver/xrealair-sdk-macos and xioTechnologies Fusion, and BSD-licensed hidapi.</string>
 </dict>

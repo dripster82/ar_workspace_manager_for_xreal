@@ -8,5 +8,9 @@
          json-c is statically linked, so library validation needs no exception. -->
     <key>com.apple.security.device.audio-input</key>
     <true/>
+    <!-- Send Apple events (to loginwindow) so the "Log Out Now" maintenance action can request a
+         logout. Gated by the Automation TCC prompt; loginwindow shows its own confirmation too. -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
 </dict>
 </plist>

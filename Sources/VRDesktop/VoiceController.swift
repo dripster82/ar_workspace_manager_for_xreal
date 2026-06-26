@@ -1,4 +1,6 @@
+import AudioToolbox
 import AVFoundation
+import CoreAudio
 import Speech
 
 /// Drives on-device speech recognition for voice control. Two modes:
@@ -24,6 +26,9 @@ final class VoiceController {
     /// Known command phrases (+ workspace names) used to bias recognition toward what we expect.
     /// Set by the coordinator before each listen. Big accuracy win for a fixed vocabulary.
     var contextualPhrases: [String] = []
+    /// Preferred input device (an AVCaptureDevice/CoreAudio UID) to listen on, or nil for the system
+    /// default. Mirrors the recording mic picker so voice honours the same choice.
+    var inputDeviceUID: String?
 
     private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
     private let audioEngine = AVAudioEngine()
@@ -36,6 +41,9 @@ final class VoiceController {
     private var lastPartial = ""
     private var wakeArmed = false
     private var pendingWakeCommand = ""
+    /// When set, the next push-to-talk result is handed to this (for the per-command "test & learn"
+    /// flow) instead of being dispatched as a command.
+    private var oneShotCompletion: ((String) -> Void)?
 
     var isListening: Bool { mode != .idle }
     static var isAuthorized: Bool { SFSpeechRecognizer.authorizationStatus() == .authorized }
@@ -71,6 +79,15 @@ final class VoiceController {
         armSilence(pttStartTimeout)   // generous wait for speech to begin
     }
 
+    /// One-shot listen for the "test & learn" flow: hands the raw transcript to `completion` instead
+    /// of dispatching a command. Reuses the push-to-talk timing.
+    func startTest(_ completion: @escaping (String) -> Void) {
+        guard mode == .idle else { completion(""); return }
+        oneShotCompletion = completion
+        startPushToTalk()
+        if mode != .pushToTalk { oneShotCompletion = nil; completion("") }   // failed to start
+    }
+
     /// Continuous wake-word listening.
     func startWakeWord() {
         guard mode != .wakeWord else { return }
@@ -94,9 +111,11 @@ final class VoiceController {
             audioEngine.stop()
         }
         let wasListening = mode != .idle
+        let pendingTest = oneShotCompletion; oneShotCompletion = nil
         mode = .idle
         wakeArmed = false; pendingWakeCommand = ""
         if wasListening { onListeningChanged?(false) }
+        pendingTest?("")   // reset any in-flight test if we were stopped externally
     }
 
     // MARK: Engine
@@ -123,6 +142,7 @@ final class VoiceController {
         endingAudio = false
 
         let input = audioEngine.inputNode
+        if let uid = inputDeviceUID { setInputDevice(uid) }   // honour the mic picker
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else {
             onError?("No microphone input"); request = nil; return false
@@ -143,6 +163,42 @@ final class VoiceController {
             DispatchQueue.main.async { self?.handleResult(result, error: error) }
         }
         return true
+    }
+
+    /// Point the audio engine's input at a specific CoreAudio device (by UID) without changing the
+    /// system default. No-op if the device can't be resolved (falls back to whatever's current).
+    private func setInputDevice(_ uid: String) {
+        guard let deviceID = Self.audioDeviceID(forUID: uid),
+              let unit = audioEngine.inputNode.audioUnit else { return }
+        var dev = deviceID
+        AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
+                             &dev, UInt32(MemoryLayout<AudioDeviceID>.size))
+    }
+
+    /// Resolve a CoreAudio device UID (the same string AVCaptureDevice.uniqueID returns for audio
+    /// devices) to its AudioDeviceID.
+    static func audioDeviceID(forUID uid: String) -> AudioDeviceID? {
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDevices,
+                                              mScope: kAudioObjectPropertyScopeGlobal,
+                                              mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size) == noErr,
+              size > 0 else { return nil }
+        let count = Int(size) / MemoryLayout<AudioDeviceID>.size
+        var devices = [AudioDeviceID](repeating: 0, count: count)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &devices) == noErr else { return nil }
+        for dev in devices {
+            var uidAddr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyDeviceUID,
+                                                     mScope: kAudioObjectPropertyScopeGlobal,
+                                                     mElement: kAudioObjectPropertyElementMain)
+            var uidRef: CFString? = nil
+            var uidSize = UInt32(MemoryLayout<CFString?>.size)
+            if AudioObjectGetPropertyData(dev, &uidAddr, 0, nil, &uidSize, &uidRef) == noErr,
+               (uidRef as String?) == uid {
+                return dev
+            }
+        }
+        return nil
     }
 
     private func handleResult(_ result: SFSpeechRecognitionResult?, error: Error?) {
@@ -205,8 +261,11 @@ final class VoiceController {
     private func finishPushToTalk(_ text: String) {
         guard mode == .pushToTalk else { return }
         let phrase = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let completion = oneShotCompletion
+        oneShotCompletion = nil
         stop()
-        if !phrase.isEmpty { onCommand?(phrase) }
+        if let completion { completion(phrase) }      // test mode: hand back the raw transcript
+        else if !phrase.isEmpty { onCommand?(phrase) }
     }
 
     // MARK: Wake word

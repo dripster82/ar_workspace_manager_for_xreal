@@ -451,6 +451,7 @@ final class AppCoordinator: ObservableObject {
         voice.pttStartTimeout = voiceStartTimeout
         voice.pttSilenceTimeout = voiceSilenceTimeout
         voice.allowRemote = voiceAllowRemote
+        voice.inputDeviceUID = selectedMicID.isEmpty ? nil : selectedMicID
         voice.onListeningChanged = { [weak self] listening in
             self?.updateVoiceOverlay(listening: listening, transcript: "")
             self?.statusMessage = listening ? "Listening…" : ""
@@ -469,6 +470,7 @@ final class AppCoordinator: ObservableObject {
     func applyVoiceMode() {
         voice.wakeWord = wakeWord
         voice.contextualPhrases = voiceContextPhrases()
+        voice.inputDeviceUID = selectedMicID.isEmpty ? nil : selectedMicID
         if voiceEnabled, voiceMode == .wakeWord, hasSpeechPermission {
             voice.startWakeWord()
         } else {
@@ -481,7 +483,22 @@ final class AppCoordinator: ObservableObject {
         guard voiceEnabled else { statusMessage = "Enable Voice Control in the Voice Commands page"; return }
         guard hasSpeechPermission else { statusMessage = "Grant Speech Recognition for voice control"; return }
         voice.contextualPhrases = voiceContextPhrases()   // fresh bias each listen
+        voice.inputDeviceUID = selectedMicID.isEmpty ? nil : selectedMicID
         voice.startPushToTalk()
+    }
+
+    /// "Test & learn": listen once and hand the raw transcript back so the user can add it as a
+    /// trigger phrase for a specific command (tuning recognition to their voice/mic).
+    func startVoiceTest(_ completion: @escaping (String) -> Void) {
+        guard hasSpeechPermission else {
+            statusMessage = "Grant Speech Recognition first"; completion(""); return
+        }
+        guard !voice.isListening else {
+            statusMessage = "Already listening — finish that first"; completion(""); return
+        }
+        voice.contextualPhrases = voiceContextPhrases()
+        voice.inputDeviceUID = selectedMicID.isEmpty ? nil : selectedMicID
+        voice.startTest(completion)
     }
 
     /// Phrases fed to the recognizer to bias it toward our known commands + workspaces.
@@ -1069,10 +1086,15 @@ final class AppCoordinator: ObservableObject {
     @Published var hasAccessibilityPermission = BrightnessHotKey.accessibilityTrusted(prompt: false)
     @Published var hasMicrophonePermission = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
 
-    /// Selected mic for recording: "" = system default, else an AVCaptureDevice uniqueID.
+    /// Selected mic, shared by recording AND voice: "" = system default, else an AVCaptureDevice
+    /// uniqueID (the same string CoreAudio uses as the device UID).
     @Published var selectedMicID: String = UserDefaults.standard.string(forKey: "micDeviceID") ?? "" {
-        didSet { UserDefaults.standard.set(selectedMicID, forKey: "micDeviceID")
-                 recorder.preferredMicID = selectedMicID.isEmpty ? nil : selectedMicID }
+        didSet {
+            UserDefaults.standard.set(selectedMicID, forKey: "micDeviceID")
+            recorder.preferredMicID = selectedMicID.isEmpty ? nil : selectedMicID
+            voice.inputDeviceUID = selectedMicID.isEmpty ? nil : selectedMicID
+            if voiceEnabled, voiceMode == .wakeWord { applyVoiceMode() }   // restart on the new mic
+        }
     }
 
     /// Include the Mac's system output audio (meeting voices, music, app SFX) in recordings, mixed
@@ -2921,6 +2943,20 @@ final class AppCoordinator: ObservableObject {
             ? "Cleared \(n) saved display-arrangement file(s). Log out and back in to apply (backed up as .bak)."
             : "No saved display-arrangement files to clear."
         refreshHealthNow()
+    }
+
+    /// Ask macOS to log out, so a just-cleared saved-config change applies immediately. This does NOT
+    /// happen on its own — only when the user explicitly chooses it. loginwindow shows its own
+    /// "quit all apps and log out?" confirmation, so it's never silent. Best-effort: if the Apple-
+    /// events automation prompt is denied, we tell the user to log out manually.
+    func logOutNow() {
+        let script = NSAppleScript(source: "tell application \"loginwindow\" to «event aevtlogo»")
+        var error: NSDictionary?
+        script?.executeAndReturnError(&error)
+        if let error {
+            DebugLog.shared.log("logout request failed: \(error)")
+            statusMessage = "Couldn't start logout automatically — log out manually to apply (allow Automation if prompted)."
+        }
     }
 
     private func updateHealthTimer() {

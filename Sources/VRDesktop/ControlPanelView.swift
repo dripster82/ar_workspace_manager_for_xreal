@@ -686,6 +686,16 @@ struct ControlPanelView: View {
 
     private var voiceCommandsPage: some View {
         VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Image(systemName: "flask").foregroundStyle(.orange)
+                Text("Experimental — voice control is a work in progress; recognition and commands may be unreliable.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
+            .padding(10)
+            .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.orange.opacity(0.35)))
+
             card("Voice control", "mic") {
                 Toggle("Enable voice control", isOn: $coordinator.voiceEnabled)
                 Picker("", selection: $coordinator.voiceMode) {
@@ -723,11 +733,14 @@ struct ControlPanelView: View {
                               granted: coordinator.hasMicrophonePermission) { coordinator.requestMicrophonePermission() }
             }
             card("Commands", "text.bubble") {
-                Text("Edit the phrases that trigger each command (comma-separated). You can also say "
-                     + "\u{201C}switch to <workspace name>\u{201D}.")
+                Text("Edit the phrases that trigger each command (comma-separated). Tap the mic to say a "
+                     + "command and add exactly what was heard — best way to tune it to your voice. You can "
+                     + "also say \u{201C}switch to <workspace name>\u{201D}.")
                     .font(.caption2).foregroundStyle(.secondary)
                 ForEach(coordinator.voiceBindings) { binding in
-                    VoiceBindingRow(binding: binding) { coordinator.updateVoiceBinding($0) }
+                    VoiceBindingRow(binding: binding,
+                                    onChange: { coordinator.updateVoiceBinding($0) },
+                                    onTest: { coordinator.startVoiceTest($0) })
                 }
                 Button("Reset to defaults") { coordinator.resetVoiceCommands() }
                     .controlSize(.small).padding(.top, 4)
@@ -1234,12 +1247,17 @@ struct ControlPanelView: View {
             }
             .confirmationDialog("Clear saved display arrangements?",
                                 isPresented: $showClearConfigsConfirm, titleVisibility: .visible) {
-                Button("Clear (log out to apply)", role: .destructive) {
+                Button("Clear & Log Out Now…", role: .destructive) {
+                    coordinator.clearSavedDisplayConfigs()
+                    coordinator.logOutNow()
+                }
+                Button("Clear, I'll Log Out Later") {
                     coordinator.clearSavedDisplayConfigs()
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("Removes the bloated WindowServer arrangement plist (backed up as .bak). Takes effect after you log out and back in.")
+                Text("Removes the bloated WindowServer arrangement plist (backed up as .bak). This does NOT log you out by itself — but the change only takes effect after a logout. "
+                     + "“Log Out Now” asks macOS to log out (it shows its own confirmation and closes your apps first).")
             }
         }
     }
@@ -2199,12 +2217,17 @@ struct NonChainingScrollView<Content: View>: NSViewRepresentable {
 private struct VoiceBindingRow: View {
     let binding: VoiceBinding
     let onChange: (VoiceBinding) -> Void
+    let onTest: (@escaping (String) -> Void) -> Void
     @State private var phrasesText: String
     @State private var enabled: Bool
+    @State private var heardText = ""
+    @State private var testing = false
 
-    init(binding: VoiceBinding, onChange: @escaping (VoiceBinding) -> Void) {
+    init(binding: VoiceBinding, onChange: @escaping (VoiceBinding) -> Void,
+         onTest: @escaping (@escaping (String) -> Void) -> Void) {
         self.binding = binding
         self.onChange = onChange
+        self.onTest = onTest
         _phrasesText = State(initialValue: binding.phrases.joined(separator: ", "))
         _enabled = State(initialValue: binding.enabled)
     }
@@ -2213,14 +2236,43 @@ private struct VoiceBindingRow: View {
         HStack(spacing: 8) {
             Toggle("", isOn: $enabled).labelsHidden().controlSize(.small)
                 .onChange(of: enabled) { _ in commit() }
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(binding.intent.title).font(.caption).fontWeight(.medium)
                 TextField("phrases, comma separated", text: $phrasesText)
                     .textFieldStyle(.roundedBorder).font(.system(.caption2, design: .monospaced))
                     .onSubmit { commit() }
+                if !heardText.isEmpty {
+                    HStack(spacing: 6) {
+                        Text("Heard: \u{201C}\(heardText)\u{201D}")
+                            .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                        Button("Add phrase") { addHeard() }.controlSize(.mini)
+                        Button("Dismiss") { heardText = "" }
+                            .controlSize(.mini).buttonStyle(.plain).foregroundStyle(.secondary)
+                    }
+                }
             }
+            Spacer(minLength: 0)
+            Button {
+                heardText = ""; testing = true
+                onTest { text in testing = false; heardText = text }
+            } label: {
+                Image(systemName: testing ? "mic.fill" : "mic.circle")
+                    .foregroundStyle(testing ? .red : .accentColor)
+            }
+            .buttonStyle(.plain).disabled(testing)
+            .help("Say this command, then add what was heard as a trigger phrase (tunes it to your voice).")
         }
         .opacity(enabled ? 1 : 0.5)
+    }
+
+    /// Append the recognizer's transcript to this command's phrases (lowercased).
+    private func addHeard() {
+        let h = heardText.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !h.isEmpty else { return }
+        if !phrasesText.isEmpty { phrasesText += ", " }
+        phrasesText += h
+        heardText = ""
+        commit()
     }
 
     private func commit() {
