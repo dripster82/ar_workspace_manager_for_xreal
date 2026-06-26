@@ -45,6 +45,7 @@ final class VoiceController {
     private var lastPartial = ""
     private var wakeArmed = false
     private var pendingWakeCommand = ""
+    private var wakeCapturing = false   // wake word heard → overlay shown for the trailing command
     /// When set, the next push-to-talk result is handed to this (for the per-command "test & learn"
     /// flow) instead of being dispatched as a command.
     private var oneShotCompletion: ((String) -> Void)?
@@ -76,16 +77,7 @@ final class VoiceController {
     /// "test mic" level meter. Stop with `stop()`.
     func startMetering() {
         guard mode == .idle else { return }
-        let input = audioEngine.inputNode
-        let format = input.outputFormat(forBus: 0)
-        guard format.sampleRate > 0, format.channelCount > 0 else { onError?("No microphone input"); return }
-        input.removeTap(onBus: 0)
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
-            self?.reportLevel(buffer)
-        }
-        audioEngine.prepare()
-        do { try audioEngine.start() }
-        catch { onError?("Couldn't start audio: \(error.localizedDescription)"); input.removeTap(onBus: 0); return }
+        guard startAudioEngine() else { return }   // no recognition request → metering only
         mode = .metering
     }
 
@@ -109,14 +101,14 @@ final class VoiceController {
         if mode != .pushToTalk { oneShotCompletion = nil; completion("") }   // failed to start
     }
 
-    /// Continuous wake-word listening.
+    /// Continuous wake-word listening. The overlay stays HIDDEN until the wake word is heard (it's
+    /// shown by `handleWakeTranscript`), so we don't display a persistent "Listening…" popup.
     func startWakeWord() {
         guard mode != .wakeWord else { return }
         stop()
-        wakeArmed = false; pendingWakeCommand = ""; lastPartial = ""
+        wakeArmed = false; pendingWakeCommand = ""; lastPartial = ""; wakeCapturing = false
         guard startEngine() else { return }
         mode = .wakeWord
-        onListeningChanged?(true)
     }
 
     /// Stop everything (idempotent).
@@ -131,18 +123,57 @@ final class VoiceController {
             audioEngine.inputNode.removeTap(onBus: 0)
             audioEngine.stop()
         }
-        let wasListening = mode != .idle
+        let wasOverlayShown = mode != .idle && (mode != .wakeWord || wakeCapturing)
         let pendingTest = oneShotCompletion; oneShotCompletion = nil
         mode = .idle
-        wakeArmed = false; pendingWakeCommand = ""
-        if wasListening { onListeningChanged?(false) }
+        wakeArmed = false; pendingWakeCommand = ""; wakeCapturing = false
+        if wasOverlayShown { onListeningChanged?(false) }
         pendingTest?("")   // reset any in-flight test if we were stopped externally
     }
 
     // MARK: Engine
 
+    /// Engine + tap convenience (audio + a fresh recognition). Used to begin push-to-talk / wake-word.
     @discardableResult
     private func startEngine() -> Bool {
+        guard startAudioEngine() else { return false }
+        guard startRecognition() else {
+            if audioEngine.isRunning { audioEngine.inputNode.removeTap(onBus: 0); audioEngine.stop() }
+            return false
+        }
+        return true
+    }
+
+    /// Start the audio engine + a single continuous tap that feeds whatever `request` is current and
+    /// reports the mic level. Idempotent — the tap stays up across wake-word utterances (only the
+    /// recognition request/task is recycled), which is what makes wake-word reliably keep listening.
+    @discardableResult
+    private func startAudioEngine() -> Bool {
+        if audioEngine.isRunning { return true }
+        // System default input (stable). The mic picker sets the default via the HAL; we never poke
+        // the engine's input device, which can corrupt the node's format and crash installTap.
+        let input = audioEngine.inputNode
+        let format = input.outputFormat(forBus: 0)
+        guard format.sampleRate > 0, format.channelCount > 0 else {
+            onError?("No microphone input — check the mic and its permission"); return false
+        }
+        input.removeTap(onBus: 0)
+        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+            self?.request?.append(buffer)
+            self?.reportLevel(buffer)
+        }
+        audioEngine.prepare()
+        do { try audioEngine.start() }
+        catch {
+            onError?("Couldn't start audio: \(error.localizedDescription)")
+            input.removeTap(onBus: 0); return false
+        }
+        return true
+    }
+
+    /// Begin (or recycle) a recognition request+task over the already-running tap.
+    @discardableResult
+    private func startRecognition() -> Bool {
         guard Self.isAuthorized else { onError?("Speech permission not granted"); return false }
         guard let recognizer, recognizer.isAvailable else {
             onError?("Speech recognizer unavailable"); return false
@@ -156,32 +187,10 @@ final class VoiceController {
         let req = SFSpeechAudioBufferRecognitionRequest()
         req.shouldReportPartialResults = true
         req.requiresOnDeviceRecognition = !allowRemote
-        // Bias toward our known commands + hint the engine these are short commands, not dictation.
-        req.contextualStrings = Array(contextualPhrases.prefix(100))
+        req.contextualStrings = Array(contextualPhrases.prefix(100))   // bias toward known commands
         req.taskHint = .search
         request = req
         endingAudio = false
-
-        // Listen on the system default input (stable). The mic picker sets that default via the HAL
-        // — we deliberately don't poke the engine's input device, which can corrupt the node's
-        // format and crash installTap.
-        let input = audioEngine.inputNode
-        let format = input.outputFormat(forBus: 0)
-        guard format.sampleRate > 0, format.channelCount > 0 else {
-            onError?("No microphone input — check the mic and its permission"); request = nil; return false
-        }
-        input.removeTap(onBus: 0)
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
-            self?.request?.append(buffer)
-            self?.reportLevel(buffer)
-        }
-        audioEngine.prepare()
-        do {
-            try audioEngine.start()
-        } catch {
-            onError?("Couldn't start audio: \(error.localizedDescription)")
-            input.removeTap(onBus: 0); request = nil; return false
-        }
 
         task = recognizer.recognitionTask(with: req) { [weak self] result, error in
             DispatchQueue.main.async { self?.handleResult(result, error: error) }
@@ -336,12 +345,14 @@ final class VoiceController {
     // MARK: Wake word
 
     private func handleWakeTranscript(_ text: String, isFinal: Bool) {
-        onPartial?(text)
         let lower = VoiceCommandStore.normalize(text)
         let wake = VoiceCommandStore.normalize(wakeWord)
         if !wake.isEmpty, let r = lower.range(of: wake, options: .backwards) {
+            // Wake word heard — NOW show the overlay, and only the words spoken after it.
+            if !wakeCapturing { wakeCapturing = true; onListeningChanged?(true) }
             wakeArmed = true
             pendingWakeCommand = String(lower[r.upperBound...]).trimmingCharacters(in: .whitespaces)
+            onPartial?(pendingWakeCommand)
             if isFinal {
                 fireWakeCommand()
             } else if !pendingWakeCommand.isEmpty {
@@ -350,31 +361,33 @@ final class VoiceController {
         } else if isFinal {
             recycleWakeWord()     // utterance ended without the wake word — start fresh
         }
+        // No wake word yet → no overlay (stay quiet).
     }
 
     private func fireWakeCommand() {
         guard mode == .wakeWord, wakeArmed else { return }
         let cmd = pendingWakeCommand
         wakeArmed = false; pendingWakeCommand = ""
+        if wakeCapturing { wakeCapturing = false; onListeningChanged?(false) }   // hide overlay
         if !cmd.isEmpty { onCommand?(cmd) }
         recycleWakeWord()
     }
 
-    /// Tear down and restart the recognition task so the transcript buffer resets (SFSpeech degrades
-    /// over long continuous sessions). Keeps `mode == .wakeWord`.
+    /// Recycle the recognition request/task so the transcript buffer resets (SFSpeech degrades over
+    /// long sessions) — WITHOUT stopping the audio engine/tap, so listening continues seamlessly.
+    /// Keeps `mode == .wakeWord`. Deferred to the next tick so the current callback fully unwinds.
     private func recycleWakeWord() {
         guard mode == .wakeWord else { return }
         silenceTimer?.invalidate(); silenceTimer = nil
-        task?.cancel(); task = nil
-        request?.endAudio(); request = nil
-        if audioEngine.isRunning {
-            audioEngine.inputNode.removeTap(onBus: 0)
-            audioEngine.stop()
-        }
+        if wakeCapturing { wakeCapturing = false; onListeningChanged?(false) }   // hide overlay
         wakeArmed = false; pendingWakeCommand = ""; lastPartial = ""
-        if !startEngine() {
-            mode = .idle
-            onListeningChanged?(false)
+        request?.endAudio(); request = nil
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.mode == .wakeWord else { return }
+            if !self.startRecognition() {     // engine/tap stay up; just a fresh recogniser
+                self.mode = .idle
+                self.onListeningChanged?(false)
+            }
         }
     }
 }

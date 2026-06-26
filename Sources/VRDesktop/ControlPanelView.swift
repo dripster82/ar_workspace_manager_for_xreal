@@ -698,6 +698,8 @@ struct ControlPanelView: View {
 
             card("Voice control", "mic") {
                 Toggle("Enable voice control", isOn: $coordinator.voiceEnabled)
+                Text("Voice control only works while AR is running.")
+                    .font(.caption2).foregroundStyle(.secondary)
                 Picker("", selection: $coordinator.voiceMode) {
                     ForEach(AppCoordinator.VoiceMode.allCases) { Text($0.label).tag($0) }
                 }

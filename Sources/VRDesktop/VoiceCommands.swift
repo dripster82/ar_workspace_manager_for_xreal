@@ -1,11 +1,18 @@
 import Foundation
 
+/// Decodes `T` if possible, else `nil` — lets an array skip elements that no longer decode (e.g. a
+/// saved binding for a command that was removed) instead of failing the whole decode.
+private struct FailableDecodable<T: Decodable>: Decodable {
+    let value: T?
+    init(from decoder: Decoder) throws { value = try? T(from: decoder) }
+}
+
 /// A fixed app action a voice command can trigger. The set is fixed (each maps to an existing
 /// coordinator method), but the spoken *phrases* that trigger it are user-editable (see `VoiceBinding`).
 enum VoiceIntent: String, Codable, CaseIterable, Identifiable {
-    case recenter, recalibrate, toggleAR, stopAR, toggleStereo, toggleFocus, togglePassthrough
-    case toggleHUD, toggleLabels, cursorToGaze, screenshot, toggleRecording, toggleMicMute
-    case windowPicker, help, quit, brightnessUp, brightnessDown
+    case recenter, recalibrate, toggleStereo, toggleFocus, togglePassthrough
+    case toggleHUD, toggleLabels, cursorToGaze, findCursor, screenshot, toggleRecording, toggleMicMute
+    case windowPicker, help, brightnessUp, brightnessDown
 
     var id: String { rawValue }
 
@@ -14,20 +21,18 @@ enum VoiceIntent: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .recenter:        return "Recenter view"
         case .recalibrate:     return "Recalibrate drift"
-        case .toggleAR:        return "Start / stop AR"
-        case .stopAR:          return "Stop AR"
         case .toggleStereo:    return "Stereo (SBS)"
         case .toggleFocus:     return "Focus looked-at screen"
         case .togglePassthrough: return "Passthrough"
         case .toggleHUD:       return "HUD widgets"
         case .toggleLabels:    return "Screen labels"
         case .cursorToGaze:    return "Cursor to gaze"
+        case .findCursor:      return "Find the cursor"
         case .screenshot:      return "Screenshot"
         case .toggleRecording: return "Record"
         case .toggleMicMute:   return "Mute / unmute mic"
         case .windowPicker:    return "Move window to gaze"
         case .help:            return "Show help"
-        case .quit:            return "Quit app"
         case .brightnessUp:    return "Brightness up"
         case .brightnessDown:  return "Brightness down"
         }
@@ -38,33 +43,29 @@ enum VoiceIntent: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .recenter:        return ["recenter", "recentre", "reset view", "center the view"]
         case .recalibrate:     return ["recalibrate", "calibrate drift"]
-        case .toggleAR:        return ["start ar", "toggle ar"]
-        case .stopAR:          return ["stop ar", "exit ar", "end ar"]
         case .toggleStereo:    return ["stereo", "side by side"]
         case .toggleFocus:     return ["focus", "focus screen"]
         case .togglePassthrough: return ["passthrough", "pass through"]
         case .toggleHUD:       return ["hud", "widgets"]
         case .toggleLabels:    return ["labels", "screen labels"]
-        case .cursorToGaze:    return ["cursor to gaze", "move cursor here"]
+        case .cursorToGaze:    return ["cursor to gaze", "move cursor here", "bring cursor"]
+        case .findCursor:      return ["find cursor", "find the cursor", "where's my cursor", "find mouse"]
         case .screenshot:      return ["screenshot", "take a screenshot"]
         case .toggleRecording: return ["record", "start recording", "stop recording"]
         case .toggleMicMute:   return ["mute", "unmute"]
         case .windowPicker:    return ["move window", "window to gaze"]
         case .help:            return ["help", "show shortcuts"]
-        case .quit:            return ["quit app", "close app"]
         case .brightnessUp:    return ["brighter", "brightness up"]
         case .brightnessDown:  return ["dimmer", "brightness down"]
         }
     }
 
-    /// Commands that only make sense while an AR session is running (gaze / render dependent).
-    /// Mirrors `main.swift`'s `alwaysAllowed` set — everything NOT here is AR-gated.
+    /// Commands that don't strictly need a gaze/render context. (Voice is only usable while AR runs,
+    /// so this mostly matters for messaging.)
     var arGated: Bool {
         switch self {
-        case .recalibrate, .toggleAR, .stopAR, .help, .quit, .brightnessUp, .brightnessDown:
-            return false
-        default:
-            return true
+        case .recalibrate, .help, .brightnessUp, .brightnessDown: return false
+        default: return true
         }
     }
 }
@@ -101,10 +102,11 @@ final class VoiceCommandStore {
         url = dir.appendingPathComponent("voiceCommands.json")
 
         if let data = try? Data(contentsOf: url),
-           let saved = try? JSONDecoder().decode([VoiceBinding].self, from: data) {
-            bindings = saved
-            // Top up any intents missing from an older saved file.
-            let present = Set(saved.map(\.intent))
+           let saved = try? JSONDecoder().decode([FailableDecodable<VoiceBinding>].self, from: data) {
+            // Keep only bindings whose intent still exists (drops commands removed in a later version),
+            // preserving the user's custom phrases for the ones that remain.
+            bindings = saved.compactMap(\.value)
+            let present = Set(bindings.map(\.intent))
             for intent in VoiceIntent.allCases where !present.contains(intent) {
                 bindings.append(VoiceBinding(intent: intent, phrases: intent.defaultPhrases))
             }

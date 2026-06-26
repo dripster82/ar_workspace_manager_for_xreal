@@ -41,7 +41,9 @@ final class AppCoordinator: ObservableObject {
     /// Live telemetry tiles observe this directly (see `LiveStats`) so they refresh during AR
     /// without re-rendering the whole panel.
     let live = LiveStats()
-    @Published var arActive = false
+    @Published var arActive = false {
+        didSet { if arActive != oldValue { applyVoiceMode() } }   // voice runs only while AR is active
+    }
     /// True while the user is dragging a window around the desktop (see `WindowDragMonitor`).
     @Published private(set) var isDraggingWindow = false
     private let windowDragMonitor = WindowDragMonitor()
@@ -215,6 +217,7 @@ final class AppCoordinator: ObservableObject {
     @Published private(set) var micTesting = false
     private var voiceTranscript = ""
     private var lastVoiceRender: CFTimeInterval = 0
+    private var voiceOverlayVisible = false
 
     /// Global cursor position captured on entering focus, restored on exit.
     private var preFocusCursor: CGPoint?
@@ -456,24 +459,25 @@ final class AppCoordinator: ObservableObject {
         voice.pttStartTimeout = voiceStartTimeout
         voice.pttSilenceTimeout = voiceSilenceTimeout
         voice.allowRemote = voiceAllowRemote
-        voice.onListeningChanged = { [weak self] listening in
+        voice.onListeningChanged = { [weak self] visible in
             guard let self else { return }
-            if listening { self.voiceTranscript = ""; self.renderVoiceOverlay(force: true) }
+            self.voiceOverlayVisible = visible
+            if visible { self.voiceTranscript = ""; self.renderVoiceOverlay(force: true) }
             else { self.renderer?.clearVoice(); self.micLevel = 0; self.micTesting = false }
-            self.statusMessage = listening ? "Listening…" : ""
+            self.statusMessage = visible ? "Listening…" : ""
         }
         voice.onPartial = { [weak self] text in
             guard let self else { return }
             self.voiceTranscript = text
-            self.renderVoiceOverlay(force: true)
+            if self.voiceOverlayVisible { self.renderVoiceOverlay(force: true) }
         }
         voice.onCommand = { [weak self] phrase in self?.handleVoiceCommand(phrase) }
         voice.onError = { [weak self] msg in self?.statusMessage = msg }
         voice.onLevel = { [weak self] lvl in
             guard let self else { return }
             self.micLevel = lvl
-            // Reflect the level in the in-AR "Listening…" bar (not during a standalone meter test).
-            if self.voice.isListening, self.voice.mode != .metering { self.renderVoiceOverlay(force: false) }
+            // Only animate the overlay's level bar while the popup is actually showing.
+            if self.voiceOverlayVisible, self.voice.mode != .metering { self.renderVoiceOverlay(force: false) }
         }
         applyVoiceMode()
     }
@@ -485,7 +489,8 @@ final class AppCoordinator: ObservableObject {
         voice.wakeWord = wakeWord
         voice.contextualPhrases = voiceContextPhrases()
         voice.inputDeviceUID = selectedMicID.isEmpty ? nil : selectedMicID
-        if voiceEnabled, voiceMode == .wakeWord, hasSpeechPermission {
+        // Voice only runs while AR is active.
+        if voiceEnabled, voiceMode == .wakeWord, hasSpeechPermission, arActive {
             voice.startWakeWord()
         } else {
             voice.stop()   // push-to-talk only listens on the hotkey
@@ -494,6 +499,7 @@ final class AppCoordinator: ObservableObject {
 
     /// Push-to-talk: begin a single listen window (called from the ⌃⌥A hotkey).
     func startPushToTalk() {
+        guard arActive else { statusMessage = "Start AR first to use voice"; return }
         guard voiceEnabled else { statusMessage = "Enable Voice Control in the Voice Commands page"; return }
         guard hasSpeechPermission else { statusMessage = "Grant Speech Recognition for voice control"; return }
         voice.contextualPhrases = voiceContextPhrases()   // fresh bias each listen
@@ -569,20 +575,18 @@ final class AppCoordinator: ObservableObject {
         switch intent {
         case .recenter:        recenter()
         case .recalibrate:     requestCalibration()
-        case .toggleAR:        toggleAR()
-        case .stopAR:          stopAR()
         case .toggleStereo:    setStereo(!stereoEnabled)
         case .toggleFocus:     toggleFocus()
         case .togglePassthrough: togglePassthrough()
         case .toggleHUD:       toggleHUD()
         case .toggleLabels:    toggleLabels()
         case .cursorToGaze:    moveCursorToGaze()
+        case .findCursor:      onToggleCursorInfo?()
         case .screenshot:      takeGlassesScreenshot()
         case .toggleRecording: toggleRecording()
         case .toggleMicMute:   toggleMicMute()
         case .windowPicker:    onToggleWindowPicker?()
         case .help:            onToggleHelp?()
-        case .quit:            NSApp.terminate(nil)
         case .brightnessUp:    adjustBrightness(up: true)
         case .brightnessDown:  adjustBrightness(up: false)
         }
