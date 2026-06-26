@@ -1,6 +1,7 @@
 import AudioToolbox
 import AVFoundation
 import CoreAudio
+import QuartzCore
 import Speech
 
 /// Drives on-device speech recognition for voice control. Two modes:
@@ -13,13 +14,16 @@ import Speech
 /// All logic runs on the main thread: the recognition callback is bounced to main, and the public
 /// methods are called from the (main-actor) coordinator, so internal state is single-threaded.
 final class VoiceController {
-    enum Mode { case idle, pushToTalk, wakeWord }
+    enum Mode { case idle, pushToTalk, wakeWord, metering }
     private(set) var mode: Mode = .idle
 
     var onPartial: ((String) -> Void)?
     var onCommand: ((String) -> Void)?
     var onListeningChanged: ((Bool) -> Void)?
     var onError: ((String) -> Void)?
+    /// Live input level (0…1) from the mic tap, for the level meter. Throttled to ~25 Hz on the main thread.
+    var onLevel: ((Float) -> Void)?
+    private var lastLevelAt: CFTimeInterval = 0
 
     /// Wake word used in wake-word mode (set by the coordinator).
     var wakeWord = "computer"
@@ -67,6 +71,23 @@ final class VoiceController {
     }
 
     // MARK: Control
+
+    /// Metering only: run the engine + tap purely to report mic level (no recognition). For the
+    /// "test mic" level meter. Stop with `stop()`.
+    func startMetering() {
+        guard mode == .idle else { return }
+        let input = audioEngine.inputNode
+        let format = input.outputFormat(forBus: 0)
+        guard format.sampleRate > 0, format.channelCount > 0 else { onError?("No microphone input"); return }
+        input.removeTap(onBus: 0)
+        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+            self?.reportLevel(buffer)
+        }
+        audioEngine.prepare()
+        do { try audioEngine.start() }
+        catch { onError?("Couldn't start audio: \(error.localizedDescription)"); input.removeTap(onBus: 0); return }
+        mode = .metering
+    }
 
     /// Tap-to-talk: listen for a single command, auto-stopping on silence.
     func startPushToTalk() {
@@ -141,15 +162,18 @@ final class VoiceController {
         request = req
         endingAudio = false
 
+        // Listen on the system default input (stable). The mic picker sets that default via the HAL
+        // — we deliberately don't poke the engine's input device, which can corrupt the node's
+        // format and crash installTap.
         let input = audioEngine.inputNode
-        if let uid = inputDeviceUID { setInputDevice(uid) }   // honour the mic picker
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else {
-            onError?("No microphone input"); request = nil; return false
+            onError?("No microphone input — check the mic and its permission"); request = nil; return false
         }
         input.removeTap(onBus: 0)
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
             self?.request?.append(buffer)
+            self?.reportLevel(buffer)
         }
         audioEngine.prepare()
         do {
@@ -165,14 +189,55 @@ final class VoiceController {
         return true
     }
 
-    /// Point the audio engine's input at a specific CoreAudio device (by UID) without changing the
-    /// system default. No-op if the device can't be resolved (falls back to whatever's current).
-    private func setInputDevice(_ uid: String) {
-        guard let deviceID = Self.audioDeviceID(forUID: uid),
-              let unit = audioEngine.inputNode.audioUnit else { return }
-        var dev = deviceID
-        AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
-                             &dev, UInt32(MemoryLayout<AudioDeviceID>.size))
+    /// RMS level (0…1) of a PCM buffer, dB-scaled for a usable meter, throttled to ~25 Hz.
+    private func reportLevel(_ buffer: AVAudioPCMBuffer) {
+        let now = CACurrentMediaTime()
+        guard now - lastLevelAt > 0.04 else { return }
+        lastLevelAt = now
+        guard let ch = buffer.floatChannelData else { return }
+        let n = Int(buffer.frameLength)
+        guard n > 0 else { return }
+        let data = ch[0]
+        var sum: Float = 0
+        for i in 0..<n { let s = data[i]; sum += s * s }
+        let rms = (sum / Float(n)).squareRoot()
+        let db = 20 * log10(max(rms, 1e-7))            // ~ -140…0 dBFS
+        let norm = max(0, min(1, (db + 50) / 50))      // -50…0 dB → 0…1
+        DispatchQueue.main.async { [weak self] in self?.onLevel?(norm) }
+    }
+
+    /// Set the system default input device (by UID) — the engine follows it safely. Returns success.
+    @discardableResult
+    static func setDefaultInputDevice(uid: String) -> Bool {
+        guard var dev = audioDeviceID(forUID: uid) else { return false }
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultInputDevice,
+                                              mScope: kAudioObjectPropertyScopeGlobal,
+                                              mElement: kAudioObjectPropertyElementMain)
+        return AudioObjectSetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil,
+                                          UInt32(MemoryLayout<AudioDeviceID>.size), &dev) == noErr
+    }
+
+    /// UID of the current system default input device, for showing the picker's selection.
+    static func defaultInputDeviceUID() -> String? {
+        guard let dev = defaultInputDevice() else { return nil }
+        var uidAddr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyDeviceUID,
+                                                 mScope: kAudioObjectPropertyScopeGlobal,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        var uidRef: CFString? = nil
+        var uidSize = UInt32(MemoryLayout<CFString?>.size)
+        guard AudioObjectGetPropertyData(dev, &uidAddr, 0, nil, &uidSize, &uidRef) == noErr else { return nil }
+        return uidRef as String?
+    }
+
+    static func defaultInputDevice() -> AudioDeviceID? {
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultInputDevice,
+                                              mScope: kAudioObjectPropertyScopeGlobal,
+                                              mElement: kAudioObjectPropertyElementMain)
+        var dev = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &dev) == noErr,
+              dev != 0 else { return nil }
+        return dev
     }
 
     /// Resolve a CoreAudio device UID (the same string AVCaptureDevice.uniqueID returns for audio
@@ -220,7 +285,7 @@ final class VoiceController {
             switch mode {
             case .pushToTalk: finishPushToTalk(lastPartial)
             case .wakeWord:   recycleWakeWord()
-            case .idle:       break
+            case .idle, .metering: break
             }
         }
     }

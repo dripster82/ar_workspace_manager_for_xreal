@@ -252,20 +252,31 @@ struct RecordingIndicatorView: View {
     }
 }
 
-/// In-AR "Listening…" pill shown while voice control is capturing, with the live transcript.
+/// In-AR "Listening…" pill shown while voice control is capturing, with the live transcript and a
+/// mic-input level bar (so you can see whether the mic is actually hearing you).
 struct VoiceListeningView: View {
     var transcript: String = ""
+    var level: CGFloat = 0
+    private let barWidth: CGFloat = 320
+
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "mic.fill").font(.system(size: 15)).foregroundStyle(.green)
-            Text(transcript.isEmpty ? "Listening…" : transcript)
-                .font(.system(size: 17, weight: .semibold, design: .rounded))
-                .lineLimit(1).truncationMode(.head)
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 8) {
+                Image(systemName: "mic.fill").font(.system(size: 15)).foregroundStyle(.green)
+                Text(transcript.isEmpty ? "Listening…" : transcript)
+                    .font(.system(size: 17, weight: .semibold, design: .rounded))
+                    .lineLimit(1).truncationMode(.head)
+            }
+            ZStack(alignment: .leading) {
+                Capsule().fill(.white.opacity(0.18)).frame(width: barWidth, height: 5)
+                Capsule().fill(level > 0.85 ? Color.orange : .green)
+                    .frame(width: max(2, barWidth * min(1, level)), height: 5)
+            }
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 18).padding(.vertical, 8)
-        .background(Color.black.opacity(0.55), in: Capsule())
-        .overlay(Capsule().strokeBorder(.white.opacity(0.15)))
+        .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 22))
+        .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(.white.opacity(0.15)))
     }
 }
 

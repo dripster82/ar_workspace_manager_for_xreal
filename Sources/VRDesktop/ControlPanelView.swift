@@ -722,8 +722,35 @@ struct ControlPanelView: View {
                      ? "Audio is sent to Apple for recognition — more accurate, less private."
                      : "Recognition runs on-device — audio stays on your Mac.")
                     .font(.caption2).foregroundStyle(.secondary)
-                Text("Uses the system default microphone (set a close mic in System Settings → Sound for best results).")
+            }
+            card("Microphone", "mic.circle") {
+                HStack {
+                    Text("Listening mic").font(.caption)
+                    Spacer()
+                    Picker("", selection: Binding(
+                        get: { coordinator.voiceInputDeviceUID },
+                        set: { coordinator.setVoiceInputDevice($0) }
+                    )) {
+                        ForEach(coordinator.availableMicrophones(), id: \.id) { Text($0.name).tag($0.id) }
+                    }.labelsHidden().fixedSize()
+                }
+                Text("Sets your system input device — voice and the meter listen on this mic.")
                     .font(.caption2).foregroundStyle(.secondary)
+                HStack(spacing: 10) {
+                    Button(coordinator.micTesting ? "Stop test" : "Test mic") { coordinator.toggleMicTest() }
+                        .controlSize(.small)
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.secondary.opacity(0.25))
+                        Capsule().fill(coordinator.micLevel > 0.85 ? Color.orange : .green)
+                            .frame(width: max(2, 180 * min(1, CGFloat(coordinator.micLevel))))
+                    }
+                    .frame(width: 180, height: 8)
+                    Spacer()
+                }
+                if coordinator.micTesting {
+                    Text("Speak — the bar should move. If it stays flat, the mic isn't being heard.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
             }
             card("Permissions", "lock.shield") {
                 permissionRow(title: "Speech Recognition",

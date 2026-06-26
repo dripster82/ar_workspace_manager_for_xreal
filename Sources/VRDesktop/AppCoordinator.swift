@@ -210,6 +210,11 @@ final class AppCoordinator: ObservableObject {
     let voice = VoiceController()
     private var lastVoiceIntent: VoiceIntent?
     private var lastVoiceFireTime: CFTimeInterval = 0
+    /// Live mic input level (0…1) for the meter, and whether the standalone "test mic" meter is running.
+    @Published var micLevel: Float = 0
+    @Published private(set) var micTesting = false
+    private var voiceTranscript = ""
+    private var lastVoiceRender: CFTimeInterval = 0
 
     /// Global cursor position captured on entering focus, restored on exit.
     private var preFocusCursor: CGPoint?
@@ -451,16 +456,25 @@ final class AppCoordinator: ObservableObject {
         voice.pttStartTimeout = voiceStartTimeout
         voice.pttSilenceTimeout = voiceSilenceTimeout
         voice.allowRemote = voiceAllowRemote
-        voice.inputDeviceUID = selectedMicID.isEmpty ? nil : selectedMicID
         voice.onListeningChanged = { [weak self] listening in
-            self?.updateVoiceOverlay(listening: listening, transcript: "")
-            self?.statusMessage = listening ? "Listening…" : ""
+            guard let self else { return }
+            if listening { self.voiceTranscript = ""; self.renderVoiceOverlay(force: true) }
+            else { self.renderer?.clearVoice(); self.micLevel = 0; self.micTesting = false }
+            self.statusMessage = listening ? "Listening…" : ""
         }
         voice.onPartial = { [weak self] text in
-            self?.updateVoiceOverlay(listening: true, transcript: text)
+            guard let self else { return }
+            self.voiceTranscript = text
+            self.renderVoiceOverlay(force: true)
         }
         voice.onCommand = { [weak self] phrase in self?.handleVoiceCommand(phrase) }
         voice.onError = { [weak self] msg in self?.statusMessage = msg }
+        voice.onLevel = { [weak self] lvl in
+            guard let self else { return }
+            self.micLevel = lvl
+            // Reflect the level in the in-AR "Listening…" bar (not during a standalone meter test).
+            if self.voice.isListening, self.voice.mode != .metering { self.renderVoiceOverlay(force: false) }
+        }
         applyVoiceMode()
     }
 
@@ -574,16 +588,43 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
-    /// Show / hide the in-AR "Listening…" overlay (rasterized like the recording indicator).
-    private func updateVoiceOverlay(listening: Bool, transcript: String) {
+    /// Re-rasterize the in-AR "Listening…" overlay (transcript + live mic-level bar). Throttled so
+    /// the level updates don't re-render too often; transcript changes pass `force: true`.
+    private func renderVoiceOverlay(force: Bool) {
         guard let renderer else { return }
-        if listening {
-            let r = ImageRenderer(content: VoiceListeningView(transcript: transcript))
-            r.scale = 2; r.isOpaque = false
-            if let img = r.cgImage { renderer.setVoiceImage(img) }
-        } else {
-            renderer.clearVoice()
+        let now = CACurrentMediaTime()
+        if !force, now - lastVoiceRender < 0.09 { return }
+        lastVoiceRender = now
+        let r = ImageRenderer(content: VoiceListeningView(transcript: voiceTranscript, level: CGFloat(micLevel)))
+        r.scale = 2; r.isOpaque = false
+        if let img = r.cgImage { renderer.setVoiceImage(img) }
+    }
+
+    // MARK: Mic test + listening device
+
+    /// Toggle the standalone mic-level meter (no recognition) for the "test mic" control.
+    func toggleMicTest() {
+        if micTesting || voice.mode == .metering {
+            voice.stop(); micTesting = false; micLevel = 0
+            return
         }
+        guard voice.mode == .idle else { statusMessage = "Finish the current listen first"; return }
+        guard hasMicrophonePermission else { requestMicrophonePermission(); return }
+        voice.startMetering()
+        micTesting = (voice.mode == .metering)
+        if !micTesting { micLevel = 0 }
+    }
+
+    /// The system default input device's UID (what the voice mic picker shows/selects).
+    var voiceInputDeviceUID: String { VoiceController.defaultInputDeviceUID() ?? "" }
+
+    /// Set the system default input device — voice (and the meter) follow it. Restarts listening.
+    func setVoiceInputDevice(_ uid: String) {
+        guard !uid.isEmpty else { return }
+        _ = VoiceController.setDefaultInputDevice(uid: uid)
+        objectWillChange.send()
+        if micTesting { voice.stop(); voice.startMetering() }   // re-meter on the new device
+        else { applyVoiceMode() }
     }
 
     /// Localized name for a display, cached (see `screenNameCache`) — only hits the expensive
