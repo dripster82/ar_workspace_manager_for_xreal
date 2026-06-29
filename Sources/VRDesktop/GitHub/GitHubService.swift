@@ -18,7 +18,11 @@ struct GitHubCounts: Equatable {
     var readyToMerge = 0      // your open PRs approved + checks passing
 }
 
-private enum GHError: Error { case unauthorized; case api(String) }
+private enum GHError: Error {
+    case unauthorized                 // 401 — credentials actually bad/expired
+    case rateLimited(until: Date?)    // 403/429 from rate limiting — NOT an auth failure
+    case api(String)
+}
 
 /// GitHub token, stored in the shared single-item SecretStore (keys prefixed "github.").
 private enum GHKeychain {
@@ -66,6 +70,8 @@ final class GitHubService: ObservableObject {
     private let session = URLSession(configuration: .ephemeral)
     private var pollTimer: Timer?
     private var refreshing = false
+    /// When rate-limited, skip refreshes until this time instead of disconnecting. nil = not limited.
+    private var rateLimitedUntil: Date?
 
     /// GitHub org to scope every query to; blank = all repos the token can see.
     var org: String {
@@ -132,6 +138,11 @@ final class GitHubService: ObservableObject {
 
     private func refresh() async {
         guard case .connected = state, !refreshing else { return }
+        // Backing off after a rate-limit: stay connected, just skip until the limit resets.
+        if let until = rateLimitedUntil {
+            if Date() < until { return }
+            rateLimitedUntil = nil
+        }
         refreshing = true
         defer { refreshing = false }
         do {
@@ -140,18 +151,31 @@ final class GitHubService: ObservableObject {
             func run(_ key: String) async throws -> Int {
                 try await searchCount(query(key).replacingOccurrences(of: "{fresh}", with: fresh))
             }
-            counts = GitHubCounts(needsReview: try await run("needsReview"),
-                                  teamReview: try await run("teamReview"),
-                                  changesRequested: try await run("changesRequested"),
-                                  failingChecks: try await run("failingChecks"),
-                                  readyToMerge: try await run("readyToMerge"))
+            // Run the Search queries serially with a small gap. The Search API has a strict secondary
+            // rate limit that a back-to-back burst of 5 trips (returning 403), so we space them out.
+            let needsReview = try await run("needsReview");              await Self.spaceRequests()
+            let teamReview = try await run("teamReview");                await Self.spaceRequests()
+            let changesRequested = try await run("changesRequested");    await Self.spaceRequests()
+            let failingChecks = try await run("failingChecks");          await Self.spaceRequests()
+            let readyToMerge = try await run("readyToMerge")
+            counts = GitHubCounts(needsReview: needsReview, teamReview: teamReview,
+                                  changesRequested: changesRequested, failingChecks: failingChecks,
+                                  readyToMerge: readyToMerge)
         } catch GHError.unauthorized {
+            // Only a real 401 means the token is bad/expired.
             state = .error("Token expired — reconnect.")
             stopPolling()
+        } catch GHError.rateLimited(let until) {
+            // 403/429 rate limiting is NOT an auth failure — stay connected and back off.
+            rateLimitedUntil = until ?? Date().addingTimeInterval(60)
+            DebugLog.shared.log("github: rate-limited, backing off until \(self.rateLimitedUntil.map { "\($0)" } ?? "?") (staying connected)")
         } catch {
             DebugLog.shared.log("github refresh error: \(error.localizedDescription)")
         }
     }
+
+    /// Small spacer between Search calls to stay under GitHub's secondary rate limit.
+    private static func spaceRequests() async { try? await Task.sleep(nanoseconds: 350_000_000) }
 
     // MARK: API
 
@@ -186,8 +210,32 @@ final class GitHubService: ObservableObject {
         req.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
         let (data, resp) = try await session.data(for: req)
         if let http = resp as? HTTPURLResponse {
-            if http.statusCode == 401 || http.statusCode == 403 { throw GHError.unauthorized }
-            guard (200..<300).contains(http.statusCode) else { throw GHError.api("HTTP \(http.statusCode)") }
+            switch http.statusCode {
+            case 200..<300:
+                break
+            case 401:
+                throw GHError.unauthorized                 // credentials genuinely bad/expired
+            case 403, 429:
+                // GitHub uses 403/429 for rate limiting, NOT (usually) auth. Only call it an auth
+                // failure if it's clearly not a rate limit; otherwise surface a back-off time.
+                let remaining = http.value(forHTTPHeaderField: "X-RateLimit-Remaining")
+                let retryAfter = http.value(forHTTPHeaderField: "Retry-After")
+                let reset = http.value(forHTTPHeaderField: "X-RateLimit-Reset")
+                let body = (String(data: data, encoding: .utf8) ?? "").lowercased()
+                let isRateLimit = http.statusCode == 429 || remaining == "0" || retryAfter != nil
+                    || body.contains("rate limit") || body.contains("secondary rate")
+                if isRateLimit {
+                    let until: Date?
+                    if let s = retryAfter, let secs = Double(s) { until = Date().addingTimeInterval(secs) }
+                    else if let s = reset, let epoch = Double(s) { until = Date(timeIntervalSince1970: epoch) }
+                    else { until = nil }
+                    throw GHError.rateLimited(until: until)
+                }
+                // A genuine 403 (e.g. token lacks a needed scope) — not expiry, surface as an API error.
+                throw GHError.api("HTTP 403 (forbidden — check the token's scopes)")
+            default:
+                throw GHError.api("HTTP \(http.statusCode)")
+            }
         }
         return data
     }
