@@ -46,6 +46,12 @@ final class VoiceController {
     private var wakeArmed = false
     private var pendingWakeCommand = ""
     private var wakeCapturing = false   // wake word heard → overlay shown for the trailing command
+    /// Bumped every time a recognition task is created or torn down. The recognition callback captures
+    /// the generation it was started with and ignores any delivery whose generation is stale — without
+    /// this, the trailing final-result / cancellation-error a torn-down SFSpeech task still emits would
+    /// re-enter `recycleWakeWord` and kill the freshly-started recogniser, so wake word goes deaf after
+    /// the first command.
+    private var recognitionGeneration = 0
     /// When set, the next push-to-talk result is handed to this (for the per-command "test & learn"
     /// flow) instead of being dispatched as a command.
     private var oneShotCompletion: ((String) -> Void)?
@@ -117,6 +123,7 @@ final class VoiceController {
         capTimer?.invalidate(); capTimer = nil
         finalTimer?.invalidate(); finalTimer = nil
         endingAudio = false
+        recognitionGeneration &+= 1   // any trailing callback from the cancelled task is now stale
         task?.cancel(); task = nil
         request?.endAudio(); request = nil
         if audioEngine.isRunning {
@@ -192,9 +199,15 @@ final class VoiceController {
         request = req
         endingAudio = false
 
+        recognitionGeneration &+= 1
+        let gen = recognitionGeneration
         task = recognizer.recognitionTask(with: req) { [weak self] result, error in
-            DispatchQueue.main.async { self?.handleResult(result, error: error) }
+            DispatchQueue.main.async {
+                guard let self, gen == self.recognitionGeneration else { return }   // drop stale task
+                self.handleResult(result, error: error)
+            }
         }
+        DebugLog.shared.log("voice: recognition started (gen \(gen), mode \(self.mode))")
         return true
     }
 
@@ -290,10 +303,12 @@ final class VoiceController {
                 handleWakeTranscript(text, isFinal: result.isFinal)
             }
         }
-        if error != nil {
+        if let error {
             switch mode {
             case .pushToTalk: finishPushToTalk(lastPartial)
-            case .wakeWord:   recycleWakeWord()
+            case .wakeWord:
+                DebugLog.shared.log("voice: wake task ended (\(error.localizedDescription)) — recycling")
+                recycleWakeWord()
             case .idle, .metering: break
             }
         }
@@ -381,13 +396,30 @@ final class VoiceController {
         silenceTimer?.invalidate(); silenceTimer = nil
         if wakeCapturing { wakeCapturing = false; onListeningChanged?(false) }   // hide overlay
         wakeArmed = false; pendingWakeCommand = ""; lastPartial = ""
+        recognitionGeneration &+= 1   // invalidate the old task: its trailing callbacks must not recycle
+        task?.cancel(); task = nil
         request?.endAudio(); request = nil
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.mode == .wakeWord else { return }
-            if !self.startRecognition() {     // engine/tap stay up; just a fresh recogniser
-                self.mode = .idle
-                self.onListeningChanged?(false)
-            }
+        DebugLog.shared.log("voice: recycle wake-word (gen \(self.recognitionGeneration))")
+        // Restart on the next tick so the cancelled task fully unwinds before the new one starts.
+        DispatchQueue.main.async { [weak self] in self?.restartWakeRecognition(attempt: 0) }
+    }
+
+    /// Bring up a fresh recogniser for wake-word mode over the still-running tap. The recogniser can be
+    /// momentarily `!isAvailable` right after a task is cancelled, so a transient failure is retried with
+    /// a short backoff rather than dropping straight to idle (which is what made it go deaf after one
+    /// command).
+    private func restartWakeRecognition(attempt: Int) {
+        guard mode == .wakeWord else { return }
+        if startRecognition() { return }     // engine/tap stay up; just a fresh recogniser
+        guard attempt < 5 else {
+            DebugLog.shared.log("voice: wake-word restart failed after \(attempt) retries — going idle")
+            mode = .idle
+            onListeningChanged?(false)
+            return
+        }
+        DebugLog.shared.log("voice: wake-word restart retry \(attempt + 1)")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            self?.restartWakeRecognition(attempt: attempt + 1)
         }
     }
 }
