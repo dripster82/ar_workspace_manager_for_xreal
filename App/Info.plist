@@ -15,9 +15,9 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.4</string>
+    <string>0.6.0</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>2</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>
@@ -30,6 +30,14 @@
     <string>AR Workspace Manager uses speech recognition to run hands-free voice commands. Recognition runs on-device.</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>AR Workspace Manager asks macOS to log out when you choose "Log Out Now" after clearing saved display arrangements.</string>
+    <key>NSRemindersFullAccessUsageDescription</key>
+    <string>AR Workspace Manager shows and updates a linked Apple Reminders list on a List HUD widget in your AR glasses.</string>
+    <key>NSRemindersUsageDescription</key>
+    <string>AR Workspace Manager shows and updates a linked Apple Reminders list on a List HUD widget in your AR glasses.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>AR Workspace Manager shows your Apple Calendar events on a Calendar HUD widget in your AR glasses.</string>
+    <key>NSCalendarsUsageDescription</key>
+    <string>AR Workspace Manager shows your Apple Calendar events on a Calendar HUD widget in your AR glasses.</string>
     <key>NSHumanReadableCopyright</key>
     <string>© Paul Ketelle. PolyForm Noncommercial 1.0.0 — noncommercial use only. Includes MIT code from nrealAirLinuxDriver/xrealair-sdk-macos and xioTechnologies Fusion, and BSD-licensed hidapi.</string>
 </dict>

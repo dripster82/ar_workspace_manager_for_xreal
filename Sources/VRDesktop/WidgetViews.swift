@@ -14,9 +14,24 @@ extension WidgetTint {
     }
 }
 
-/// Shared chrome for HUD widgets: tinted content on a pill / solid / no background.
+/// Standard HUD widget sizes (the full pill size, including padding) so widgets line up uniformly in a
+/// stack. `small` is for the glanceable single-value widgets (clock, power) — fixed width *and* height
+/// so they match exactly; `medium` is for the list-style widgets (slack, github, calendar, list) — fixed
+/// width but height grows with content.
+enum WidgetSize {
+    static let smallWidth: CGFloat = 240
+    static let smallHeight: CGFloat = 92
+    static let mediumWidth: CGFloat = 320
+}
+
+/// Shared chrome for HUD widgets: tinted content on a pill / solid / no background. `width`/`height` fix
+/// the pill's overall size to a standard tier (see `WidgetSize`) so widgets are the same size;
+/// `alignment` places the content within that size (leading for lists, centre for single-value widgets).
 private struct WidgetPill<Content: View>: View {
     let style: WidgetStyle
+    var width: CGFloat? = nil
+    var height: CGFloat? = nil
+    var alignment: Alignment = .leading
     @ViewBuilder let content: () -> Content
 
     private let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -26,6 +41,7 @@ private struct WidgetPill<Content: View>: View {
             .foregroundStyle(style.tint.color)
             .padding(.horizontal, style.background == .none ? 4 : 22)
             .padding(.vertical, style.background == .none ? 2 : 14)
+            .frame(width: width, height: height, alignment: alignment)
         switch style.background {
         case .pill:
             inner.background(Color.black.opacity(0.55), in: shape)
@@ -52,9 +68,11 @@ struct ClockWidgetView: View {
     }
 
     var body: some View {
-        WidgetPill(style: style) {
+        WidgetPill(style: style, width: WidgetSize.smallWidth, height: WidgetSize.smallHeight,
+                   alignment: .center) {
             Text(text)
                 .font(.system(size: 46, weight: .semibold, design: .rounded).monospacedDigit())
+                .lineLimit(1).minimumScaleFactor(0.4)
         }
     }
 }
@@ -68,7 +86,7 @@ struct SlackWidgetView: View {
     private func countLabel(_ n: Int) -> String { n > 9 ? "9+" : "\(n)" }
 
     var body: some View {
-        WidgetPill(style: style) {
+        WidgetPill(style: style, width: WidgetSize.mediumWidth) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     Image(systemName: "message.badge.fill").font(.system(size: 16))
@@ -103,7 +121,6 @@ struct SlackWidgetView: View {
                     .opacity(0.55).padding(.top, 2)
                 }
             }
-            .frame(minWidth: 150, alignment: .leading)
         }
     }
 }
@@ -112,6 +129,8 @@ struct CalendarWidgetView: View {
     let style: WidgetStyle
     let connected: Bool
     let events: [CalEvent]
+    var maxEvents: Int = 4
+    var range: CalendarRange = .all
 
     private static let timeFmt: DateFormatter = {
         let f = DateFormatter(); f.dateFormat = "HH:mm"; return f
@@ -129,7 +148,17 @@ struct CalendarWidgetView: View {
 
     private var upcoming: [CalEvent] {
         let now = Date()
-        return events.filter { $0.end > now }.prefix(4).map { $0 }
+        let cal = Calendar.current
+        // Upper bound (exclusive) on an event's start, per the chosen range. nil = no limit.
+        let cutoff: Date?
+        switch range {
+        case .all: cutoff = nil
+        case .today: cutoff = cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: now))
+        case .todayTomorrow: cutoff = cal.date(byAdding: .day, value: 2, to: cal.startOfDay(for: now))
+        }
+        return events
+            .filter { e in e.end > now && (cutoff.map { e.start < $0 } ?? true) }
+            .prefix(max(1, maxEvents)).map { $0 }
     }
 
     private func dayLabel(_ date: Date) -> String {
@@ -177,7 +206,7 @@ struct CalendarWidgetView: View {
 
     var body: some View {
         let items = upcoming
-        return WidgetPill(style: style) {
+        return WidgetPill(style: style, width: WidgetSize.mediumWidth) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     Image(systemName: "calendar").font(.system(size: 15))
@@ -217,7 +246,51 @@ struct CalendarWidgetView: View {
                     }
                 }
             }
-            .frame(minWidth: 200, alignment: .leading)
+        }
+    }
+}
+
+struct ListWidgetView: View {
+    let style: WidgetStyle
+    let title: String
+    let items: [ListItem]
+    let showCompleted: Bool
+    let connected: Bool
+
+    private var visible: [ListItem] {
+        (showCompleted ? items : items.filter { !$0.done }).prefix(8).map { $0 }
+    }
+
+    var body: some View {
+        let rows = visible
+        return WidgetPill(style: style, width: WidgetSize.mediumWidth) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Image(systemName: "checklist").font(.system(size: 15))
+                    Text(title).font(.system(size: 16, weight: .semibold, design: .rounded))
+                }
+                if !connected {
+                    Text("Grant Reminders access").font(.system(size: 14)).opacity(0.7)
+                } else if items.isEmpty {
+                    Text("No items").font(.system(size: 14)).opacity(0.7)
+                } else if rows.isEmpty {
+                    Text("All done").font(.system(size: 14)).opacity(0.7)
+                } else {
+                    ForEach(rows) { item in
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: item.done ? "checkmark.circle.fill" : "circle")
+                                .font(.system(size: 13)).frame(width: 16)
+                                .opacity(item.done ? 0.6 : 0.85)
+                            Text(CalendarWidgetView.wrapTitle(item.text))
+                                .font(.system(size: 15, weight: .medium))
+                                .strikethrough(item.done)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .opacity(item.done ? 0.5 : 1)
+                            Spacer(minLength: 0)
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -298,7 +371,7 @@ struct GitHubWidgetView: View {
     }
 
     var body: some View {
-        WidgetPill(style: style) {
+        WidgetPill(style: style, width: WidgetSize.mediumWidth) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     Image(systemName: "chevron.left.forwardslash.chevron.right").font(.system(size: 15))
@@ -324,7 +397,6 @@ struct GitHubWidgetView: View {
                     }
                 }
             }
-            .frame(minWidth: 190, alignment: .leading)
         }
     }
 }
@@ -351,11 +423,13 @@ struct PowerWidgetView: View {
     }
 
     var body: some View {
-        WidgetPill(style: style) {
+        WidgetPill(style: style, width: WidgetSize.smallWidth, height: WidgetSize.smallHeight,
+                   alignment: .center) {
             HStack(spacing: 12) {
                 Image(systemName: symbol).font(.system(size: 32))
                 Text(label)
                     .font(.system(size: 38, weight: .semibold, design: .rounded).monospacedDigit())
+                    .lineLimit(1).minimumScaleFactor(0.5)
             }
         }
     }

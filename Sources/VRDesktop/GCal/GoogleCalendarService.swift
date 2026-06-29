@@ -62,6 +62,9 @@ final class GoogleCalendarService: ObservableObject {
     }
     /// Called when a meeting alarm becomes due: (event, lead minutes).
     var onAlarm: ((CalEvent, Int) -> Void)?
+    /// Extra events (e.g. Apple Calendar) to also consider for meeting alarms, so alarms fire for them
+    /// without duplicating the alarm UI/state.
+    var extraEventsProvider: (() -> [CalEvent])?
     private var firedAlarms: Set<String> = []
     private var alarmTimer: Timer?
 
@@ -70,10 +73,11 @@ final class GoogleCalendarService: ObservableObject {
     private func checkAlarms() {
         guard alarmsEnabled, let onAlarm else { return }
         let now = Date()
+        let allEvents = events + (extraEventsProvider?() ?? [])
         // Drop fired keys for events no longer in the window so the set doesn't grow unbounded.
-        let liveKeys = Set(events.flatMap { e in [alarm1Lead, alarm2Lead].map { "\(e.id)#\($0)" } })
+        let liveKeys = Set(allEvents.flatMap { e in [alarm1Lead, alarm2Lead].map { "\(e.id)#\($0)" } })
         firedAlarms.formIntersection(liveKeys)
-        for event in events {
+        for event in allEvents {
             for lead in [alarm1Lead, alarm2Lead] where lead >= 0 {
                 let at = event.start.addingTimeInterval(-Double(lead * 60))
                 let key = "\(event.id)#\(lead)"

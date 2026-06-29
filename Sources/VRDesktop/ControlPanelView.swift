@@ -481,6 +481,7 @@ struct ControlPanelView: View {
         if let id = selectedHUDID, let w = coordinator.widgets.first(where: { $0.id == id }) {
             WidgetRow(initial: w, stacks: coordinator.stacks,
                       calendar: w.kind == .calendar ? coordinator.calendar : nil,
+                      reminders: w.kind == .list ? coordinator.reminders : nil,
                       startExpanded: true,
                       onChange: { coordinator.updateWidget($0) },
                       onRemove: { coordinator.removeWidget(id: w.id); selectedHUDID = nil })
@@ -607,6 +608,10 @@ struct ControlPanelView: View {
             GitHubSettingsView(github: coordinator.github)
             Divider()
             CalendarSettingsView(calendar: coordinator.calendar)
+            Divider()
+            AppleCalendarSettingsView(appleCalendar: coordinator.appleCalendar)
+            Divider()
+            RemindersSettingsView(reminders: coordinator.reminders)
         }
     }
 
@@ -1104,6 +1109,7 @@ struct ControlPanelView: View {
                 .help("Drag to reorder, or onto a stack to add it")
             WidgetRow(initial: w, stacks: coordinator.stacks,
                       calendar: w.kind == .calendar ? coordinator.calendar : nil,
+                      reminders: w.kind == .list ? coordinator.reminders : nil,
                       onChange: { coordinator.updateWidget($0) },
                       onRemove: { coordinator.removeWidget(id: w.id) })
         }
@@ -1469,6 +1475,8 @@ struct WidgetRow: View {
     let stacks: [HUDStack]
     /// The calendar service, supplied only for the calendar widget so its alarm options show here.
     var calendar: GoogleCalendarService?
+    /// The reminders service, supplied only for the list widget so its Reminders controls show here.
+    var reminders: RemindersService?
     var onChange: (HUDWidget) -> Void
     var onRemove: () -> Void
 
@@ -1476,11 +1484,12 @@ struct WidgetRow: View {
     @State private var expanded = false
 
     init(initial: HUDWidget, stacks: [HUDStack], calendar: GoogleCalendarService? = nil,
-         startExpanded: Bool = false,
+         reminders: RemindersService? = nil, startExpanded: Bool = false,
          onChange: @escaping (HUDWidget) -> Void, onRemove: @escaping () -> Void) {
         self.initial = initial
         self.stacks = stacks
         self.calendar = calendar
+        self.reminders = reminders
         self.onChange = onChange
         self.onRemove = onRemove
         _cfg = State(initialValue: initial)
@@ -1540,9 +1549,38 @@ struct WidgetRow: View {
                     if cfg.kind == .slack {
                         Toggle("Show refresh countdown", isOn: $cfg.style.showRefreshCountdown).font(.caption)
                     }
-                    if cfg.kind == .calendar, let calendar {
+                    if cfg.kind == .calendar {
+                        HStack {
+                            Text("Source").font(.caption).frame(width: 70, alignment: .leading)
+                            Picker("", selection: Binding(get: { cfg.calendarSource ?? .google },
+                                                          set: { cfg.calendarSource = $0 })) {
+                                ForEach(CalendarSource.allCases) { Text($0.displayName).tag($0) }
+                            }.labelsHidden().fixedSize()
+                            Spacer()
+                        }
+                        HStack {
+                            Text("Range").font(.caption).frame(width: 70, alignment: .leading)
+                            Picker("", selection: Binding(get: { cfg.calendarRange ?? .all },
+                                                          set: { cfg.calendarRange = $0 })) {
+                                ForEach(CalendarRange.allCases) { Text($0.displayName).tag($0) }
+                            }.labelsHidden().fixedSize()
+                            Spacer()
+                        }
+                        Stepper(value: Binding(get: { cfg.calendarMaxEvents ?? 4 },
+                                               set: { cfg.calendarMaxEvents = $0 }), in: 1...10) {
+                            Text("Show \(cfg.calendarMaxEvents ?? 4) event\((cfg.calendarMaxEvents ?? 4) == 1 ? "" : "s")")
+                                .font(.caption)
+                        }
+                        if let calendar {
+                            Divider()
+                            CalendarAlarmOptions(calendar: calendar)
+                        }
+                    }
+                    if cfg.kind == .list {
                         Divider()
-                        CalendarAlarmOptions(calendar: calendar)
+                        ListWidgetConfigView(
+                            cfg: Binding(get: { cfg.list ?? ListConfig() }, set: { cfg.list = $0 }),
+                            reminders: reminders)
                     }
                     HStack {
                         Button("Remove", role: .destructive, action: onRemove)

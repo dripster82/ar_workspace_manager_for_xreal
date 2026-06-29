@@ -130,6 +130,8 @@ final class AppCoordinator: ObservableObject {
     let slack = SlackService()
     let github = GitHubService()
     let calendar = GoogleCalendarService()
+    let appleCalendar = AppleCalendarService()
+    let reminders = RemindersService()
     private var widgetManager: WidgetManager?
     private var captures: [UUID: CaptureSource] = [:]
     private var statsTimer: Timer?
@@ -347,6 +349,10 @@ final class AppCoordinator: ObservableObject {
         widgetManager?.slack = slack
         widgetManager?.github = github
         widgetManager?.calendar = calendar
+        widgetManager?.appleCalendar = appleCalendar
+        widgetManager?.reminders = reminders
+        // Apple Calendar events also feed the meeting-alarm loop owned by GoogleCalendarService.
+        calendar.extraEventsProvider = { [weak appleCalendar] in appleCalendar?.events ?? [] }
         recorder.preferredMicID = selectedMicID.isEmpty ? nil : selectedMicID
         IMUService.shared.stateChanged = { [weak self] state in
             Task { @MainActor in
@@ -1841,6 +1847,8 @@ final class AppCoordinator: ObservableObject {
         let hud = displayedHUDProfile
         widgetManager?.setLayout(widgets: hud?.widgets ?? [], stacks: hud?.stacks ?? [])
         widgetManager?.start()
+        if reminders.isConnected { reminders.refreshAll() }
+        if appleCalendar.isConnected { appleCalendar.refresh() }
         refreshBrightness() // sync the slider to the glasses' actual brightness as AR starts
         lastWindowSnapshot = CACurrentMediaTime() // defer the first periodic snapshot ~10s
 

@@ -44,6 +44,8 @@ final class WidgetManager {
     weak var slack: SlackService?
     weak var github: GitHubService?
     weak var calendar: GoogleCalendarService?
+    weak var appleCalendar: AppleCalendarService?
+    weak var reminders: RemindersService?
     private var widgets: [HUDWidget] = []
     private var stacks: [HUDStack] = []
     private var timer: Timer?
@@ -177,9 +179,40 @@ final class WidgetManager {
                                             connected: github?.isConnected ?? false,
                                             counts: github?.counts ?? GitHubCounts()))
         case .calendar:
+            let (events, connected) = calendarEvents(for: widget)
             return AnyView(CalendarWidgetView(style: widget.style,
-                                              connected: calendar?.isConnected ?? false,
-                                              events: calendar?.events ?? []))
+                                              connected: connected, events: events,
+                                              maxEvents: widget.calendarMaxEvents ?? 4,
+                                              range: widget.calendarRange ?? .all))
+        case .list:
+            let cfg = widget.list ?? ListConfig()
+            let items: [ListItem]
+            let connected: Bool
+            switch cfg.source {
+            case .inApp:
+                items = cfg.items
+                connected = true
+            case .reminders:
+                items = reminders?.itemsByList[cfg.reminderListID ?? ""] ?? []
+                connected = reminders?.isConnected ?? false
+            }
+            return AnyView(ListWidgetView(style: widget.style, title: cfg.title,
+                                          items: items, showCompleted: cfg.showCompleted,
+                                          connected: connected))
+        }
+    }
+
+    /// Merge calendar events for a widget by its source (Google / Apple / Both), sorted by start.
+    private func calendarEvents(for widget: HUDWidget) -> (events: [CalEvent], connected: Bool) {
+        switch widget.calendarSource ?? .google {
+        case .google:
+            return (calendar?.events ?? [], calendar?.isConnected ?? false)
+        case .apple:
+            return (appleCalendar?.events ?? [], appleCalendar?.isConnected ?? false)
+        case .both:
+            let merged = ((calendar?.events ?? []) + (appleCalendar?.events ?? []))
+                .sorted { $0.start < $1.start }
+            return (merged, (calendar?.isConnected ?? false) || (appleCalendar?.isConnected ?? false))
         }
     }
 
