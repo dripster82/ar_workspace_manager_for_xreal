@@ -71,7 +71,12 @@ public final class CaptureSource: NSObject, @unchecked Sendable {
         // at more capture load with many screens. Head-tracked reprojection runs at full display rate
         // independently, so this is purely content smoothness.
         config.minimumFrameInterval = CMTime(value: 1, timescale: Int32(Self.captureFPS))
-        config.queueDepth = 3
+        // queueDepth MUST stay larger than the number of frame backings we retain below
+        // (`recentBackings`). We pin recent CVMetalTextures so an in-flight GPU frame can't read a
+        // freed surface; if that retained count reaches queueDepth, SCK has no free surface to write
+        // the next frame into and frame delivery stalls to a crawl (every-few-seconds judder when the
+        // cursor/content moves). 6 leaves comfortable headroom over the 3 we keep.
+        config.queueDepth = 6
         config.showsCursor = true
 
         let stream = SCStream(filter: filter, configuration: config, delegate: self)
@@ -138,7 +143,8 @@ extension CaptureSource: SCStreamOutput, SCStreamDelegate {
         lock.lock()
         latest = (texture, cvTexture)
         recentBackings.append(cvTexture)
-        if recentBackings.count > 4 { recentBackings.removeFirst() }
+        // Keep strictly fewer than queueDepth (6) alive — see the queueDepth comment in start().
+        if recentBackings.count > 3 { recentBackings.removeFirst() }
         lock.unlock()
     }
 
