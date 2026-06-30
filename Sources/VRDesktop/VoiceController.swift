@@ -1,6 +1,7 @@
 import AudioToolbox
 import AVFoundation
 import CoreAudio
+import CPrivateDisplay
 import QuartzCore
 import Speech
 
@@ -165,15 +166,25 @@ final class VoiceController {
             onError?("No microphone input — check the mic and its permission"); return false
         }
         input.removeTap(onBus: 0)
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
-            self?.request?.append(buffer)
-            self?.reportLevel(buffer)
-        }
-        audioEngine.prepare()
-        do { try audioEngine.start() }
-        catch {
-            onError?("Couldn't start audio: \(error.localizedDescription)")
-            input.removeTap(onBus: 0); return false
+        // installTap / start can RAISE an Obj-C exception (e.g. a format/hardware mismatch after
+        // sleep-wake or a mic device change) which Swift's do/catch can't stop — it'd abort the whole
+        // app. Run them inside an Obj-C @try/@catch so any audio-engine exception is a graceful failure.
+        var startError: String?
+        var caught: NSString?
+        let ok = VRDRunCatchingNSException({
+            input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+                self?.request?.append(buffer)
+                self?.reportLevel(buffer)
+            }
+            self.audioEngine.prepare()
+            do { try self.audioEngine.start() } catch { startError = error.localizedDescription }
+        }, &caught)
+        if !ok || !audioEngine.isRunning {
+            input.removeTap(onBus: 0)
+            audioEngine.reset()   // drop the stale graph so the next attempt can rebuild cleanly
+            let why = (caught as String?) ?? startError ?? "the microphone may be in use or unavailable"
+            onError?("Couldn't start voice audio — \(why)")
+            return false
         }
         return true
     }

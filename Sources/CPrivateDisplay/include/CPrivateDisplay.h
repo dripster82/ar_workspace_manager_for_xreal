@@ -50,4 +50,9 @@ NS_ASSUME_NONNULL_BEGIN
 float VRDGetCursorScale(void);
 void VRDSetCursorScale(float scale);
 
+// Run `block`, catching any Objective-C NSException it raises (e.g. AVAudioEngine's installTap/start,
+// which raise instead of returning errors, so Swift's do/catch can't stop them). Returns YES on
+// success; on an exception returns NO and sets *reason to the exception's reason/name.
+BOOL VRDRunCatchingNSException(void (^block)(void), NSString * _Nullable * _Nullable reason);
+
 NS_ASSUME_NONNULL_END

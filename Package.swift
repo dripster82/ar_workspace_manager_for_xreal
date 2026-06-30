@@ -49,7 +49,7 @@ let package = Package(
         .executableTarget(
             name: "VRDesktop",
             dependencies: ["GlassesDriver", "CapturePipeline", "Compositor", "DisplayManager",
-                           "PrivilegedHelperShared"]
+                           "PrivilegedHelperShared", "CPrivateDisplay"]
         ),
     ]
 )

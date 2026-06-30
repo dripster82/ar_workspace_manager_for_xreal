@@ -26,3 +26,13 @@ float VRDGetCursorScale(void) {
     }
     return scale;
 }
+
+BOOL VRDRunCatchingNSException(void (^block)(void), NSString **reason) {
+    @try {
+        block();
+        return YES;
+    } @catch (NSException *e) {
+        if (reason) *reason = e.reason ?: e.name;
+        return NO;
+    }
+}
