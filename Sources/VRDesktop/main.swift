@@ -75,7 +75,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.updateEscArming()
         }
         calibrationController = CalibrationController(coordinator: coordinator)
-        coordinator.onCalibrationRequested = { [weak self] in self?.calibrationController.show() }
+        coordinator.onCalibrationRequested = { [weak self] firstUse, onSuccess in
+            self?.calibrationController.show(firstUse: firstUse, onSuccess: onSuccess)
+        }
         coordinator.onToggleHelp = { [weak self] in self?.helpOverlay.toggle() }
         coordinator.onToggleCursorInfo = { [weak self] in self?.cursorInfoOverlay.toggle() }
         coordinator.onToggleWindowPicker = { [weak self] in self?.windowPicker.toggle() }

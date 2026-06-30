@@ -45,17 +45,52 @@ public final class IMUService: @unchecked Sendable {
     /// series can anchor the screen onboard, which double-tracks against this app).
     public private(set) var usingNetworkIMU = false
 
-    /// Body-frame mount correction for the One-series IMU, applied as `raw * correction`. Pitch/roll
-    /// validated against real XREAL One Pro motion capture (levels the rest pose and decouples
-    /// head-turns from roll). Overridable via ARWM_ONE_TILT_PITCH / ARWM_ONE_TILT_ROLL (degrees).
-    private let oneMountCorrection: simd_quatf = {
-        let env = ProcessInfo.processInfo.environment
-        let pitch = (env["ARWM_ONE_TILT_PITCH"].flatMap { Float($0) } ?? -39) * .pi / 180
-        let roll  = (env["ARWM_ONE_TILT_ROLL"].flatMap { Float($0) } ?? -2) * .pi / 180
-        let p = simd_quatf(angle: pitch, axis: SIMD3(1, 0, 0))
-        let r = simd_quatf(angle: roll,  axis: SIMD3(0, 0, 1))
+    /// Body-frame mount correction for the One-series IMU, applied as `raw * correction`. The One IMU
+    /// sits tilted in the frame, so without this a level head reads pitched/rolled and head-turns
+    /// couple into roll. The exact tilt varies per model (One Pro ≈ −39°, One S measured larger), so
+    /// it is *measured per device* by calibration and persisted (see `applyMountCalibration`). Until a
+    /// device is calibrated this falls back to the One Pro values (overridable via the env vars).
+    /// Mutated and read only on the IMU read thread (announceConnected / handleUpdate / completion).
+    private var oneMountCorrection: simd_quatf = IMUService.defaultMountCorrection()
+
+    /// Build the body-frame correction quaternion from a pitch+roll tilt (degrees), matching the
+    /// One Pro-validated structure (pitch about X, then roll about Z).
+    static func mountCorrection(pitchDeg: Float, rollDeg: Float) -> simd_quatf {
+        let p = simd_quatf(angle: pitchDeg * .pi / 180, axis: SIMD3(1, 0, 0))
+        let r = simd_quatf(angle: rollDeg  * .pi / 180, axis: SIMD3(0, 0, 1))
         return simd_normalize(p * r)
-    }()
+    }
+
+    private static func defaultMountCorrection() -> simd_quatf {
+        let env = ProcessInfo.processInfo.environment
+        let pitch = env["ARWM_ONE_TILT_PITCH"].flatMap { Float($0) } ?? -39
+        let roll  = env["ARWM_ONE_TILT_ROLL"].flatMap { Float($0) } ?? -2
+        return mountCorrection(pitchDeg: pitch, rollDeg: roll)
+    }
+
+    /// Product ID of the currently connected glasses (0 = none). Set on connect.
+    public private(set) var connectedProductID: UInt16 = 0
+    /// True when the connected One-series device has a saved (or just-measured) mount calibration.
+    /// For Air (HID) devices this is always true — they need no mount correction. The app reads this
+    /// on AR-start to require a first-use calibration for an uncalibrated One-series device.
+    public private(set) var hasMountCalibration = true
+
+    private func mountTiltKey(_ productID: UInt16) -> String { "oneMountTilt.\(productID)" }
+
+    /// Load and apply the saved per-device mount tilt, if any. Returns whether one was found.
+    @discardableResult
+    private func loadMountCalibration(productID: UInt16) -> Bool {
+        guard let arr = UserDefaults.standard.array(forKey: mountTiltKey(productID)) as? [Double],
+              arr.count == 2 else { return false }
+        oneMountCorrection = Self.mountCorrection(pitchDeg: Float(arr[0]), rollDeg: Float(arr[1]))
+        return true
+    }
+
+    /// Persist + apply a freshly measured mount tilt (correction angles, degrees) for a device.
+    private func saveMountCalibration(productID: UInt16, pitchDeg: Float, rollDeg: Float) {
+        UserDefaults.standard.set([Double(pitchDeg), Double(rollDeg)], forKey: mountTiltKey(productID))
+        oneMountCorrection = Self.mountCorrection(pitchDeg: pitchDeg, rollDeg: rollDeg)
+    }
 
     private init() {}
 
@@ -90,6 +125,9 @@ public final class IMUService: @unchecked Sendable {
             calibStartTime = 0
             calibMaxSpeedDegS = 0
             calibUnwrappedYaw = 0
+            calibTiltPitchSum = 0
+            calibTiltRollSum = 0
+            calibTiltCount = 0
             calibrating = true
         }
     }
@@ -146,6 +184,16 @@ public final class IMUService: @unchecked Sendable {
     private func announceConnected(productID: UInt16, transport: String) {
         let name = String(cString: xreal_product_name(productID))
         let product = productID != 0 ? "\(name) (PID 0x\(String(productID, radix: 16)))" : name
+        connectedProductID = productID
+        // One-series glasses need a measured mount tilt; Air (HID) does not. Apply any saved
+        // calibration now, and flag whether a first-use calibration is still required.
+        if usingNetworkIMU {
+            let calibrated = loadMountCalibration(productID: productID)
+            if !calibrated { oneMountCorrection = Self.defaultMountCorrection() }
+            hasMountCalibration = calibrated
+        } else {
+            hasMountCalibration = true
+        }
         DispatchQueue.main.async { self.state = .connected(product: product) }
     }
 
@@ -156,6 +204,10 @@ public final class IMUService: @unchecked Sendable {
         // driver y carries pitch, z carries yaw, x carries roll. Remap (x,y,z) → (y,z,x),
         // with yaw and roll negated (driver's frame is mirrored on those axes vs. the render world).
         var raw = simd_normalize(simd_quatf(ix: q.y, iy: -q.z, iz: -q.x, r: q.w))
+        // Pre-correction device tilt (gravity-locked pitch/roll) — sampled during calibration to
+        // measure this device's physical mount tilt. Captured before the correction is applied.
+        let preCorrection: (p: Float, r: Float)? = (usingNetworkIMU && calibrating)
+            ? { let e = Self.eulerDeg(raw); return (e.p, e.r) }() : nil
         // One-series IMU is mounted tilted in the frame; bring "level head" to level so the screen
         // sits straight ahead and head-turns don't couple into roll. (No-op for the Air path.)
         if usingNetworkIMU { raw = simd_normalize(raw * oneMountCorrection) }
@@ -200,7 +252,7 @@ public final class IMUService: @unchecked Sendable {
         if biasActive { biasYaw -= gyroYawBiasRate * dt }
 
         let rawYaw = Self.yaw(of: qSmooth)
-        if calibrating { sampleCalibration(rawYaw: rawYaw, now: now) }
+        if calibrating { sampleCalibration(rawYaw: rawYaw, now: now, tilt: preCorrection) }
 
         // Stillness freeze observes the bias-corrected heading, so it only cancels the residual
         // (no double-correction with the bias term above).
@@ -270,8 +322,13 @@ public final class IMUService: @unchecked Sendable {
     private var calibMaxSpeedDegS: Float = 0
     /// If the glasses exceed this speed at any point, they weren't still — calibration fails.
     private let calibStillFailDegS: Float = 3.0
+    // One-series mount-tilt capture: accumulate the device's pre-correction pitch/roll (gravity-locked,
+    // so a still+level head reads the raw mount tilt) over the still window and average at completion.
+    private var calibTiltPitchSum: Float = 0
+    private var calibTiltRollSum: Float = 0
+    private var calibTiltCount: Int = 0
 
-    private func sampleCalibration(rawYaw: Float, now: TimeInterval) {
+    private func sampleCalibration(rawYaw: Float, now: TimeInterval, tilt: (p: Float, r: Float)?) {
         calibMaxSpeedDegS = max(calibMaxSpeedDegS, simd_length(velFiltered) * 180 / .pi)
         if calibStartTime == 0 {
             calibStartTime = now
@@ -284,6 +341,7 @@ public final class IMUService: @unchecked Sendable {
         d = atan2f(sinf(d), cosf(d))            // shortest-path step
         calibUnwrappedYaw += d
         calibPrevYaw = rawYaw
+        if let tilt { calibTiltPitchSum += tilt.p; calibTiltRollSum += tilt.r; calibTiltCount += 1 }
         guard now - calibStartTime >= calibDuration else { return }
 
         calibrating = false
@@ -297,6 +355,16 @@ public final class IMUService: @unchecked Sendable {
             gyroYawBiasRate = calibUnwrappedYaw / Float(elapsed)   // rad/s
             biasYaw = 0
             driftPrevYaw = nil                                     // restart the freeze cleanly
+            // One-series mount-tilt: cancel the averaged level-rest tilt so head-turns stop coupling
+            // into roll. Persisted per device so this device is calibrated for next time.
+            if usingNetworkIMU, calibTiltCount > 0 {
+                let avgPitch = calibTiltPitchSum / Float(calibTiltCount)
+                let avgRoll  = calibTiltRollSum  / Float(calibTiltCount)
+                saveMountCalibration(productID: connectedProductID, pitchDeg: -avgPitch, rollDeg: -avgRoll)
+                hasMountCalibration = true
+                NSLog("IMUService: mount calibrated PID 0x%04x — tilt p%+.2f r%+.2f° (correction p%+.2f r%+.2f)",
+                      connectedProductID, avgPitch, avgRoll, -avgPitch, -avgRoll)
+            }
             result = .success(driftDegPerMin: gyroYawBiasRate * 180 / .pi * 60)
         } else {
             result = .noData

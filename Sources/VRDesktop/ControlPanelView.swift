@@ -1400,13 +1400,18 @@ struct ControlPanelView: View {
                 .help("Continuously subtracts the calibrated drift rate (works even while turning your head). "
                       + "Calibrate it with the button below first.")
             HStack(spacing: 8) {
-                Button(coordinator.driftCalibrating ? "Calibrating…" : "Calibrate drift") {
+                Button(coordinator.driftCalibrating
+                       ? "Calibrating…"
+                       : (IMUService.shared.usingNetworkIMU ? "Calibrate" : "Calibrate drift")) {
                     coordinator.requestCalibration()
                 }
                 .controlSize(.small)
                 .disabled(coordinator.driftCalibrating || !glassesConnected)
-                .help("Rest the glasses flat and still, then press. Measures the residual yaw drift "
-                      + "and subtracts it continuously — helps even during head turns.")
+                .help(IMUService.shared.usingNetworkIMU
+                      ? "Wear the glasses, look straight ahead and keep level, then press. Measures this "
+                        + "device's mount tilt (so head-turns don't tilt the view) and the yaw drift."
+                      : "Rest the glasses flat and still, then press. Measures the residual yaw drift "
+                        + "and subtracts it continuously — helps even during head turns.")
                 if coordinator.driftCalibrating { ProgressView().controlSize(.small) }
             }
             if let status = coordinator.driftCalibrationStatus {

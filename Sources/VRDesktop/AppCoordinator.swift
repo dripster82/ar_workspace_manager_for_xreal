@@ -771,9 +771,13 @@ final class AppCoordinator: ObservableObject {
     let driftCalibrationSeconds: TimeInterval = 15
 
     /// Set by the app delegate to present the calibration popup. Triggered by the ⌃⌥B hotkey, the
-    /// menu, and the Settings button via `requestCalibration()`.
-    var onCalibrationRequested: (() -> Void)?
-    func requestCalibration() { onCalibrationRequested?() }
+    /// menu, and the Settings button via `requestCalibration()`. `firstUse` switches the popup to the
+    /// "required on first use of a new device" wording; `onSuccess` (if set) runs after a successful
+    /// calibration is dismissed — used to resume starting AR once a One-series device is calibrated.
+    var onCalibrationRequested: ((_ firstUse: Bool, _ onSuccess: (() -> Void)?) -> Void)?
+    func requestCalibration(firstUse: Bool = false, onSuccess: (() -> Void)? = nil) {
+        onCalibrationRequested?(firstUse, onSuccess)
+    }
 
     /// App-delegate-owned overlays, exposed so the Dashboard quick actions can trigger them too
     /// (normally driven by the global ⌃⌥H / ⌃⌥C / ⌃⌥W hotkeys).
@@ -1775,6 +1779,14 @@ final class AppCoordinator: ObservableObject {
         // Screen Recording is mandatory for capture — gate here so we never reconfigure displays or
         // open a black, un-quittable AR session when the permission is missing.
         guard ensureScreenRecordingPermission() else { return }
+        // One-series: the IMU's physical mount tilt varies per model, so head-turns couple into roll
+        // until it's measured. Require a (worn, level) calibration on first use of an uncalibrated
+        // device, then resume starting AR on the same screen. Air glasses need no mount correction.
+        // Done before the flat-mode/extended-display prompts so those only appear once (on re-entry).
+        if IMUService.shared.usingNetworkIMU, !IMUService.shared.hasMountCalibration {
+            requestCalibration(firstUse: true) { [weak self] in self?.startAR(on: screen) }
+            return
+        }
         // XREAL One series: the glasses' own X1 spatial modes (Anchor / Wide) double-track against
         // this app. Warn before entering AR so the user can switch to flat "Follow" mode first.
         guard confirmOneSeriesFlatMode(on: screen) else { return }
