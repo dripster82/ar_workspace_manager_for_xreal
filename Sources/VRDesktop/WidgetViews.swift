@@ -135,6 +135,10 @@ struct CalendarWidgetView: View {
     private static let timeFmt: DateFormatter = {
         let f = DateFormatter(); f.dateFormat = "HH:mm"; return f
     }()
+    /// Weekday + day + month for the day header, e.g. "Tue 30 Jun".
+    private static let dayDateFmt: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "EEE d MMM"; return f
+    }()
 
     private func relative(_ e: CalEvent) -> String {
         let now = Date()
@@ -156,16 +160,66 @@ struct CalendarWidgetView: View {
         case .today: cutoff = cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: now))
         case .todayTomorrow: cutoff = cal.date(byAdding: .day, value: 2, to: cal.startOfDay(for: now))
         }
-        return events
-            .filter { e in e.end > now && (cutoff.map { e.start < $0 } ?? true) }
-            .prefix(max(1, maxEvents)).map { $0 }
+        // Full filtered list (sorted by start by the source). maxEvents is applied later, across the
+        // day sections, so the "no events" line stays accurate even when an earlier day is busy.
+        return events.filter { e in e.end > now && (cutoff.map { e.start < $0 } ?? true) }
     }
 
-    private func dayLabel(_ date: Date) -> String {
+    /// Split a day header into its prominent prefix ("Today"/"Tomorrow", nil for other days) and the
+    /// date part ("Tue 30 Jun"), so they can be styled separately.
+    private func dayParts(_ date: Date) -> (prefix: String?, date: String) {
         let cal = Calendar.current
-        if cal.isDateInToday(date) { return "Today" }
-        if cal.isDateInTomorrow(date) { return "Tomorrow" }
-        let f = DateFormatter(); f.dateFormat = "EEEE d"; return f.string(from: date)
+        let datePart = Self.dayDateFmt.string(from: date)            // e.g. "Tue 30 Jun"
+        if cal.isDateInToday(date) { return ("Today", datePart) }
+        if cal.isDateInTomorrow(date) { return ("Tomorrow", datePart) }
+        return (nil, datePart)
+    }
+
+    @ViewBuilder
+    private func dayHeader(_ date: Date) -> some View {
+        let parts = dayParts(date)
+        HStack(alignment: .firstTextBaseline, spacing: 5) {
+            if let prefix = parts.prefix {
+                Text(prefix).font(.system(size: 18, weight: .bold, design: .rounded))
+                Text("(\(parts.date))").font(.system(size: 13, weight: .regular, design: .rounded))
+                    .foregroundStyle(.primary.opacity(0.9))
+            } else {
+                Text(parts.date).font(.system(size: 15, weight: .bold, design: .rounded))
+            }
+        }
+        .foregroundStyle(.secondary)
+    }
+
+    /// Group the upcoming events into per-day sections. Today (and Tomorrow, unless the range is
+    /// today-only) are ALWAYS present even with no events, so the widget shows the day header with a
+    /// "no events" line. Further days appear only when they have events (e.g. the `.all` range).
+    /// Ongoing events that began before today are pinned under Today.
+    private var daySections: [(day: Date, events: [CalEvent], more: Int)] {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let items = upcoming
+
+        var days: [Date] = [today]
+        if range != .today, let tomorrow = cal.date(byAdding: .day, value: 1, to: today) {
+            days.append(tomorrow)
+        }
+        func dayKey(_ e: CalEvent) -> Date {
+            let d = cal.startOfDay(for: e.start)
+            return d < today ? today : d            // pin ongoing-from-earlier events under Today
+        }
+        for e in items where !days.contains(where: { cal.isDate($0, inSameDayAs: dayKey(e)) }) {
+            days.append(dayKey(e))
+        }
+        days.sort()
+        // Spend the maxEvents budget across days in order, so a busy Today never makes Tomorrow read
+        // "no events" — Tomorrow shows "+N more" instead if it was truncated.
+        var budget = max(1, maxEvents)
+        return days.map { day in
+            let dayEvents = items.filter { cal.isDate(dayKey($0), inSameDayAs: day) }
+            let shown = Array(dayEvents.prefix(budget))
+            budget -= shown.count
+            return (day, shown, dayEvents.count - shown.count)
+        }
     }
 
     /// Wrap a title to lines of at most `limit` characters, breaking at whitespace where possible and
@@ -205,7 +259,7 @@ struct CalendarWidgetView: View {
     }
 
     var body: some View {
-        let items = upcoming
+        let nextID = upcoming.first?.id
         return WidgetPill(style: style, width: WidgetSize.mediumWidth) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
@@ -214,39 +268,43 @@ struct CalendarWidgetView: View {
                 }
                 if !connected {
                     Text("Not connected").font(.system(size: 14)).opacity(0.7)
-                } else if items.isEmpty {
-                    Text("No upcoming events").font(.system(size: 14)).opacity(0.7)
                 } else {
-                    ForEach(Array(items.enumerated()), id: \.element.id) { idx, e in
-                        let cal = Calendar.current
-                        let newDay = idx == 0 || !cal.isDate(items[idx - 1].start, inSameDayAs: e.start)
-                        let isNext = idx == 0
-                        if newDay {
-                            Text(dayLabel(e.start)).font(.system(size: 15, weight: .bold, design: .rounded))
-                                .foregroundStyle(.secondary).padding(.top, idx == 0 ? 2 : 6)
+                    ForEach(Array(daySections.enumerated()), id: \.offset) { sIdx, section in
+                        dayHeader(section.day).padding(.top, sIdx == 0 ? 2 : 6)
+                        ForEach(section.events) { e in
+                            eventRow(e, isNext: e.id == nextID)
                         }
-                        HStack(alignment: .top, spacing: 6) {
-                            Text(e.allDay ? "all-day" : Self.timeFmt.string(from: e.start))
-                                .font(.system(size: 13, weight: .medium, design: .rounded).monospacedDigit())
-                                .frame(width: 42, alignment: .leading).opacity(0.8)
-                            if !e.allDay, case let d = durationLabel(e), !d.isEmpty {
-                                Text("(\(d))").font(.system(size: 11, weight: .medium, design: .rounded))
-                                    .frame(width: 46, alignment: .leading).opacity(0.55)
-                            }
-                            Text(Self.wrapTitle(e.title)).font(.system(size: 15, weight: isNext ? .semibold : .medium))
-                                .fixedSize(horizontal: false, vertical: true)
-                            Spacer(minLength: 8)
-                            let r = relative(e)
-                            if !r.isEmpty {
-                                Text(r).font(.system(size: 13, weight: .bold, design: .rounded))
-                                    .foregroundStyle(r == "now" ? .green : style.tint.color.opacity(0.85))
-                            }
+                        if section.events.isEmpty && section.more == 0 {
+                            Text("no events").font(.system(size: 13)).opacity(0.5).padding(.leading, 2)
+                        } else if section.more > 0 {
+                            Text("+\(section.more) more").font(.system(size: 12)).opacity(0.5).padding(.leading, 2)
                         }
-                        .opacity(isNext ? 1 : 0.8)
                     }
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func eventRow(_ e: CalEvent, isNext: Bool) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Text(e.allDay ? "all-day" : Self.timeFmt.string(from: e.start))
+                .font(.system(size: 13, weight: .medium, design: .rounded).monospacedDigit())
+                .frame(width: 42, alignment: .leading).opacity(0.8)
+            if !e.allDay, case let d = durationLabel(e), !d.isEmpty {
+                Text("(\(d))").font(.system(size: 11, weight: .medium, design: .rounded))
+                    .frame(width: 46, alignment: .leading).opacity(0.55)
+            }
+            Text(Self.wrapTitle(e.title)).font(.system(size: 15, weight: isNext ? .semibold : .medium))
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            let r = relative(e)
+            if !r.isEmpty {
+                Text(r).font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(r == "now" ? .green : style.tint.color.opacity(0.85))
+            }
+        }
+        .opacity(isNext ? 1 : 0.8)
     }
 }
 
