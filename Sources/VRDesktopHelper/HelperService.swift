@@ -39,7 +39,8 @@ final class HelperService: NSObject, HelperProtocol {
     func bounceColorSyncDaemons(withReply reply: @escaping (Bool, String?) -> Void) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
-        p.arguments = ["colorsyncd", "colorsync.displayservices"]
+        // SIGKILL (-9): a daemon pegged in a tight loop can ignore the default SIGTERM, so force it.
+        p.arguments = ["-9", "colorsyncd", "colorsync.displayservices"]
         do {
             try p.run()
             p.waitUntilExit()

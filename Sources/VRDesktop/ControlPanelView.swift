@@ -285,6 +285,10 @@ struct ControlPanelView: View {
                         .onAppear { syncWorkspaceName() }
                     Button { coordinator.addWorkspace(); syncWorkspaceName() } label: { Image(systemName: "plus") }
                         .help("New empty workspace")
+                    Button { coordinator.duplicateActiveWorkspace(); syncWorkspaceName() } label: {
+                        Image(systemName: "plus.square.on.square")
+                    }
+                    .help("Duplicate this workspace (same screens) — switch between them to test display reuse")
                     Menu {
                         Section("New from template (sized for readable text)") {
                             ForEach(WorkspaceTemplate.allCases) { t in
@@ -1240,6 +1244,20 @@ struct ControlPanelView: View {
 
     private var systemHealthSection: some View {
         VStack(alignment: .leading, spacing: 8) {
+            // Live runaway metric — always shown (the others are accumulation indicators).
+            HStack {
+                Text("ColorSync daemon CPU").font(.caption)
+                Spacer()
+                let cds = coordinator.colorSyncDaemonCPU
+                Text(String(format: "%.0f%%", cds))
+                    .font(.caption.monospacedDigit().bold())
+                    .foregroundStyle(cds >= 65 ? .red : (cds > 25 ? .orange : .secondary))
+                if cds >= 65 { Text("pinned").font(.caption2).foregroundStyle(.red) }
+            }
+            Text("colorsync.displayservices — pins ~75% after rapid display changes; self-clears in ~1 min.")
+                .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Divider()
             Toggle("Monitor problem processes (colorsync, WindowServer, Sophos)",
                    isOn: $coordinator.processMonitorEnabled)
                 .font(.caption)

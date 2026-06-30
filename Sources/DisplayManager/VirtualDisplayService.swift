@@ -218,6 +218,10 @@ public final class VirtualDisplayService {
     private static let serialBase: UInt32 = 0x56520000
     /// Slot index reserved for each active screen id, freed on destroy so the pool stays compact.
     private var slotForID: [UUID: UInt32] = [:]
+    /// The backing pixel mode each active display was built with, so `reconcile` can reuse a live
+    /// display for a different screen of the same shape (no CGDisplay reconfiguration → no ColorSync
+    /// re-scan).
+    private var modeForID: [UUID: (width: Int, height: Int, hiDPI: Bool)] = [:]
 
     /// Reserve (or reuse) the lowest free slot for `id`. Why slots and not a per-screen hash:
     /// WindowServer persists a saved arrangement (`DisplaySets`) for every distinct *combination*
@@ -234,10 +238,15 @@ public final class VirtualDisplayService {
         return slot
     }
 
-    public func create(_ config: VirtualScreenConfig) -> CGDirectDisplayID? {
-        guard Self.isAvailable else { return nil }
+    /// Effective HiDPI after the per-pipe width cap (see maxHiDPIBackingWidth).
+    private func effectiveHiDPI(_ config: VirtualScreenConfig) -> Bool {
+        config.hiDPI && (config.width * 2 <= Self.maxHiDPIBackingWidth)
+    }
 
-        let hiDPI = config.hiDPI && (config.width * 2 <= Self.maxHiDPIBackingWidth)
+    /// Build + apply a CGVirtualDisplay for `config` using the given identity slot. Pure factory: it
+    /// doesn't touch `active`/`slotForID`/`modeForID` (callers record those).
+    private func makeDisplay(_ config: VirtualScreenConfig, slot: UInt32) -> (display: CGVirtualDisplay, displayID: CGDirectDisplayID, hiDPI: Bool)? {
+        let hiDPI = effectiveHiDPI(config)
         if config.hiDPI && !hiDPI {
             NSLog("VirtualDisplayService: '\(config.name)' too wide for HiDPI backing — using 1×")
         }
@@ -252,7 +261,7 @@ public final class VirtualDisplayService {
         // Bounded slot-based identity (see reserveSlot): the serial — and the CGDisplay UUID macOS
         // derives from it — is drawn from a small pool reused across screens and sessions, so
         // WindowServer's display registry doesn't accumulate a new saved arrangement per screen.
-        descriptor.serialNum = Self.serialBase &+ reserveSlot(for: config.id)
+        descriptor.serialNum = Self.serialBase &+ slot
         descriptor.productID = 0x5652 // "VR"
         descriptor.vendorID = 0x4444
         descriptor.queue = DispatchQueue.main
@@ -262,32 +271,95 @@ public final class VirtualDisplayService {
 
         let settings = CGVirtualDisplaySettings()
         settings.hiDPI = hiDPI ? 1 : 0
-        if hiDPI {
-            settings.modes = [CGVirtualDisplayMode(width: UInt32(config.width * 2),
-                                                   height: UInt32(config.height * 2),
-                                                   refreshRate: 60)]
-        } else {
-            settings.modes = [CGVirtualDisplayMode(width: UInt32(config.width),
-                                                   height: UInt32(config.height),
-                                                   refreshRate: 60)]
-        }
+        let pw = UInt32(config.width * (hiDPI ? 2 : 1))
+        let ph = UInt32(config.height * (hiDPI ? 2 : 1))
+        settings.modes = [CGVirtualDisplayMode(width: pw, height: ph, refreshRate: 60)]
         guard display.apply(settings) else {
             NSLog("VirtualDisplayService: applySettings failed for \(config.name)")
             return nil
         }
-        active[config.id] = (display, display.displayID)
-        NSLog("VirtualDisplayService: created '\(config.name)' displayID=\(display.displayID)")
-        return display.displayID
+        return (display, display.displayID, hiDPI)
+    }
+
+    public func create(_ config: VirtualScreenConfig) -> CGDirectDisplayID? {
+        guard Self.isAvailable else { return nil }
+        guard let made = makeDisplay(config, slot: reserveSlot(for: config.id)) else { return nil }
+        active[config.id] = (made.display, made.displayID)
+        modeForID[config.id] = (config.width, config.height, made.hiDPI)
+        NSLog("VirtualDisplayService: created '\(config.name)' displayID=\(made.displayID)")
+        return made.displayID
+    }
+
+    /// Reconcile the live virtual displays to exactly `configs`, **reusing** any live display whose
+    /// backing pixel mode matches a target (just re-keying it to the new screen id) instead of
+    /// destroying and recreating it. A reused display keeps its CGDisplay identity, so no display
+    /// add/remove reconfiguration fires — which is what avoids the `colorsync.displayservices` re-scan
+    /// (and the per-display ICC generate/delete) that a full teardown+rebuild causes. Returns the
+    /// id→displayID map plus counts (reused / created / destroyed) for instrumentation. The caller is
+    /// responsible for any ColorSync-profile cleanup of destroyed displays (it must read their UUIDs
+    /// before calling, since the displays are gone on return).
+    @discardableResult
+    public func reconcile(_ configs: [VirtualScreenConfig]) -> (displayIDs: [UUID: CGDirectDisplayID], reused: Int, created: Int, destroyed: Int) {
+        guard Self.isAvailable else { return ([:], 0, 0, 0) }
+
+        struct Avail { let oldID: UUID; let display: CGVirtualDisplay; let displayID: CGDirectDisplayID
+                       let width: Int; let height: Int; let hiDPI: Bool; let slot: UInt32 }
+        var available: [Avail] = active.map { (id, v) in
+            let m = modeForID[id] ?? (width: -1, height: -1, hiDPI: false)
+            return Avail(oldID: id, display: v.display, displayID: v.displayID,
+                         width: m.width, height: m.height, hiDPI: m.hiDPI, slot: slotForID[id] ?? 0)
+        }
+
+        var newActive: [UUID: (display: CGVirtualDisplay, displayID: CGDirectDisplayID)] = [:]
+        var newMode: [UUID: (width: Int, height: Int, hiDPI: Bool)] = [:]
+        var newSlot: [UUID: UInt32] = [:]
+        var result: [UUID: CGDirectDisplayID] = [:]
+        var reused = 0, created = 0
+
+        for config in configs {
+            let w = config.width, h = config.height, hi = effectiveHiDPI(config)
+            // Reuse only an EXACT-resolution match (untouched → zero reconfiguration); otherwise the
+            // display is left to be destroyed and a fresh one created. A resize would also reconfigure
+            // the display (and still churns colorsync.displayservices), so we don't resize.
+            let idx = available.firstIndex { $0.oldID == config.id && $0.width == w && $0.height == h && $0.hiDPI == hi }
+                  ?? available.firstIndex { $0.width == w && $0.height == h && $0.hiDPI == hi }
+            if let idx {
+                let a = available.remove(at: idx)
+                newActive[config.id] = (a.display, a.displayID)
+                newMode[config.id] = (w, h, hi)
+                newSlot[config.id] = a.slot
+                result[config.id] = a.displayID
+                reused += 1
+            } else {
+                let used = Set(newSlot.values).union(available.map { $0.slot })
+                var slot: UInt32 = 0; while used.contains(slot) { slot += 1 }
+                if let made = makeDisplay(config, slot: slot) {
+                    newActive[config.id] = (made.display, made.displayID)
+                    newMode[config.id] = (w, h, made.hiDPI)
+                    newSlot[config.id] = slot
+                    result[config.id] = made.displayID
+                    created += 1
+                }
+            }
+        }
+
+        let destroyed = available.count   // anything not reused is dropped (its CGVirtualDisplay frees)
+        active = newActive
+        modeForID = newMode
+        slotForID = newSlot
+        return (result, reused, created, destroyed)
     }
 
     public func destroy(_ id: UUID) {
         active.removeValue(forKey: id) // releasing the object removes the display
         slotForID.removeValue(forKey: id) // free the slot for reuse
+        modeForID.removeValue(forKey: id)
     }
 
     public func destroyAll() {
         active.removeAll()
         slotForID.removeAll()
+        modeForID.removeAll()
     }
 
     public func displayID(for id: UUID) -> CGDirectDisplayID? {

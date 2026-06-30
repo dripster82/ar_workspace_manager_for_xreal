@@ -26,6 +26,10 @@ public final class CaptureSource: NSObject, @unchecked Sendable {
     private let lock = NSLock()
     // Keep the CVMetalTexture alive while its MTLTexture may be in flight.
     private var latest: (texture: MTLTexture, backing: CVMetalTexture)?
+    /// Keep the last few CVMetalTexture backings alive so a texture handed to the renderer isn't freed
+    /// out from under an in-flight GPU frame — the freed-IOSurface race that corrupts the heap when the
+    /// display is reconfigured / the capture is rebuilt (surfaces as a crash in the sharpening blit).
+    private var recentBackings: [CVMetalTexture] = []
     // Recovery state: whether we intend to be capturing, last delivered-sample time (the stream
     // delivers idle frames too, so this tracks "stream alive"), and a restart guard.
     private var wantCapture = false
@@ -112,7 +116,7 @@ public final class CaptureSource: NSObject, @unchecked Sendable {
     }
 
     private func clearLatest() {
-        lock.lock(); latest = nil; lock.unlock()
+        lock.lock(); latest = nil; recentBackings.removeAll(); lock.unlock()
     }
 }
 
@@ -133,6 +137,8 @@ extension CaptureSource: SCStreamOutput, SCStreamDelegate {
 
         lock.lock()
         latest = (texture, cvTexture)
+        recentBackings.append(cvTexture)
+        if recentBackings.count > 4 { recentBackings.removeFirst() }
         lock.unlock()
     }
 

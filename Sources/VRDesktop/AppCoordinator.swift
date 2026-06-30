@@ -2713,7 +2713,78 @@ final class AppCoordinator: ObservableObject {
         workspaceStore.save()
         syncPhysicalMonitors()
         objectWillChange.send()
-        restartARIfActive()
+        // SPIKE: switch incrementally (reuse live virtual displays of matching size) instead of a full
+        // stopAR/startAR rebuild, to avoid the colorsync.displayservices re-scan that every display
+        // create/destroy triggers. Falls back to the old restart if AR isn't running.
+        if arActive, let ws = workspaceStore.activeWorkspace {
+            switchWorkspaceIncremental(to: ws)
+        }
+    }
+
+    /// SPIKE — incremental workspace switch. Keeps the AR session (and the glasses output window) up,
+    /// reuses any live CGVirtualDisplay whose backing size matches a screen in the new workspace, and
+    /// only creates/destroys the genuine delta. This removes the per-switch display add/remove churn
+    /// that drives the ColorSync runaway. Compare to `restartARIfActive` (full teardown + rebuild).
+    ///
+    /// Known spike limitations: captures are stopped and rebuilt every switch (cheap, no ColorSync
+    /// cost, but a brief reacquire); window-layout restore is best-effort.
+    private func switchWorkspaceIncremental(to workspace: Workspace) {
+        guard arActive, let renderer else { return }
+        let t0 = CACurrentMediaTime()
+        snapshotWindowLayout()   // record current apps→screens before the displays move
+
+        // UUIDs of every current virtual display, so we can clean ColorSync profiles for any we destroy
+        // (must read them now — they're gone after reconcile).
+        let beforeUUIDByDisplayID: [CGDirectDisplayID: String] = Dictionary(
+            uniqueKeysWithValues: virtualDisplays.active.values.compactMap { v in
+                SystemHealth.displayUUID(v.displayID).map { (v.displayID, $0) }
+            })
+
+        // Stop the current captures; displays themselves are reused via reconcile().
+        let oldCaptures = captures.values
+        captures.removeAll()
+        Task { for c in oldCaptures { await c.stop() } }
+
+        // Reconcile the OS virtual displays to the new workspace's own-display screens.
+        let targets = workspace.virtualScreens.filter { $0.showInAR && $0.mirrorOfVirtual == nil }
+        let recon = virtualDisplays.reconcile(targets)
+
+        // Delete ColorSync profiles only for displays that were actually destroyed.
+        let survivingIDs = Set(recon.displayIDs.values)
+        let destroyedUUIDs = beforeUUIDByDisplayID.filter { !survivingIDs.contains($0.key) }.map { $0.value }
+        if !destroyedUUIDs.isEmpty { SystemHealth.removeDisplayProfiles(uuids: destroyedUUIDs) }
+
+        // Rebuild captures + the rendered scene (mirrors beginAR's assembly).
+        var pairs: [(config: VirtualScreenConfig, capture: CaptureSource)] = []
+        for config in targets {
+            guard let displayID = recon.displayIDs[config.id], displayID != glassesDisplayID else { continue }
+            pairs.append((config, makeCapture(config: config, captureDisplayID: displayID)))
+        }
+        for config in workspace.virtualScreens where config.showInAR && config.mirrorOfVirtual != nil {
+            if let capture = captureForConfig(config) { pairs.append((config, capture)) }
+        }
+        for (uuidString, config) in workspace.physicalInAR where config.showInAR {
+            guard let displayID = Self.resolvePhysicalDisplay(uuidString: uuidString),
+                  displayID != glassesDisplayID else { continue }
+            pairs.append((config, makeCapture(config: config, captureDisplayID: displayID)))
+        }
+        renderer.setScreens(assembleScene(pairs))
+
+        // HUD follows the displayed workspace.
+        let hud = displayedHUDProfile
+        widgetManager?.setLayout(widgets: hud?.widgets ?? [], stacks: hud?.stacks ?? [])
+
+        DebugLog.shared.log("workspace switch (incremental): reused \(recon.reused), created \(recon.created), destroyed \(recon.destroyed) display(s) in \(Int((CACurrentMediaTime() - t0) * 1000))ms")
+
+        // Let the new displays settle, then realign the OS arrangement and put windows back.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            guard let self, self.arActive else { return }
+            self.arrangeDisplaysToMatchGUI(force: false)   // only reconfigures if the order changed
+            self.applyConfiguredMirrors()
+            self.applyAllScreenBackgrounds()
+            self.updateCursorConfinement()
+            self.maybeRestoreWindowLayout()
+        }
     }
 
     func addWorkspace() {
@@ -2723,6 +2794,24 @@ final class AppCoordinator: ObservableObject {
         syncPhysicalMonitors()
         workspaceStore.save()
         objectWillChange.send()
+    }
+
+    /// Duplicate the workspace being edited — a deep copy with a new workspace id and fresh screen ids
+    /// but the SAME screen geometry. Handy for testing incremental-switch display reuse: switching
+    /// between the original and its copy presents identically-sized screens, so the reconcile can reuse
+    /// the live virtual displays instead of recreating them.
+    @discardableResult
+    func duplicateActiveWorkspace() -> UUID? {
+        guard let id = effectiveEditingWorkspaceID, var copy = workspaceStore.workspace(id) else { return nil }
+        copy.id = UUID()
+        copy.name = copy.name + " Copy"
+        copy.virtualScreens = copy.virtualScreens.map { var c = $0; c.id = UUID(); return c }
+        workspaceStore.append(copy)
+        editingWorkspaceID = copy.id
+        syncPhysicalMonitors()
+        workspaceStore.save()
+        objectWillChange.send()
+        return copy.id
     }
 
     /// Create a new workspace from a curated template (screens pre-placed for readable text on the
@@ -2956,6 +3045,9 @@ final class AppCoordinator: ObservableObject {
     @Published var processSamples: [ProcessSample] = []
     @Published var displayProfileCount = 0
     @Published var displayConfigCount = 0
+    /// Live CPU% of colorsync.displayservices — the runaway metric. Sampled even without full process
+    /// monitoring so the pinned state is visible at a glance.
+    @Published var colorSyncDaemonCPU: Double = 0
     private var healthTimer: Timer?
 
     /// Always-on guard that auto-clears the ColorSync runaway (the recurring "everything's sluggish
@@ -3045,11 +3137,15 @@ final class AppCoordinator: ObservableObject {
         let wantProcesses = processMonitorEnabled
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let samples = wantProcesses ? SystemHealth.processCPU(matching: SystemHealth.watchedProcesses) : []
+            // Always sample the colour daemon's CPU (the live runaway metric), even without full
+            // process monitoring — it's a single cheap `ps` for one process.
+            let cds = SystemHealth.processCPU(matching: ["colorsync.displayservices"]).first?.cpu ?? 0
             let profiles = SystemHealth.colorSyncDisplayProfileCount()
             let configs = SystemHealth.displayConfigCount()
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.processSamples = samples
+                self.colorSyncDaemonCPU = cds
                 self.displayProfileCount = profiles
                 self.displayConfigCount = configs
             }
