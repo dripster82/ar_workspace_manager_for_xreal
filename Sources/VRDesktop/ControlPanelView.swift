@@ -133,6 +133,11 @@ struct ControlPanelView: View {
                     quickAction("Help", "keyboard", "⌃⌥H") { coordinator.onToggleHelp?() }
                 }
             }
+            if let media = coordinator.mediaPlayer {
+                card("Media", "play.rectangle") {
+                    MediaPlayerControls(media: media, coordinator: coordinator)
+                }
+            }
         }
         .onAppear { coordinator.refreshPermissions() }
         .onReceive(Timer.publish(every: 3, on: .main, in: .common).autoconnect()) { _ in
@@ -2465,6 +2470,44 @@ private struct IMUDiagnosticsRows: View {
                 .font(.system(.caption, design: .monospaced))
             Text(String(format: "Sample rate   %.0f Hz", live.imuRate))
                 .font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// Head-locked video player controls: pick a file, choose one of the 5 FOV positions, play/pause.
+struct MediaPlayerControls: View {
+    @ObservedObject var media: MediaPlayerManager
+    let coordinator: AppCoordinator
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Button("Open video…") { coordinator.openMediaFile() }.controlSize(.small)
+                if media.hasMedia {
+                    Button(media.playing ? "Pause" : "Play") { coordinator.toggleMediaPlay() }
+                        .controlSize(.small)
+                    Button("Stop") { coordinator.stopMedia() }.controlSize(.small)
+                }
+                Spacer()
+            }
+            if let name = media.fileName {
+                Text(name).font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+            } else {
+                Text("Local file or a mounted network drive.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            HStack(spacing: 8) {
+                Text("Position").font(.caption)
+                Picker("", selection: Binding(get: { media.position },
+                                              set: { coordinator.setMediaPosition($0) })) {
+                    ForEach(MediaPlayerManager.Position.allCases) { Text($0.label).tag($0) }
+                }.labelsHidden().fixedSize()
+                Spacer()
+            }
+            if !coordinator.arActive {
+                Text("Start AR to see the video in the glasses.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
         }
     }
 }

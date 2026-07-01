@@ -7,6 +7,7 @@ import DisplayManager
 import GlassesDriver
 import Speech
 import SwiftUI
+import UniformTypeIdentifiers
 import simd
 
 /// High-frequency telemetry readouts (head orientation, IMU temp/accel, sample + render rates),
@@ -134,6 +135,8 @@ final class AppCoordinator: ObservableObject {
     let appleCalendar = AppleCalendarService()
     let reminders = RemindersService()
     private var widgetManager: WidgetManager?
+    /// Head-locked video player (4 FOV corners + full-FOV). Created once the renderer's device exists.
+    private(set) var mediaPlayer: MediaPlayerManager?
     private var captures: [UUID: CaptureSource] = [:]
     private var statsTimer: Timer?
     private var lastSampleCount: UInt64 = 0
@@ -358,6 +361,11 @@ final class AppCoordinator: ObservableObject {
         DebugLog.shared.log("App launched — build \(BuildInfo.version)")
         renderer = GlassesRenderer(poseStore: IMUService.shared.poseStore)
         renderer?.useDedicatedRenderThread = useDedicatedRenderThread
+        if let device = renderer?.device {
+            let mp = MediaPlayerManager(device: device)
+            mp.onChange = { [weak self] in self?.applyRenderedScene() }
+            mediaPlayer = mp
+        }
         widgetManager = WidgetManager(renderer: renderer)
         widgetManager?.slack = slack
         announcer.voiceIdentifier = announceVoiceID.isEmpty ? nil : announceVoiceID
@@ -1895,7 +1903,9 @@ final class AppCoordinator: ObservableObject {
         }
 
         renderer.showLabels = labelsVisible
-        renderer.setScreens(assembleScene(pairs))
+        var initialScreens = assembleScene(pairs)
+        if let media = mediaPlayer?.sceneScreen() { initialScreens.append(media) }
+        renderer.setScreens(initialScreens)
         arActive = true
         let hud = displayedHUDProfile
         widgetManager?.setLayout(widgets: hud?.widgets ?? [], stacks: hud?.stacks ?? [])
@@ -2173,8 +2183,13 @@ final class AppCoordinator: ObservableObject {
     private func applyRenderedScene() {
         guard let renderer, arActive,
               let workspace = workspaceStore.activeWorkspace else { return }
-        // Passthrough: draw no screens (the HUD widgets, pushed separately, stay).
-        if screensHidden { renderer.setScreens([]); return }
+        // The head-locked media player (if pinned) renders over everything else, and stays even in
+        // passthrough mode (workspace screens hidden).
+        let media = mediaPlayer?.sceneScreen()
+        if screensHidden {
+            renderer.setScreens([media].compactMap { $0 })
+            return
+        }
         var pairs: [(config: VirtualScreenConfig, capture: CaptureSource)] = []
         for config in workspace.virtualScreens where config.showInAR {
             if let capture = captureForConfig(config) { pairs.append((config, capture)) }
@@ -2182,8 +2197,32 @@ final class AppCoordinator: ObservableObject {
         for (_, config) in workspace.physicalInAR where config.showInAR {
             if let capture = captures[config.id] { pairs.append((config, capture)) }
         }
-        renderer.setScreens(assembleScene(pairs))
+        var screens = assembleScene(pairs)
+        if let media { screens.append(media) }
+        renderer.setScreens(screens)
     }
+
+    // MARK: Media player (head-locked video)
+
+    /// Pick a video file (local disk or a mounted network drive) and play it in the pinned FOV screen.
+    func openMediaFile() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [.movie, .video, .audiovisualContent, .mpeg4Movie, .quickTimeMovie]
+        panel.allowsOtherFileTypes = true   // let unusual containers (e.g. .mkv) through too
+        panel.prompt = "Play"
+        panel.message = "Choose a video file — on this Mac or a mounted network drive."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard let mediaPlayer else { statusMessage = "Media player unavailable"; return }
+        mediaPlayer.open(url: url)
+        statusMessage = arActive ? "Playing \(url.lastPathComponent)"
+                                 : "Loaded \(url.lastPathComponent) — start AR to see it"
+    }
+
+    func setMediaPosition(_ p: MediaPlayerManager.Position) { mediaPlayer?.setPosition(p) }
+    func toggleMediaPlay() { mediaPlayer?.togglePlay() }
+    func stopMedia() { mediaPlayer?.stop() }
 
     /// Result of a window-move attempt (⌃⌥W picker).
     enum WindowMoveResult { case moved(String), noTarget, failed(String) }
