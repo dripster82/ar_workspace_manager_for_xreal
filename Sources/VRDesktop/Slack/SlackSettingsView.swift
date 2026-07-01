@@ -4,7 +4,17 @@ import SwiftUI
 /// and status. Credentials are entered by the user (their own personal Slack app).
 struct SlackSettingsView: View {
     @ObservedObject var slack: SlackService
+    /// Read new Slack messages aloud as they arrive (owned by the coordinator).
+    @Binding var announce: Bool
+    /// Selected text-to-speech voice identifier ("" = system default).
+    @Binding var voiceID: String
+    /// Speak a sample line now, to verify text-to-speech works independently of Slack detection.
+    var onTest: () -> Void = {}
+    /// Open System Settings ▸ Accessibility ▸ Spoken Content to download more voices.
+    var onDownloadVoices: () -> Void = {}
     @State private var expanded = false
+    @State private var voiceHelpExpanded = false
+    private let voices = SpeechAnnouncer.englishVoices()
 
     var body: some View {
         DisclosureGroup(isExpanded: $expanded) {
@@ -35,6 +45,39 @@ struct SlackSettingsView: View {
                         ForEach(SlackService.pollOptions, id: \.seconds) { Text($0.label).tag($0.seconds) }
                     }.labelsHidden().fixedSize()
                     Spacer()
+                }
+
+                HStack {
+                    Toggle("Read new messages aloud", isOn: $announce)
+                        .font(.caption)
+                        .help("Speaks \u{201C}Slack message from <name>\u{201D} when a new unread message arrives "
+                              + "(checked at the refresh interval above).")
+                    Spacer()
+                    Button("Test voice") { onTest() }.controlSize(.small)
+                }
+                if announce {
+                    HStack(spacing: 8) {
+                        Text("Voice").font(.caption)
+                        Picker("", selection: $voiceID) {
+                            Text("System default").tag("")
+                            ForEach(voices) { Text($0.label).tag($0.id) }
+                        }.labelsHidden().fixedSize()
+                        Spacer()
+                        Button("Download voices…") { onDownloadVoices() }.controlSize(.small)
+                    }
+                    DisclosureGroup(isExpanded: $voiceHelpExpanded) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            voiceStep(1, "Click \u{201C}Download voices…\u{201D} above (opens System Settings ▸ "
+                                       + "Accessibility ▸ Spoken Content).")
+                            voiceStep(2, "Next to \u{201C}System voice\u{201D}, click the \u{24D8} (info) icon.")
+                            voiceStep(3, "Find the voice you want (Enhanced/Premium sound the best) and click "
+                                       + "the cloud download icon next to it to install.")
+                            voiceStep(4, "Come back here — the new voices appear in the Voice list above.")
+                        }
+                        .padding(.top, 2)
+                    } label: {
+                        Text("How to add more voices").font(.caption)
+                    }
                 }
 
                 priorityPicker
@@ -133,6 +176,14 @@ struct SlackSettingsView: View {
         HStack {
             Text(label).font(.caption).frame(width: 92, alignment: .leading)
             field.textFieldStyle(.roundedBorder).font(.caption)
+        }
+    }
+
+    private func voiceStep(_ n: Int, _ text: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Text("\(n).").font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+            Text(text).font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }

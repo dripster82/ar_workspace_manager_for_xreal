@@ -28,6 +28,13 @@ private enum SlackError: Error, LocalizedError {
 final class SlackService: ObservableObject {
     @Published private(set) var state: SlackConnState = .disconnected
     @Published private(set) var unreads: [SlackUnread] = []
+    /// Fired after a poll with the conversations that gained *new* activity since the previous poll
+    /// (newly unread, or a DM whose unread count went up) — for spoken announcements. The first poll
+    /// only seeds the baseline (never announces the pre-existing backlog).
+    var onNewMessages: (([SlackUnread]) -> Void)?
+    /// Per-conversation unread level at the last poll (count for DMs, 1 for boolean-unread channels),
+    /// used to detect increases. `nil` until the first poll seeds it.
+    private var announceBaseline: [String: Int]?
     /// Poll interval in seconds; persisted. Restarts the timer live when changed.
     @Published var pollSeconds: Int = UserDefaults.standard.object(forKey: "slackPollSeconds") as? Int ?? 30 {
         didSet {
@@ -148,6 +155,8 @@ final class SlackService: ObservableObject {
         UserDefaults.standard.removeObject(forKey: "slackUser")
         stopPolling()
         unreads = []
+        unreadByID = [:]
+        announceBaseline = nil   // re-seed on next connect so we don't read out the backlog
         state = .disconnected
     }
 
@@ -313,12 +322,45 @@ final class SlackService: ObservableObject {
                 if $0.showsCount { return $0.count > $1.count }
                 return $0.name < $1.name
             }
+            let updatedByID = Dictionary(convos.map { ($0.id, $0.updated) }, uniquingKeysWith: { a, _ in a })
+            detectNewMessages(updatedByID: updatedByID)
         } catch SlackError.api(let msg) where msg == "invalid_auth" || msg == "token_revoked" || msg == "account_inactive" {
             state = .error("Slack token expired — reconnect.")
             stopPolling()
         } catch {
             DebugLog.shared.log("slack refresh error: \(error.localizedDescription)")
         }
+    }
+
+    /// Compare the current unread state to the previous poll and announce conversations with new
+    /// activity. "Level" = the DM's unread count, or 1 for a boolean-unread channel/group; a
+    /// conversation is new when it wasn't unread before or its level increased.
+    ///
+    /// The FIRST poll has no previous state to diff against. Rather than swallow everything (which
+    /// dropped a message that was already unread when the app started — the "first message never
+    /// speaks" bug), it announces only conversations that became active *recently* (`updated` within a
+    /// freshness window), so a just-arrived message still speaks while an old backlog stays quiet.
+    private func detectNewMessages(updatedByID: [String: Double]) {
+        var level: [String: Int] = [:]
+        for u in unreadByID.values { level[u.id] = u.showsCount ? max(1, u.count) : 1 }
+
+        let previous = announceBaseline
+        announceBaseline = level
+
+        let fresh: [SlackUnread]
+        if let baseline = previous {
+            fresh = unreadByID.values.filter { (level[$0.id] ?? 0) > (baseline[$0.id] ?? 0) }
+        } else {
+            // First poll: only conversations active within the last ~2 polls (min 2 min). `updated`
+            // is Slack epoch-milliseconds; suppress anything older (existing backlog).
+            let nowMs = Date().timeIntervalSince1970 * 1000
+            let windowMs = max(120_000, Double(pollSeconds) * 2000)
+            fresh = unreadByID.values.filter { nowMs - (updatedByID[$0.id] ?? 0) < windowMs }
+            DebugLog.shared.log("slack: baseline seeded (\(level.count) unread, \(fresh.count) recent)")
+        }
+
+        let sorted = fresh.sorted { $0.showsCount && !$1.showsCount }   // DMs first
+        if !sorted.isEmpty { onNewMessages?(sorted) }
     }
 
     // MARK: API

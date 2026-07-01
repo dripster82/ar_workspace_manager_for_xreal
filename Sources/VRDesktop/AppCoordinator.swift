@@ -128,6 +128,7 @@ final class AppCoordinator: ObservableObject {
     }
     private(set) var renderer: GlassesRenderer?
     let slack = SlackService()
+    let announcer = SpeechAnnouncer()
     let github = GitHubService()
     let calendar = GoogleCalendarService()
     let appleCalendar = AppleCalendarService()
@@ -208,6 +209,18 @@ final class AppCoordinator: ObservableObject {
     /// Allow Apple's server (cloud) recognition for better accuracy (audio leaves the Mac).
     @Published var voiceAllowRemote: Bool = UserDefaults.standard.bool(forKey: "voiceAllowRemote") {
         didSet { UserDefaults.standard.set(voiceAllowRemote, forKey: "voiceAllowRemote"); voice.allowRemote = voiceAllowRemote; applyVoiceMode() }
+    }
+
+    /// Read new Slack messages aloud ("Slack message from <name>") via text-to-speech as they arrive.
+    @Published var slackAnnounce: Bool = UserDefaults.standard.bool(forKey: "slackAnnounce") {
+        didSet { UserDefaults.standard.set(slackAnnounce, forKey: "slackAnnounce") }
+    }
+    /// Chosen TTS voice for spoken announcements (empty = system default en-US).
+    @Published var announceVoiceID: String = UserDefaults.standard.string(forKey: "announceVoiceID") ?? "" {
+        didSet {
+            UserDefaults.standard.set(announceVoiceID, forKey: "announceVoiceID")
+            announcer.voiceIdentifier = announceVoiceID.isEmpty ? nil : announceVoiceID
+        }
     }
 
     let voiceStore = VoiceCommandStore()
@@ -347,6 +360,23 @@ final class AppCoordinator: ObservableObject {
         renderer?.useDedicatedRenderThread = useDedicatedRenderThread
         widgetManager = WidgetManager(renderer: renderer)
         widgetManager?.slack = slack
+        announcer.voiceIdentifier = announceVoiceID.isEmpty ? nil : announceVoiceID
+        // Speak new Slack messages as they arrive, when enabled. DMs → "Slack message from <name>";
+        // channels/groups → "New Slack message in <name>". Batches of >3 collapse to a count.
+        slack.onNewMessages = { [weak self] fresh in
+            guard let self else { return }
+            DebugLog.shared.log("slack: \(fresh.count) new message(s) \(fresh.map { $0.name }) — announce=\(self.slackAnnounce)")
+            guard self.slackAnnounce, !fresh.isEmpty else { return }
+            if fresh.count > 3 {
+                self.announcer.speak("\(fresh.count) new Slack messages")
+            } else {
+                for u in fresh {
+                    let isDM = u.symbol == "person.fill"
+                    self.announcer.speak(isDM ? "Slack message from \(u.name)"
+                                              : "New Slack message in \(u.name)")
+                }
+            }
+        }
         widgetManager?.github = github
         widgetManager?.calendar = calendar
         widgetManager?.appleCalendar = appleCalendar
@@ -1207,6 +1237,17 @@ final class AppCoordinator: ObservableObject {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
             NSWorkspace.shared.open(url)
         }
+    }
+
+    /// Open System Settings ▸ Accessibility ▸ Spoken Content, where TTS voices are downloaded (via
+    /// "Manage Voices…"). Voices can't be fetched programmatically — this is the only path. Falls back
+    /// to the Accessibility pane root if the specific anchor isn't recognised on this macOS version.
+    func openSpokenContentSettings() {
+        let candidates = [
+            "x-apple.systempreferences:com.apple.preference.universalaccess?SpokenContent",
+            "x-apple.systempreferences:com.apple.preference.universalaccess",
+        ]
+        for s in candidates where URL(string: s).map({ NSWorkspace.shared.open($0) }) == true { return }
     }
 
     /// AR capture (ScreenCaptureKit) hard-requires Screen Recording. Without it, capture delivers no

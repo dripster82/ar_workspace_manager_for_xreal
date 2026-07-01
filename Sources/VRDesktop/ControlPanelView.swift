@@ -607,7 +607,10 @@ struct ControlPanelView: View {
     /// HUD account connections (moved out of the HUD Widgets page into Settings › HUD).
     private var hudConnectionsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            SlackSettingsView(slack: coordinator.slack)
+            SlackSettingsView(slack: coordinator.slack, announce: $coordinator.slackAnnounce,
+                              voiceID: $coordinator.announceVoiceID,
+                              onTest: { coordinator.announcer.speak("Slack message from Jeff") },
+                              onDownloadVoices: { coordinator.openSpokenContentSettings() })
             Divider()
             GitHubSettingsView(github: coordinator.github)
             Divider()
