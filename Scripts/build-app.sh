@@ -30,9 +30,22 @@ CONFIG="${1:-debug}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-swift build -c "$CONFIG"
+# Target architecture, from ARWM_ARCH (arm64 | x86_64 | universal). Unset = host arch (the default,
+# unchanged behaviour). Separate per-arch builds ship as separate DMGs; "universal" makes one fat
+# binary. The vendored libjson-c.a is universal (arm64+x86_64), so both slices link.
+ARCH_FLAGS=()
+if [[ -n "${ARWM_ARCH:-}" ]]; then
+  if [[ "$ARWM_ARCH" == "universal" ]]; then
+    ARCH_FLAGS=(--arch arm64 --arch x86_64)
+  else
+    ARCH_FLAGS=(--arch "$ARWM_ARCH")
+  fi
+  echo "==> building for arch: $ARWM_ARCH"
+fi
 
-BINDIR="$(swift build -c "$CONFIG" --show-bin-path)"
+swift build -c "$CONFIG" "${ARCH_FLAGS[@]}"
+
+BINDIR="$(swift build -c "$CONFIG" "${ARCH_FLAGS[@]}" --show-bin-path)"
 BIN="$BINDIR/VRDesktop"
 HELPER_BIN="$BINDIR/VRDesktopHelper"
 APP="$ROOT/build/AR Workspace Manager.app"

@@ -58,7 +58,9 @@ else
   echo "==> No tag on HEAD — auto-incrementing ${LATEST:-(none)} → $TAG"
 fi
 
-DMG="$ROOT/build/AR-Workspace-Manager-$VERSION.dmg"
+# Architectures to ship as separate DMGs. arm64 = Apple Silicon, x86_64 = Intel. The vendored
+# libjson-c.a is universal so both cross-compile from this machine.
+ARCHES=(arm64 x86_64)
 
 # --- Changelog (generated from commits since the previous tag; you review/edit before publishing) ---
 NOTES="$ROOT/build/release-notes-$TAG.md"
@@ -88,28 +90,34 @@ case "$ans" in
   q|Q) echo "Aborted before building. No release made."; exit 1 ;;
 esac
 
-# --- Build + notarize ------------------------------------------------------------------------------
-echo "==> [1/3] Developer-ID release build ($TAG)"
-ARWM_VERSION="$VERSION" CODESIGN_IDENTITY="$IDENTITY" "$ROOT/Scripts/build-app.sh" release
-"$ROOT/Scripts/notarize.sh" "$PROFILE"
+# --- Build + notarize each architecture into its own DMG -------------------------------------------
+DMGS=()
+for ARCH in $ARCHES; do
+  echo "==> [build] Developer-ID release build ($TAG, $ARCH)"
+  ARWM_ARCH="$ARCH" ARWM_VERSION="$VERSION" CODESIGN_IDENTITY="$IDENTITY" "$ROOT/Scripts/build-app.sh" release
+  "$ROOT/Scripts/notarize.sh" "$PROFILE"
 
-echo "==> [2/3] build + notarize the .dmg"
-DMG_VOLNAME="AR Workspace Manager $VERSION" CODESIGN_IDENTITY="$IDENTITY" "$ROOT/Scripts/make-dmg.sh" "$APP" "$DMG"
-xcrun notarytool submit "$DMG" --keychain-profile "$PROFILE" --wait
-xcrun stapler staple "$DMG"
+  ADMG="$ROOT/build/AR-Workspace-Manager-$VERSION-$ARCH.dmg"
+  echo "==> [dmg] build + notarize $ARCH dmg"
+  DMG_VOLNAME="AR Workspace Manager $VERSION ($ARCH)" CODESIGN_IDENTITY="$IDENTITY" \
+    "$ROOT/Scripts/make-dmg.sh" "$APP" "$ADMG"
+  xcrun notarytool submit "$ADMG" --keychain-profile "$PROFILE" --wait
+  xcrun stapler staple "$ADMG"
+  DMGS+=("$ADMG")
+done
 
-# --- Publish to GitHub (creates the tag if new; refreshes the asset if re-running) -----------------
-echo "==> [3/3] publish GitHub release $TAG"
-command -v gh >/dev/null || { echo "✗ gh CLI not found — tag/release not published. dmg is at $DMG."; exit 1; }
+# --- Publish to GitHub (creates the tag if new; refreshes the assets if re-running) ----------------
+echo "==> publish GitHub release $TAG (${#DMGS[@]} assets)"
+command -v gh >/dev/null || { echo "✗ gh CLI not found — tag/release not published. dmgs: ${DMGS[*]}"; exit 1; }
 if gh release view "$TAG" >/dev/null 2>&1; then
-  gh release upload "$TAG" "$DMG" --clobber
+  gh release upload "$TAG" "${DMGS[@]}" --clobber
   gh release edit "$TAG" --notes-file "$NOTES"
-  echo "✅ Updated existing release $TAG (fresh dmg + changelog)."
+  echo "✅ Updated existing release $TAG (fresh dmgs + changelog)."
 else
-  gh release create "$TAG" "$DMG" \
+  gh release create "$TAG" "${DMGS[@]}" \
     --title "$TAG" \
     --target "$(git rev-parse HEAD)" \
     --notes-file "$NOTES"
-  echo "✅ Published release $TAG (tagged HEAD) with the dmg + changelog."
+  echo "✅ Published release $TAG (tagged HEAD) with ${#DMGS[@]} dmgs + changelog."
 fi
-echo "   $DMG"
+printf '   %s\n' "${DMGS[@]}"
