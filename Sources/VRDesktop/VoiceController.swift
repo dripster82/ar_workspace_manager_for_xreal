@@ -36,12 +36,15 @@ final class VoiceController {
     var inputDeviceUID: String?
 
     private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
-    private let audioEngine = AVAudioEngine()
+    private var audioEngine = AVAudioEngine()
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
     private var silenceTimer: Timer?
     private var capTimer: Timer?
     private var finalTimer: Timer?
+    /// Wake-word safety window: after the wake word is heard the overlay is shown; if no command is
+    /// spoken within `pttStartTimeout`, cancel and hide it (rolling — reset while the user is talking).
+    private var wakeCaptureTimer: Timer?
     private var endingAudio = false
     private var lastPartial = ""
     private var wakeArmed = false
@@ -65,7 +68,6 @@ final class VoiceController {
     var pttStartTimeout: TimeInterval = 4.0
     var pttSilenceTimeout: TimeInterval = 2.0
     private let pttHardCap: TimeInterval = 20.0
-    private let wakeSilenceTimeout: TimeInterval = 1.5
 
     /// Allow Apple's server (cloud) recognition. When false, recognition is on-device only.
     var allowRemote = false
@@ -123,6 +125,7 @@ final class VoiceController {
         silenceTimer?.invalidate(); silenceTimer = nil
         capTimer?.invalidate(); capTimer = nil
         finalTimer?.invalidate(); finalTimer = nil
+        wakeCaptureTimer?.invalidate(); wakeCaptureTimer = nil
         endingAudio = false
         recognitionGeneration &+= 1   // any trailing callback from the cancelled task is now stale
         task?.cancel(); task = nil
@@ -158,8 +161,13 @@ final class VoiceController {
     @discardableResult
     private func startAudioEngine() -> Bool {
         if audioEngine.isRunning { return true }
-        // System default input (stable). The mic picker sets the default via the HAL; we never poke
-        // the engine's input device, which can corrupt the node's format and crash installTap.
+        // Rebuild the engine on every fresh start. AVAudioEngine binds its input node to the current
+        // system-default mic at creation and caches it, so a mic change wouldn't take effect on a
+        // running-then-restarted engine (you'd have to disable/re-enable voice). A fresh instance also
+        // discards any wedged graph left by a prior failed start (why push-to-talk would sometimes go
+        // dead). We still never poke the engine's input device directly — that can corrupt the node's
+        // format and crash installTap; we just follow the HAL default with a clean engine.
+        audioEngine = AVAudioEngine()
         let input = audioEngine.inputNode
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else {
@@ -336,6 +344,18 @@ final class VoiceController {
         }
     }
 
+    /// Wake-word safety window. Started/reset each time the wake word (and any trailing words) is heard.
+    /// If it fires, the user said the wake word but never completed a command in time: act on whatever
+    /// was captured, otherwise cancel and hide the overlay — so the "Listening…" popup can never stick.
+    private func armWakeCapture() {
+        wakeCaptureTimer?.invalidate()
+        wakeCaptureTimer = Timer.scheduledTimer(withTimeInterval: pttStartTimeout, repeats: false) { [weak self] _ in
+            guard let self, self.mode == .wakeWord, self.wakeCapturing else { return }
+            if !self.pendingWakeCommand.isEmpty { self.fireWakeCommand() }   // heard something — run it
+            else { self.recycleWakeWord() }                                  // nothing — cancel + hide
+        }
+    }
+
     private func armCap(_ seconds: TimeInterval) {
         capTimer?.invalidate()
         capTimer = Timer.scheduledTimer(withTimeInterval: seconds, repeats: false) { [weak self] _ in
@@ -379,10 +399,11 @@ final class VoiceController {
             wakeArmed = true
             pendingWakeCommand = String(lower[r.upperBound...]).trimmingCharacters(in: .whitespaces)
             onPartial?(pendingWakeCommand)
+            armWakeCapture()   // (re)start the safety window while the user is speaking
             if isFinal {
                 fireWakeCommand()
             } else if !pendingWakeCommand.isEmpty {
-                armSilence(wakeSilenceTimeout)   // fire after a pause
+                armSilence(pttSilenceTimeout)   // fire after the end-of-command pause (shared slider)
             }
         } else if isFinal {
             recycleWakeWord()     // utterance ended without the wake word — start fresh
@@ -392,6 +413,7 @@ final class VoiceController {
 
     private func fireWakeCommand() {
         guard mode == .wakeWord, wakeArmed else { return }
+        wakeCaptureTimer?.invalidate(); wakeCaptureTimer = nil
         let cmd = pendingWakeCommand
         wakeArmed = false; pendingWakeCommand = ""
         if wakeCapturing { wakeCapturing = false; onListeningChanged?(false) }   // hide overlay
@@ -405,6 +427,7 @@ final class VoiceController {
     private func recycleWakeWord() {
         guard mode == .wakeWord else { return }
         silenceTimer?.invalidate(); silenceTimer = nil
+        wakeCaptureTimer?.invalidate(); wakeCaptureTimer = nil
         if wakeCapturing { wakeCapturing = false; onListeningChanged?(false) }   // hide overlay
         wakeArmed = false; pendingWakeCommand = ""; lastPartial = ""
         recognitionGeneration &+= 1   // invalidate the old task: its trailing callbacks must not recycle

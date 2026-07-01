@@ -720,13 +720,14 @@ struct ControlPanelView: View {
                             .textFieldStyle(.roundedBorder).frame(width: 160)
                     }
                 }
-                if coordinator.voiceMode == .pushToTalk {
-                    voiceTimingSlider("Wait to start", $coordinator.voiceStartTimeout, 1...8)
-                    voiceTimingSlider("End pause", $coordinator.voiceSilenceTimeout, 0.5...4)
-                }
+                // Timing applies to both modes: push-to-talk waits after the hotkey; wake word waits
+                // after the wake word is heard. "End pause" ends the command in either mode.
+                voiceTimingSlider("Wait to start", $coordinator.voiceStartTimeout, 1...8)
+                voiceTimingSlider("End pause", $coordinator.voiceSilenceTimeout, 0.5...4)
                 Text(coordinator.voiceMode == .pushToTalk
                      ? "Press ⌃⌥A, say a command, and it runs after a short pause."
-                     : "Always listening — say \u{201C}\(coordinator.wakeWord) <command>\u{201D}.")
+                     : "Always listening — say \u{201C}\(coordinator.wakeWord) <command>\u{201D}. After the wake "
+                       + "word you have the \u{201C}wait to start\u{201D} time to speak, or it stops listening.")
                     .font(.caption2).foregroundStyle(.secondary)
                 Toggle("Higher accuracy (uses Apple servers)", isOn: $coordinator.voiceAllowRemote)
                 Text(coordinator.voiceAllowRemote
