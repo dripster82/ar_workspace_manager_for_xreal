@@ -43,6 +43,11 @@ final class MediaPlayerManager: ObservableObject {
     @Published private(set) var currentIndex: Int?
     /// Shown in the Media page when a file can't be played (unsupported container, missing file, …).
     @Published var errorMessage: String?
+    /// True from load until the first frame is decodable — network files can take a while, so the
+    /// UI shows a spinner (and AR a "Loading…" card) instead of sitting silently blank.
+    @Published private(set) var loading = false
+    /// Fired with the item name when a load starts, nil when it's ready/failed (drives the AR card).
+    var onLoading: ((String?) -> Void)?
 
     /// Playback is gated on AR being active (no point decoding when the glasses aren't showing it) and
     /// on the user's intent — so the video only plays in AR and pauses when AR stops.
@@ -62,11 +67,18 @@ final class MediaPlayerManager: ObservableObject {
 
     init(device: MTLDevice) {
         source = VLCPlayerSource(device: device)
-        source.onEnded = { [weak self] in self?.next() }        // playlist auto-advance
-        source.onReady = { [weak self] in self?.onChange?() }   // rebuild scene once frames exist
+        source.onEnded = { [weak self] in self?.handleEnded() }  // advance, or stop cleanly at the end
+        source.onReady = { [weak self] in                        // rebuild scene once frames exist
+            guard let self else { return }
+            self.loading = false
+            self.onLoading?(nil)
+            self.onChange?()
+        }
         source.onError = { [weak self] msg in
             guard let self else { return }
             self.errorMessage = msg
+            self.loading = false
+            self.onLoading?(nil)
             self.wantsPlay = false; self.playing = false
             self.onChange?()   // drop the (blank) screen → black
             self.onError?(msg)
@@ -110,6 +122,7 @@ final class MediaPlayerManager: ObservableObject {
         let idx = d.integer(forKey: Key.index)
         if playlist.indices.contains(idx) {
             currentIndex = idx
+            loading = true   // cleared by onReady once the resume frame is decoded
             source.load(url: playlist[idx].url, startAt: d.double(forKey: Key.time), autoplay: false)
             playing = false
         }
@@ -146,6 +159,8 @@ final class MediaPlayerManager: ObservableObject {
         guard playlist.indices.contains(index) else { return }
         currentIndex = index
         errorMessage = nil
+        loading = true
+        onLoading?(playlist[index].name)
         source.load(url: playlist[index].url, autoplay: false)   // applyPlayback decides
         wantsPlay = true
         applyPlayback()
@@ -155,10 +170,13 @@ final class MediaPlayerManager: ObservableObject {
     }
 
     /// Start/stop the actual decode based on AR being active, user intent, and a visible position.
+    /// `playing` reflects the INTENT we just applied, not `source.isPlaying` — libvlc changes state
+    /// asynchronously, so querying immediately returns the OLD state and the UI showed play/pause
+    /// inverted (pause icon while playing, play icon while paused) until the next transport action.
     private func applyPlayback() {
         let shouldPlay = arActive && wantsPlay && position != .off && source.hasMedia
         if shouldPlay { source.play() } else { source.pause() }
-        playing = source.isPlaying
+        playing = shouldPlay
     }
 
     /// Called by the coordinator on AR start/stop — the video only plays while AR is running.
@@ -197,6 +215,18 @@ final class MediaPlayerManager: ObservableObject {
     // MARK: Transport
 
     func togglePlay() { wantsPlay.toggle(); applyPlayback(); saveTime() }
+
+    /// End-of-item: advance through the playlist; at the end, stop cleanly so the state (and the
+    /// playlist icon) doesn't stay "playing" forever on a finished list.
+    private func handleEnded() {
+        if let c = currentIndex, c + 1 < playlist.count {
+            play(at: c + 1)
+        } else {
+            wantsPlay = false
+            playing = false
+            onChange?()
+        }
+    }
     func skip(_ seconds: Double) { source.seek(by: seconds) }
     func clearError() { errorMessage = nil }
 

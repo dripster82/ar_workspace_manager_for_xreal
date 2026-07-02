@@ -2555,9 +2555,15 @@ struct MediaPlayerControls: View {
                 .padding(8)
                 .background(RoundedRectangle(cornerRadius: 6).fill(Color.orange.opacity(0.15)))
             }
-            Text(media.currentName ?? "Nothing playing")
-                .font(.caption).foregroundStyle(media.hasMedia ? .primary : .secondary)
-                .lineLimit(1).truncationMode(.middle)
+            HStack(spacing: 6) {
+                Text(media.currentName ?? "Nothing playing")
+                    .font(.caption).foregroundStyle(media.hasMedia ? .primary : .secondary)
+                    .lineLimit(1).truncationMode(.middle)
+                if media.loading {
+                    ProgressView().controlSize(.small)
+                    Text("Loading…").font(.caption2).foregroundStyle(.secondary)
+                }
+            }
 
             HStack(spacing: 6) {
                 transport("backward.end.fill", "Previous (in playlist)") { coordinator.mediaPrevious() }
@@ -2616,6 +2622,24 @@ struct MediaProgressView: View {
             }.frame(width: barW)
             Text(fmt(duration)).font(.system(.subheadline, design: .rounded).monospacedDigit())
                 .frame(width: 54, alignment: .leading)
+        }
+        .padding(.horizontal, 24).padding(.vertical, 14)
+        .background(Color.black.opacity(0.55), in: Capsule())
+        .overlay(Capsule().strokeBorder(.white.opacity(0.15)))
+        .foregroundStyle(.white)
+    }
+}
+
+/// The in-AR "Loading…" card shown while a (possibly network) file opens — the video screen stays
+/// black until the first frame, so this is the user's cue that something is happening. Rasterized to
+/// a texture, so no live spinner — the hourglass + text reads as a state, not an animation.
+struct MediaLoadingView: View {
+    let name: String
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "hourglass").font(.system(size: 16, weight: .semibold))
+            Text("Loading \(name)…").font(.system(.subheadline, design: .rounded))
+                .lineLimit(1).truncationMode(.middle).frame(maxWidth: 380)
         }
         .padding(.horizontal, 24).padding(.vertical, 14)
         .background(Color.black.opacity(0.55), in: Capsule())

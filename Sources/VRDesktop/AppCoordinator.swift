@@ -426,6 +426,18 @@ final class AppCoordinator: ObservableObject {
             let mp = MediaPlayerManager(device: device)
             mp.onChange = { [weak self] in self?.applyRenderedScene() }
             mp.onError = { [weak self] msg in self?.statusMessage = msg }
+            // Loading feedback in AR: network files can take seconds to open, and the screen stays
+            // black until the first frame — show a "Loading…" card in the overlay slot meanwhile.
+            mp.onLoading = { [weak self] name in
+                guard let self, self.arActive, let renderer = self.renderer else { return }
+                if let name {
+                    let r = ImageRenderer(content: MediaLoadingView(name: name))
+                    r.scale = 2; r.isOpaque = false
+                    if let img = r.cgImage { renderer.setMediaProgressImage(img) }
+                } else {
+                    renderer.clearMediaProgress()
+                }
+            }
             mediaPlayer = mp
         }
         widgetManager = WidgetManager(renderer: renderer)
