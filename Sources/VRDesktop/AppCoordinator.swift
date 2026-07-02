@@ -119,6 +119,45 @@ final class AppCoordinator: ObservableObject {
     /// the selector on the Workspace/HUD page doesn't disturb the live AR. nil = follow active.
     @Published var editingWorkspaceID: UUID?
     let virtualDisplays = VirtualDisplayService()
+
+    /// One app session's virtual-display churn, for Diagnostics: creates/destroys are the CGDisplay
+    /// reconfigurations that make colorsync.displayservices re-scan (the runaway trigger); reuses
+    /// are free. History keeps the current session plus the two before it, persisted so the numbers
+    /// survive the crash they help diagnose.
+    struct DisplayChurnRecord: Codable {
+        var start: Date
+        var created = 0
+        var destroyed = 0
+        var reused = 0
+    }
+    /// [0] = current session, [1] = previous, [2] = the one before.
+    @Published private(set) var displayChurnHistory: [DisplayChurnRecord] = []
+
+    private func startChurnSession() {
+        let d = UserDefaults.standard
+        if let data = d.data(forKey: "displayChurnHistory"),
+           let saved = try? JSONDecoder().decode([DisplayChurnRecord].self, from: data) {
+            displayChurnHistory = saved
+        }
+        displayChurnHistory.insert(DisplayChurnRecord(start: Date()), at: 0)
+        displayChurnHistory = Array(displayChurnHistory.prefix(3))
+        saveChurnHistory()
+        virtualDisplays.onChurn = { [weak self] in self?.recordChurn() }
+    }
+
+    private func recordChurn() {
+        guard !displayChurnHistory.isEmpty else { return }
+        displayChurnHistory[0].created = virtualDisplays.sessionCreated
+        displayChurnHistory[0].destroyed = virtualDisplays.sessionDestroyed
+        displayChurnHistory[0].reused = virtualDisplays.sessionReused
+        saveChurnHistory()
+    }
+
+    private func saveChurnHistory() {
+        if let data = try? JSONEncoder().encode(displayChurnHistory) {
+            UserDefaults.standard.set(data, forKey: "displayChurnHistory")
+        }
+    }
     private let windowLayout = WindowLayoutStore()
     private let windowRestorePrompt = WindowRestorePromptController()
 
@@ -485,6 +524,7 @@ final class AppCoordinator: ObservableObject {
             self?.presentColorSyncRunawayAlert(cpu: cpu)
         }
         colorSyncWatchdog.setEnabled(colorSyncAlertEnabled)
+        startChurnSession()   // begin this session's display-churn record (Diagnostics)
         // Populate the layout with the currently-connected monitors (positioning-only/green).
         syncPhysicalMonitors()
 

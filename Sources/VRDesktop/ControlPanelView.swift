@@ -1324,6 +1324,21 @@ struct ControlPanelView: View {
                       hint: "Lots of stale per-display profiles bloat the ColorSync registry.")
             healthRow("Saved display configs", coordinator.displayConfigCount, warn: 50,
                       hint: "Excessive saved arrangements make ColorSync re-parse a huge plist.")
+            Divider()
+            Text("Virtual display churn").font(.caption.weight(.medium))
+            Text("Creates/destroys reconfigure the displays and make ColorSync re-scan (the runaway "
+                 + "trigger); reuses are free. High numbers before a runaway point at the cause.")
+                .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            ForEach(Array(coordinator.displayChurnHistory.prefix(3).enumerated()), id: \.offset) { idx, rec in
+                HStack {
+                    Text(churnLabel(idx, rec.start)).font(.caption2).frame(width: 150, alignment: .leading)
+                    Text("\(rec.created) created · \(rec.destroyed) destroyed · \(rec.reused) reused")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(idx == 0 ? .primary : .secondary)
+                    Spacer()
+                }
+            }
             HStack {
                 Button("Refresh") { coordinator.refreshHealthNow() }.controlSize(.small)
                 Button("Clean ColorSync now") { coordinator.cleanColorSyncNow() }.controlSize(.small)
@@ -1349,6 +1364,17 @@ struct ControlPanelView: View {
     }
 
     @State private var showClearConfigsConfirm = false
+
+    /// Row label for a churn-history session: which session it was + when it started.
+    private func churnLabel(_ idx: Int, _ start: Date) -> String {
+        let f = DateFormatter(); f.dateFormat = "d MMM HH:mm"
+        let when = f.string(from: start)
+        switch idx {
+        case 0: return "This session (\(when))"
+        case 1: return "Last session (\(when))"
+        default: return "Session before (\(when))"
+        }
+    }
 
     private func healthRow(_ label: String, _ count: Int, warn: Int, hint: String) -> some View {
         let over = count >= warn

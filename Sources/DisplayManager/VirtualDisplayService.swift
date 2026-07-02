@@ -201,6 +201,16 @@ public struct Workspace: Codable, Identifiable, Hashable, Sendable {
 public final class VirtualDisplayService {
     public private(set) var active: [UUID: (display: CGVirtualDisplay, displayID: CGDirectDisplayID)] = [:]
 
+    /// Session churn counters for Diagnostics / ColorSync-runaway correlation. Every virtual-display
+    /// create/destroy is a CGDisplay reconfiguration that makes colorsync.displayservices re-scan the
+    /// display registry (the runaway's trigger); a reuse is free (zero reconfiguration). Tracking
+    /// these per session shows how much ColorSync work the app generated before a runaway/crash.
+    public private(set) var sessionCreated = 0
+    public private(set) var sessionDestroyed = 0
+    public private(set) var sessionReused = 0
+    /// Called after any counter changes, so the app can persist/display the session's churn.
+    public var onChurn: (() -> Void)?
+
     public init() {}
 
     public static var isAvailable: Bool {
@@ -286,6 +296,8 @@ public final class VirtualDisplayService {
         guard let made = makeDisplay(config, slot: reserveSlot(for: config.id)) else { return nil }
         active[config.id] = (made.display, made.displayID)
         modeForID[config.id] = (config.width, config.height, made.hiDPI)
+        sessionCreated += 1
+        onChurn?()
         NSLog("VirtualDisplayService: created '\(config.name)' displayID=\(made.displayID)")
         return made.displayID
     }
@@ -347,19 +359,26 @@ public final class VirtualDisplayService {
         active = newActive
         modeForID = newMode
         slotForID = newSlot
+        sessionCreated += created; sessionDestroyed += destroyed; sessionReused += reused
+        onChurn?()
         return (result, reused, created, destroyed)
     }
 
     public func destroy(_ id: UUID) {
-        active.removeValue(forKey: id) // releasing the object removes the display
+        if active.removeValue(forKey: id) != nil {  // releasing the object removes the display
+            sessionDestroyed += 1
+            onChurn?()
+        }
         slotForID.removeValue(forKey: id) // free the slot for reuse
         modeForID.removeValue(forKey: id)
     }
 
     public func destroyAll() {
+        sessionDestroyed += active.count
         active.removeAll()
         slotForID.removeAll()
         modeForID.removeAll()
+        onChurn?()
     }
 
     public func displayID(for id: UUID) -> CGDirectDisplayID? {
