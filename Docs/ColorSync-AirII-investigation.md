@@ -311,15 +311,27 @@ matched profiles/configs already in the registry from earlier Nebula sessions �
 virtual-display identities are stable across sessions**, and its registry churn during the test was
 negligible (displays plist grew 377 bytes; ICC profiles 6→8, just its two displays).
 
-### Conclusion
+### Conclusion — shared trigger, DIFFERENT severity
 
-Stable identities + only 2 displays + ~zero churn **still pins the daemon within minutes**. The
-runaway is therefore a **macOS + Air 2 (+ virtual display?) interaction, not a consequence of
-ARWM's display churn or identity scheme**. Consequences for us:
+Stable identities + only 2 displays + ~zero churn **still spins the daemon within minutes**, so the
+loop's *trigger* is a **macOS + Air 2 (+ virtual display?) interaction, not ARWM's churn or
+identity scheme**. BUT the patterns differ in a way that matters:
 
-- Churn-reduction work (display reuse etc.) remains good hygiene but is NOT the lever for the
-  runaway — stop investing in it as a "fix".
+- **Nebula: cyclic and self-recovering** — bursts to 65–74% for ~2–3 min, then fully releases to
+  ~0–2%, repeating every ~6–7 min. The loop appears to complete its work each cycle. A Nebula
+  session probably never accumulates the backlog that kills WindowServer.
+- **ARWM: sustained wedge** — once pinned it holds 72–75% indefinitely (47+ min observed the same
+  day, never dipping) until the glasses are unplugged or WindowServer is watchdog-killed. This is
+  the fatal variant. Cause of the difference UNKNOWN. One confounding data point: the sustained
+  pin continued after Stop AR (virtual displays destroyed), so it isn't obviously live app
+  activity — the loop may wedge into a state it can't finish. Candidate aggravators to test:
+  display-set size (we run more displays), per-display wallpaper/profile writes, session history.
+
+Consequences for us:
+
+- Churn-reduction work remains good hygiene but is NOT the lever for the *trigger* — however the
+  sustained-vs-cyclic difference is worth one more experiment: run the same monitor over an ARWM
+  session and compare patterns (e.g. 2-screen workspace vs many, wallpaper features off).
 - The realistic mitigation stands: detect the pin → tell the user to replug (clears in ~25 s).
-- This is XREAL's own app reproducing it, on macOS 26.5.1 — strong material for an upstream report
-  to XREAL and/or Apple Feedback Assistant (attach the monitor logs + the two WindowServer
-  watchdog stackshots).
+- Upstream report material is strong either way: XREAL's own app exhibits the loop on macOS 26.5.1
+  (attach monitor logs + the two WindowServer watchdog stackshots).
