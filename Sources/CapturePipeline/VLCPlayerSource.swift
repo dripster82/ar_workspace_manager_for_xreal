@@ -35,7 +35,13 @@ public final class VLCPlayerSource: @unchecked Sendable {
     private var frameDirty = false
     private var gotFirstFrame = false
     private var pauseAfterFirstFrame = false
-    private var texture: MTLTexture?
+    /// Ring of textures: each new frame uploads into the NEXT texture, so the returned texture's
+    /// object identity changes per frame. The renderer keys its sharpen-mip cache on that identity
+    /// (same object → skip re-blit), so reusing one texture froze the corner screens; the ring also
+    /// avoids CPU-writing a texture the GPU may still be sampling from a prior in-flight frame.
+    private var textureRing: [MTLTexture] = []
+    private var ringIndex = 0
+    private var current: MTLTexture?
     private var _aspect: Float = 16.0 / 9.0
     private var loaded = false
 
@@ -169,7 +175,7 @@ public final class VLCPlayerSource: @unchecked Sendable {
         back = UnsafeMutableRawPointer.allocate(byteCount: p * l, alignment: 64)
         frameW = w; frameH = h; framePitch = p
         _aspect = h > 0 ? Float(w) / Float(h) : 16.0 / 9.0
-        texture = nil                        // recreate at the new size on next upload
+        textureRing = []; current = nil      // recreate at the new size on next upload
         lock.unlock()
         pitch = UInt32(p); lines = UInt32(l)
         return 1
@@ -219,24 +225,28 @@ public final class VLCPlayerSource: @unchecked Sendable {
         }
     }
 
-    /// Current frame as a Metal texture, pulled on the render thread. Uploads only when a new frame
-    /// arrived since the last pull; otherwise returns the previous texture.
+    /// Current frame as a Metal texture, pulled on the render thread. A new frame uploads into the
+    /// next ring texture (fresh identity — see `textureRing`); otherwise the previous one is returned.
     public var latestTexture: MTLTexture? {
         lock.lock()
         defer { lock.unlock() }
-        guard gotFirstFrame, let front, frameW > 0, frameH > 0 else { return texture }
+        guard gotFirstFrame, let front, frameW > 0, frameH > 0 else { return current }
         if frameDirty {
-            if texture == nil || texture!.width != frameW || texture!.height != frameH {
+            if textureRing.isEmpty {
                 let d = MTLTextureDescriptor.texture2DDescriptor(
                     pixelFormat: .bgra8Unorm, width: frameW, height: frameH, mipmapped: false)
                 d.usage = [.shaderRead]
-                texture = device.makeTexture(descriptor: d)
+                textureRing = (0..<3).compactMap { _ in device.makeTexture(descriptor: d) }
+                guard !textureRing.isEmpty else { return nil }
             }
-            texture?.replace(region: MTLRegionMake2D(0, 0, frameW, frameH), mipmapLevel: 0,
-                             withBytes: front, bytesPerRow: framePitch)
+            ringIndex = (ringIndex + 1) % textureRing.count
+            let tex = textureRing[ringIndex]
+            tex.replace(region: MTLRegionMake2D(0, 0, frameW, frameH), mipmapLevel: 0,
+                        withBytes: front, bytesPerRow: framePitch)
+            current = tex
             frameDirty = false
         }
-        return texture
+        return current
     }
 }
 
