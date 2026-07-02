@@ -25,7 +25,13 @@ final class MediaPlayerManager: ObservableObject {
         }
     }
 
-    struct Item: Identifiable, Hashable { let id = UUID(); let url: URL; var name: String { url.lastPathComponent } }
+    struct Item: Identifiable, Hashable {
+        let id = UUID()
+        let url: URL
+        /// Probed asynchronously (VLC header parse) when the item is added; nil until known.
+        var duration: Double?
+        var name: String { url.lastPathComponent }
+    }
 
     /// Placement of a pinned screen: centre (yaw/pitch, radians; +yaw = left, +pitch = up), distance,
     /// and the max box (metres) the video is fit inside (aspect-preserved).
@@ -99,6 +105,7 @@ final class MediaPlayerManager: ObservableObject {
         let d = UserDefaults.standard
         guard let paths = d.stringArray(forKey: Key.playlist), !paths.isEmpty else { return }
         playlist = paths.compactMap { URL(string: $0) }.map { Item(url: $0) }
+        playlist.forEach { probeDuration($0) }
         if let p = Position(rawValue: d.integer(forKey: Key.position)) { position = p }
         let idx = d.integer(forKey: Key.index)
         if playlist.indices.contains(idx) {
@@ -118,10 +125,21 @@ final class MediaPlayerManager: ObservableObject {
     /// Add files to the playlist; start playing the first new one if nothing is playing yet.
     func addFiles(_ urls: [URL]) {
         let wasEmpty = playlist.isEmpty
-        playlist.append(contentsOf: urls.map { Item(url: $0) })
+        let items = urls.map { Item(url: $0) }
+        playlist.append(contentsOf: items)
+        items.forEach { probeDuration($0) }
         if wasEmpty, let first = playlist.indices.first { play(at: first) }
         persist()
         onChange?()
+    }
+
+    /// Fill in an item's duration via a cheap VLC header parse (async, main-queue completion).
+    private func probeDuration(_ item: Item) {
+        source.probeDuration(url: item.url) { [weak self] duration in
+            guard let self, let duration,
+                  let idx = self.playlist.firstIndex(where: { $0.id == item.id }) else { return }
+            self.playlist[idx].duration = duration
+        }
     }
 
     func play(at index: Int) {

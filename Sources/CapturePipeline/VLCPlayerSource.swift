@@ -146,6 +146,47 @@ public final class VLCPlayerSource: @unchecked Sendable {
         libvlc_media_player_set_time(player, libvlc_time_t(max(0, target) * 1000))
     }
 
+    // MARK: Metadata probe
+
+    /// Box passed through libvlc's parse event so the callback can find its media + completion.
+    private final class ProbeBox {
+        let media: OpaquePointer
+        let completion: (Double?) -> Void
+        init(media: OpaquePointer, completion: @escaping (Double?) -> Void) {
+            self.media = media; self.completion = completion
+        }
+    }
+
+    /// Read a file's duration (seconds) without playing it — a local header parse, cheap even for
+    /// big files. Used for the playlist's per-item duration. Completion on the main queue; nil when
+    /// the file can't be parsed (missing, unmounted network drive, not a video).
+    public func probeDuration(url: URL, completion: @escaping (Double?) -> Void) {
+        guard let instance, let m = libvlc_media_new_path(instance, url.path) else {
+            DispatchQueue.main.async { completion(nil) }
+            return
+        }
+        let box = Unmanaged.passRetained(ProbeBox(media: m, completion: completion)).toOpaque()
+        if let em = libvlc_media_event_manager(m) {
+            libvlc_event_attach(em, libvlc_event_type_t(libvlc_MediaParsedChanged.rawValue),
+                                vlcParsedCB, box)
+        }
+        if libvlc_media_parse_with_options(m, libvlc_media_parse_local, 5000) != 0 {
+            Unmanaged<ProbeBox>.fromOpaque(box).release()
+            libvlc_media_release(m)
+            DispatchQueue.main.async { completion(nil) }
+        }
+    }
+
+    fileprivate static func finishProbe(_ raw: UnsafeMutableRawPointer) {
+        // Never touch libvlc synchronously from its event thread — read + release on main.
+        DispatchQueue.main.async {
+            let box = Unmanaged<ProbeBox>.fromOpaque(raw).takeRetainedValue()
+            let ms = libvlc_media_get_duration(box.media)
+            libvlc_media_release(box.media)
+            box.completion(ms > 0 ? Double(ms) / 1000 : nil)
+        }
+    }
+
     private func stopLocked() {
         if let player {
             libvlc_media_player_stop(player)
@@ -284,4 +325,9 @@ private func vlcEventCB(event: UnsafePointer<libvlc_event_t>?, opaque: UnsafeMut
     guard let event, let opaque else { return }
     Unmanaged<VLCPlayerSource>.fromOpaque(opaque).takeUnretainedValue()
         .handleEvent(libvlc_event_type_t(event.pointee.type))
+}
+
+private func vlcParsedCB(event: UnsafePointer<libvlc_event_t>?, opaque: UnsafeMutableRawPointer?) {
+    guard let opaque else { return }
+    VLCPlayerSource.finishProbe(opaque)
 }

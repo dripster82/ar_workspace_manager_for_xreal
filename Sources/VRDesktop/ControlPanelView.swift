@@ -2594,12 +2594,15 @@ struct MediaPlaylist: View {
                 List {
                     ForEach(Array(media.playlist.enumerated()), id: \.element.id) { idx, item in
                         HStack(spacing: 8) {
-                            Image(systemName: idx == media.currentIndex
-                                  ? (media.playing ? "play.fill" : "pause.fill") : "film")
+                            Image(systemName: rowIcon(idx))
                                 .font(.caption2)
                                 .foregroundStyle(idx == media.currentIndex ? Color.accentColor : .secondary)
                             Text(item.name).font(.caption).lineLimit(1).truncationMode(.middle)
                             Spacer()
+                            if let d = item.duration {
+                                Text(Self.durationLabel(d))
+                                    .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                            }
                             Button { coordinator.mediaPlayer?.removeItem(item.id) } label: {
                                 Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                             }.buttonStyle(.plain)
@@ -2612,5 +2615,21 @@ struct MediaPlaylist: View {
                 .listStyle(.plain).frame(height: min(260, CGFloat(media.playlist.count) * 30 + 12))
             }
         }
+    }
+
+    /// Current item's icon reflects the playback state: playing ▶ / paused ⏸ / stopped ⏹ (position
+    /// Off with the item still current); other rows show a film glyph.
+    private func rowIcon(_ idx: Int) -> String {
+        guard idx == media.currentIndex else { return "film" }
+        if media.position == .off { return "stop.fill" }
+        return media.playing ? "play.fill" : "pause.fill"
+    }
+
+    /// "1:23:45" / "23:45" style duration.
+    static func durationLabel(_ seconds: Double) -> String {
+        guard seconds.isFinite, seconds > 0 else { return "" }
+        let t = Int(seconds.rounded())
+        let h = t / 3600, m = (t % 3600) / 60, s = t % 60
+        return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
     }
 }
