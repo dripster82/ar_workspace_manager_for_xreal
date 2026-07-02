@@ -763,6 +763,18 @@ struct ControlPanelView: View {
                 }
                 Text("Sets your system input device — voice and the meter listen on this mic.")
                     .font(.caption2).foregroundStyle(.secondary)
+                if VoiceController.inputDeviceIsBluetooth(uid: coordinator.voiceInputDeviceUID) {
+                    HStack(alignment: .top, spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                        Text("This is a Bluetooth headset. Opening its mic switches the whole headset "
+                             + "into low-quality call mode, so music/video through it will sound bad "
+                             + "while voice control listens. Pick the Mac's built-in microphone to keep "
+                             + "full audio quality.")
+                            .font(.caption2).fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(8)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(Color.orange.opacity(0.15)))
+                }
                 HStack(spacing: 10) {
                     Button(coordinator.micTesting ? "Stop test" : "Test mic") { coordinator.toggleMicTest() }
                         .controlSize(.small)

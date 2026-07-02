@@ -537,9 +537,23 @@ final class AppCoordinator: ObservableObject {
         // Voice only runs while AR is active.
         if voiceEnabled, voiceMode == .wakeWord, hasSpeechPermission, arActive {
             voice.startWakeWord()
+            warnIfBluetoothMic()
         } else {
             voice.stop()   // push-to-talk only listens on the hotkey
         }
+    }
+
+    /// One-time-per-session nudge: continuous listening on a Bluetooth headset's mic drops the whole
+    /// headset into low-quality HFP call mode, wrecking any audio playing through it. Steer to the
+    /// built-in mic (the settings page shows the full explanation).
+    private var warnedBluetoothMic = false
+    private func warnIfBluetoothMic() {
+        guard !warnedBluetoothMic,
+              VoiceController.inputDeviceIsBluetooth(uid: selectedMicID.isEmpty ? nil : selectedMicID)
+        else { return }
+        warnedBluetoothMic = true
+        statusMessage = "Voice is listening on a Bluetooth headset mic — its audio drops to call "
+            + "quality while listening. Pick the built-in mic in Voice Commands ▸ Microphone."
     }
 
     /// Push-to-talk: begin a single listen window (called from the ⌃⌥A hotkey).

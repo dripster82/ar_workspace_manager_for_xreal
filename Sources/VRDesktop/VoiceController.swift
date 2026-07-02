@@ -281,6 +281,24 @@ final class VoiceController {
         return dev
     }
 
+    /// True when the given input device (UID, or the system default when nil/empty) is a Bluetooth
+    /// device. Opening a Bluetooth headset's mic drops the WHOLE headset from A2DP (hi-fi stereo)
+    /// into HFP call mode, so any audio playing through it turns low-quality/distorted while voice
+    /// control listens — the UI warns and steers users to the built-in mic.
+    static func inputDeviceIsBluetooth(uid: String?) -> Bool {
+        let dev: AudioDeviceID?
+        if let uid, !uid.isEmpty { dev = audioDeviceID(forUID: uid) } else { dev = defaultInputDevice() }
+        guard let dev else { return false }
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyTransportType,
+                                              mScope: kAudioObjectPropertyScopeGlobal,
+                                              mElement: kAudioObjectPropertyElementMain)
+        var transport = UInt32(0)
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(dev, &addr, 0, nil, &size, &transport) == noErr else { return false }
+        return transport == kAudioDeviceTransportTypeBluetooth
+            || transport == kAudioDeviceTransportTypeBluetoothLE
+    }
+
     /// Resolve a CoreAudio device UID (the same string AVCaptureDevice.uniqueID returns for audio
     /// devices) to its AudioDeviceID.
     static func audioDeviceID(forUID uid: String) -> AudioDeviceID? {
