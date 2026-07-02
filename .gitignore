@@ -4,6 +4,7 @@ build/
 vendor/xrealair-sdk-macos/
 vendor/Fusion/
 vendor/hidapi/
+vendor/VLCKit/
 colorsync_debug*.log
 
 # Code-signing material (keep out of git)

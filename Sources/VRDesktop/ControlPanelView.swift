@@ -2588,7 +2588,7 @@ struct MediaPlaylist: View {
             }
             if media.playlist.isEmpty {
                 Text("Add local or network-drive videos. They play one after another. "
-                     + "(MP4/MOV, H.264/HEVC — not MKV/AVI.)")
+                     + "(Most formats, incl. MKV/AVI — played by VLC.)")
                     .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             } else {
                 List {

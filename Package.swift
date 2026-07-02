@@ -2,6 +2,10 @@
 import PackageDescription
 
 let jsonCInclude = "/opt/homebrew/opt/json-c/include/json-c"
+// VLCKit binary framework (LGPL, fetched by Scripts/fetch-vlckit.sh — not in git). Its libvlc C API
+// headers ship inside the framework but are excluded from its module map, so the CVLCKit shim target
+// re-exposes them to Swift via this search path.
+let vlcHeaders = "vendor/VLCKit/VLCKit.xcframework/macos-arm64_x86_64/VLCKit.framework/Headers"
 
 let package = Package(
     name: "VRDesktop",
@@ -27,7 +31,19 @@ let package = Package(
             ]
         ),
         .target(name: "GlassesDriver", dependencies: ["CXrealDriver"]),
-        .target(name: "CapturePipeline"),
+        // VLCKit binary + a header-only shim exposing its libvlc C API (vmem frame callbacks etc.,
+        // which the ObjC VLCKit module map hides) to Swift.
+        .binaryTarget(name: "VLCKit", path: "vendor/VLCKit/VLCKit.xcframework"),
+        .target(
+            name: "CVLCKit",
+            dependencies: ["VLCKit"],
+            cSettings: [.unsafeFlags(["-I", vlcHeaders])]
+        ),
+        .target(
+            name: "CapturePipeline",
+            dependencies: ["CVLCKit", "VLCKit"],
+            swiftSettings: [.unsafeFlags(["-Xcc", "-I\(vlcHeaders)"])]
+        ),
         .target(
             name: "CPrivateDisplay",
             publicHeadersPath: "include",

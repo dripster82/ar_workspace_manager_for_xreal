@@ -43,7 +43,9 @@ final class MediaPlayerManager: ObservableObject {
     private var arActive = false
     private var wantsPlay = false
 
-    private let source: MediaPlayerSource
+    // SPIKE: VLC backend (plays MKV/AVI/etc. and renders subtitles uniformly). The AVFoundation
+    // backend (`MediaPlayerSource`) exposes the identical API — swap the type to switch back.
+    private let source: VLCPlayerSource
     private let sceneID = UUID(uuidString: "0000B0B0-0000-0000-0000-0000000000A1")!
     /// Called when the pinned screen needs rebuilding (position/media change), so the owner re-renders.
     var onChange: (() -> Void)?
@@ -53,7 +55,7 @@ final class MediaPlayerManager: ObservableObject {
     private var saveTimer: Timer?
 
     init(device: MTLDevice) {
-        source = MediaPlayerSource(device: device)
+        source = VLCPlayerSource(device: device)
         source.onEnded = { [weak self] in self?.next() }        // playlist auto-advance
         source.onReady = { [weak self] in self?.onChange?() }   // rebuild scene once frames exist
         source.onError = { [weak self] msg in

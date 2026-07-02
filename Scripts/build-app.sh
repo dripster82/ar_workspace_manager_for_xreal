@@ -54,6 +54,16 @@ if [[ -n "${ARWM_VERSION:-}" ]]; then
   echo "==> stamped bundle version $ARWM_VERSION (build $HASH)"
 fi
 
+# VLCKit framework (media player backend for MKV etc.; fetched by Scripts/fetch-vlckit.sh). Its
+# install name is @loader_path/../Frameworks/…, so Contents/Frameworks resolves with no rpath.
+VLCKIT_FW="$ROOT/vendor/VLCKit/VLCKit.xcframework/macos-arm64_x86_64/VLCKit.framework"
+if [[ -d "$VLCKIT_FW" ]]; then
+  mkdir -p "$APP/Contents/Frameworks"
+  cp -R "$VLCKIT_FW" "$APP/Contents/Frameworks/"
+else
+  echo "✗ VLCKit not found — run Scripts/fetch-vlckit.sh first."; exit 1
+fi
+
 # Privileged helper daemon (installed at runtime via SMAppService): executable into Contents/MacOS,
 # its LaunchDaemon plist into Contents/Library/LaunchDaemons (BundleProgram points at the executable).
 cp "$HELPER_BIN" "$APP/Contents/MacOS/VRDesktopHelper"
@@ -87,12 +97,15 @@ fi
 ENTITLEMENTS="$ROOT/App/VRDesktop.entitlements"
 
 if [[ -n "${IDENTITY:-}" ]]; then
+  codesign --force "${RUNTIME_OPTS[@]}" --sign "$IDENTITY" --deep \
+    "$APP/Contents/Frameworks/VLCKit.framework"
   codesign --force "${RUNTIME_OPTS[@]}" --sign "$IDENTITY" \
     --identifier uk.co.ketelle.ar.workspace.manager.helper "$APP/Contents/MacOS/VRDesktopHelper"
   codesign --force "${RUNTIME_OPTS[@]}" --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" \
     --identifier uk.co.ketelle.ar.workspace.manager "$APP"
   echo "Signed with: $IDENTITY"
 else
+  codesign --force --sign - --deep "$APP/Contents/Frameworks/VLCKit.framework"
   codesign --force --sign - --identifier uk.co.ketelle.ar.workspace.manager.helper "$APP/Contents/MacOS/VRDesktopHelper"
   codesign --force --entitlements "$ENTITLEMENTS" --sign - --identifier uk.co.ketelle.ar.workspace.manager "$APP"
   echo "Ad-hoc signed — run Scripts/make-signing-cert.sh once so permissions persist across builds"
