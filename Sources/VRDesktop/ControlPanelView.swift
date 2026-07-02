@@ -1324,6 +1324,27 @@ struct ControlPanelView: View {
                       hint: "Lots of stale per-display profiles bloat the ColorSync registry.")
             healthRow("Saved display configs", coordinator.displayConfigCount, warn: 50,
                       hint: "Excessive saved arrangements make ColorSync re-parse a huge plist.")
+            HStack {
+                Button("Refresh") { coordinator.refreshHealthNow() }.controlSize(.small)
+                Button("Clear saved configs…") { showClearConfigsConfirm = true }.controlSize(.small)
+            }
+            .confirmationDialog("Clear saved display arrangements?",
+                                isPresented: $showClearConfigsConfirm, titleVisibility: .visible) {
+                Button("Clear & Log Out Now…", role: .destructive) {
+                    coordinator.clearSavedDisplayConfigs()
+                    coordinator.logOutNow()
+                }
+                Button("Clear Only") {
+                    coordinator.clearSavedDisplayConfigs()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Deletes the WindowServer display registry in BOTH places: your user file and the "
+                     + "system-level copy (that one asks for an admin password). macOS rebuilds them "
+                     + "fresh — worst case you re-drag your monitor arrangement once. Log out and back "
+                     + "in to apply; if the count creeps back after logging in, do a full restart "
+                     + "instead. “Log Out Now” asks macOS to log out (it shows its own confirmation).")
+            }
             Divider()
             Text("Virtual display churn").font(.caption.weight(.medium))
             Text("Creates/destroys reconfigure the displays and make ColorSync re-scan (the runaway "
@@ -1345,30 +1366,10 @@ struct ControlPanelView: View {
                     .font(.caption2)
                     .foregroundStyle(coordinator.previousSessionExit.contains("CRASH") ? .red : .secondary)
             }
-            Text("Full history: Application Support ▸ AR Workspace Manager ▸ display-churn.log "
-                 + "(one line per app session + churn event, tagged with the boot-session id).")
-                .font(.caption2).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack {
-                Button("Refresh") { coordinator.refreshHealthNow() }.controlSize(.small)
-                Button("Clear saved configs…") { showClearConfigsConfirm = true }.controlSize(.small)
-            }
-            .confirmationDialog("Clear saved display arrangements?",
-                                isPresented: $showClearConfigsConfirm, titleVisibility: .visible) {
-                Button("Clear & Log Out Now…", role: .destructive) {
-                    coordinator.clearSavedDisplayConfigs()
-                    coordinator.logOutNow()
-                }
-                Button("Clear Only") {
-                    coordinator.clearSavedDisplayConfigs()
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("Deletes the WindowServer display registry in BOTH places: your user file and the "
-                     + "system-level copy (that one asks for an admin password). macOS rebuilds them "
-                     + "fresh — worst case you re-drag your monitor arrangement once. Log out and back "
-                     + "in to apply; if the count creeps back after logging in, do a full restart "
-                     + "instead. “Log Out Now” asks macOS to log out (it shows its own confirmation).")
+            HStack(spacing: 8) {
+                Button("Reveal churn log") { coordinator.revealChurnLog() }.controlSize(.small)
+                Text("One line per app session + churn event, tagged with the boot-session id.")
+                    .font(.caption2).foregroundStyle(.secondary)
             }
         }
     }

@@ -29,7 +29,7 @@ enum ChurnLog {
         }
     }
 
-    private static var fileURL: URL {
+    static var fileURL: URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("AR Workspace Manager", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

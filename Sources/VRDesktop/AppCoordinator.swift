@@ -399,6 +399,7 @@ final class AppCoordinator: ObservableObject {
 
     var debugLogURL: URL { DebugLog.shared.fileURL }
     func revealDebugLog() { NSWorkspace.shared.activateFileViewerSelecting([DebugLog.shared.fileURL]) }
+    func revealChurnLog() { NSWorkspace.shared.activateFileViewerSelecting([ChurnLog.fileURL]) }
     func clearDebugLog() { DebugLog.shared.clear() }
     private var lastLogSnapshot: TimeInterval = 0
     /// Last time we persisted the window layout while AR runs (every ~10s), so positions survive
