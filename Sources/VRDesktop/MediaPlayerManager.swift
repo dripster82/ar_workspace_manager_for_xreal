@@ -188,7 +188,10 @@ final class MediaPlayerManager: ObservableObject {
         playlist.remove(at: idx)
         if let c = currentIndex {
             if idx < c { currentIndex = c - 1 }
-            else if wasCurrent { currentIndex = nil; source.stop(); playing = false }
+            else if wasCurrent {
+                currentIndex = nil; source.stop(); playing = false
+                clearLoading()   // removing the item that was still loading
+            }
         }
         persist()
         onChange?()
@@ -236,6 +239,7 @@ final class MediaPlayerManager: ObservableObject {
         wantsPlay = false
         position = .off
         applyPlayback()   // pauses (position is .off)
+        clearLoading()    // hide any in-flight loading indicator (screen is hidden anyway)
         saveTime()
         persist()
         onChange?()
@@ -248,9 +252,16 @@ final class MediaPlayerManager: ObservableObject {
         currentIndex = nil
         wantsPlay = false
         playing = false
+        clearLoading()    // a clear mid-load left the spinner running forever
         UserDefaults.standard.set(0.0, forKey: Key.time)
         persist()
         onChange?()
+    }
+
+    /// Reset the loading indicator (panel spinner + AR card).
+    private func clearLoading() {
+        loading = false
+        onLoading?(nil)
     }
 
     func setPosition(_ p: Position) {

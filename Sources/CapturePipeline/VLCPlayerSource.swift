@@ -34,7 +34,13 @@ public final class VLCPlayerSource: @unchecked Sendable {
     private var frameW = 0, frameH = 0, framePitch = 0
     private var frameDirty = false
     private var gotFirstFrame = false
-    private var pauseAfterFirstFrame = false
+    /// True from load until the first frame decodes. libvlc must actually PLAY to decode (vmem gets
+    /// nothing from a paused open), and pausing mid-open can abort it so no frame ever arrives — the
+    /// "stuck loading forever" bug. So while priming, play()/pause() only record `intentPlay`; the
+    /// intent is applied once the first frame lands. Playback is muted during priming so an
+    /// intended-paused load never blurts audio.
+    private var priming = false
+    private var intentPlay = false
     /// Ring of textures: each new frame uploads into the NEXT texture, so the returned texture's
     /// object identity changes per frame. The renderer keys its sharpen-mip cache on that identity
     /// (same object → skip re-blit), so reusing one texture froze the corner screens; the ring also
@@ -112,21 +118,32 @@ public final class VLCPlayerSource: @unchecked Sendable {
         loaded = true
         gotFirstFrame = false
         frameDirty = false
-        pauseAfterFirstFrame = !autoplay
+        priming = true
+        intentPlay = autoplay
         lock.unlock()
 
-        if !autoplay { libvlc_audio_set_mute(p, 1) }   // silent while grabbing the resume frame
+        libvlc_audio_set_mute(p, 1)   // muted while priming; unmuted when the first frame applies intent
         libvlc_media_player_play(p)
     }
 
     public func play() {
         guard let player else { return }
+        lock.lock()
+        intentPlay = true
+        let deferToPrime = priming
+        lock.unlock()
+        if deferToPrime { return }    // applied on first frame — poking libvlc mid-open wedges it
         libvlc_audio_set_mute(player, 0)
         libvlc_media_player_play(player)
     }
 
     public func pause() {
         guard let player else { return }
+        lock.lock()
+        intentPlay = false
+        let deferToPrime = priming
+        lock.unlock()
+        if deferToPrime { return }    // applied on first frame — pausing mid-open aborts the decode
         libvlc_media_player_set_pause(player, 1)
     }
 
@@ -134,7 +151,10 @@ public final class VLCPlayerSource: @unchecked Sendable {
 
     public func stop() {
         stopLocked()
-        lock.lock(); loaded = false; gotFirstFrame = false; frameDirty = false; lock.unlock()
+        lock.lock()
+        loaded = false; gotFirstFrame = false; frameDirty = false
+        priming = false; intentPlay = false
+        lock.unlock()
     }
 
     /// Seek by a relative offset in seconds (negative = back), clamped to the item's bounds.
@@ -230,25 +250,28 @@ public final class VLCPlayerSource: @unchecked Sendable {
 
     fileprivate func displayFrame() {
         var fireReady = false
-        var pauseNow = false
+        var applyIntent = false
+        var wantPlay = false
         lock.lock()
         swap(&front, &back)
         frameDirty = true
         if !gotFirstFrame {
             gotFirstFrame = true
             fireReady = true
-            pauseNow = pauseAfterFirstFrame
-            pauseAfterFirstFrame = false
+            applyIntent = priming
+            priming = false
+            wantPlay = intentPlay
         }
         lock.unlock()
-        if fireReady || pauseNow {
+        if fireReady {
+            // Priming done: apply the (possibly updated) play/pause intent and restore audio.
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
-                if pauseNow, let p = self.player {
-                    libvlc_media_player_set_pause(p, 1)
-                    libvlc_audio_set_mute(p, 0)      // un-mute for when the user presses play
+                if applyIntent, let p = self.player {
+                    if !wantPlay { libvlc_media_player_set_pause(p, 1) }
+                    libvlc_audio_set_mute(p, 0)
                 }
-                if fireReady { self.onReady?() }
+                self.onReady?()
             }
         }
     }

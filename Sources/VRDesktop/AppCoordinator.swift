@@ -2367,7 +2367,10 @@ final class AppCoordinator: ObservableObject {
     /// on the next runloop tick so a just-issued seek's new position is reflected.
     private var mediaProgressHideTimer: Timer?
     private func flashMediaProgress() {
-        guard arActive, mediaPlayer?.hasMedia == true else { return }
+        // Not while loading: the flash shares the overlay slot with the "Loading…" card, and its
+        // hide-timer would blank the card mid-load (hotkeys can still fire while the panel's
+        // transport buttons are disabled).
+        guard arActive, let mp = mediaPlayer, mp.hasMedia, !mp.loading else { return }
         DispatchQueue.main.async { [weak self] in
             guard let self, let renderer = self.renderer, let mp = self.mediaPlayer else { return }
             let p = mp.progress

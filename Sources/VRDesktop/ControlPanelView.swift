@@ -2574,7 +2574,7 @@ struct MediaPlayerControls: View {
                 transport("stop.fill", "Stop · ⌃⌥0") { coordinator.stopMedia() }
                 Spacer()
             }
-            .disabled(!media.hasMedia)
+            .disabled(!media.hasMedia || media.loading)   // no transport while the file is opening
 
             HStack(spacing: 8) {
                 Text("Position").font(.caption)
