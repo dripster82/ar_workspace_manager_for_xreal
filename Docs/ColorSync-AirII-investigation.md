@@ -239,3 +239,55 @@ connected), confirming a one-shot clear isn't enough — it needs continuous rem
    `com.apple.windowserver.displays.*.plist`; takes effect after logout, so it's confirmation-gated).
 
 Helper protocol version bumped to **2**. Build confirmed clean (`Scripts/build-app.sh debug`).
+
+## Nebula comparison prep (2026-07-02) — static analysis + registry mechanics
+
+Goal: test whether XREAL's own **Nebula for Mac** provokes the same
+`colorsync.displayservices` runaway. If it does, the trigger is the Air 2 + macOS combination
+(worth reporting upstream); if it stays clean, Nebula's display strategy differs in a way we can
+copy. Everything below was gathered **read-only** (no Nebula launch, no display changes).
+
+### What Nebula's display engine looks like (static inspection of the app bundle)
+
+- Nebula is a **Unity app** (`UnityPlayer.dylib` / `GameAssembly.dylib`); its display machinery
+  lives in **`Contents/PlugIns/libMonitorUtil.dylib`**.
+- It uses the **same private `CGVirtualDisplay` API we do**: `CGVirtualDisplayDescriptor` /
+  `CGVirtualDisplaySettings` / `CGVirtualDisplayMode`, `setVendorID:` / `setProductID:` /
+  `setSerialNum:`, with `CreateVirtualDisplay` / `CloseVirtualDisplay` wrappers. So Nebula has the
+  same *class* of ColorSync exposure — the question is only how much reconfiguration it generates
+  and how stable its display identities are.
+- Capture is the **legacy `CGDisplayStream`** API (not ScreenCaptureKit), via an
+  `ai.xreal.StreamHelper` service; `newTextureWithDescriptor:iosurface:plane:` suggests an
+  IOSurface→Metal path much like ours.
+- It also finds the glasses' display (`FindNrealDisplayID:`) and rearranges the OS layout
+  (`CGConfigureDisplayOrigin xreal:`) — same moves as ours.
+- The actual vendor/product/serial **values** are set at runtime (not visible in strings); the live
+  test below will reveal them via the registry diff.
+
+### Registry mechanics measured the same day (why the config count grows)
+
+- WindowServer saves **one config per distinct display-SET** (combination + arrangement of display
+  UUIDs), and never prunes. After a **fresh boot (15:43) with the registry fully cleared in both
+  locations**, the user-level plist was back to **57 configs within ~2–3 h** of heavy dev use —
+  sets of 1–9 displays drawn from just **13 distinct UUIDs** (built-in in 54/57 configs, the
+  physical monitor in 44). Every AR start/stop, workspace switch, or plug/unplug that produces a
+  *novel* combination mints a new config: growth is **combinatorial from set churn**, not leftover
+  bloat. Clearing the registry is cosmetic — it re-bloats in hours.
+- The runaway itself **re-armed ~75 min after the fresh boot + clean registry**, confirming
+  registry size is a *byproduct*, not the cause.
+- Unplugging the Air 2 clears the pin in **~25 s** (bursty decay: 70%→46% spikes shrinking for
+  ~20 s, then flat 0%). Timed live with a 2 s poller.
+
+### Test protocol (to run)
+
+1. Quit AR Workspace Manager entirely; confirm `colorsync.displayservices` at 0%.
+2. Run `notes/monitor-nebula-colorsync.sh` (logs Nebula/ColorSync/WindowServer CPU + ICC-profile
+   count + registry size every 5 s to a Desktop log; flags `*** PINNED` samples; Ctrl-C = summary).
+3. Plug in the Air 2, use **Nebula only** for 1.5–2 h (our re-arm baseline is ~75 min).
+4. Afterwards: diff the display registry (config count, new UUIDs) to extract Nebula's virtual
+   display identities — how many displays it creates, and whether their UUIDs are stable across
+   sessions (our slot-serial scheme vs whatever Nebula does).
+
+**Interpretation:** Nebula pins too → macOS/Air-2 trigger, largely out of our hands (report to
+XREAL/Apple). Nebula stays clean → compare its set-churn (it may create its displays once and never
+reconfigure) and identity scheme, and copy the difference.
