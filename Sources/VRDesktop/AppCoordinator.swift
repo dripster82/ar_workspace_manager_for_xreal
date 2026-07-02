@@ -481,11 +481,10 @@ final class AppCoordinator: ObservableObject {
         // registry, then arm the watchdog that auto-clears the runaway if it recurs while running.
         let sweptAtLaunch = SystemHealth.sweepOrphanProfiles()
         if sweptAtLaunch > 0 { DebugLog.shared.log("Launch: swept \(sweptAtLaunch) orphaned ColorSync profile(s)") }
-        colorSyncWatchdog.onPersistentRunaway = { [weak self] in
-            self?.colorSyncRunawayWarning = true
-            self?.statusMessage = "Display colour service is stuck — unplug/replug the Air 2 or reboot to clear it."
+        colorSyncWatchdog.onRunawayDetected = { [weak self] cpu in
+            self?.presentColorSyncRunawayAlert(cpu: cpu)
         }
-        colorSyncWatchdog.setEnabled(colorSyncWatchdogEnabled)
+        colorSyncWatchdog.setEnabled(colorSyncAlertEnabled)
         // Populate the layout with the currently-connected monitors (positioning-only/green).
         syncPhysicalMonitors()
 
@@ -3225,19 +3224,41 @@ final class AppCoordinator: ObservableObject {
     @Published var colorSyncDaemonCPU: Double = 0
     private var healthTimer: Timer?
 
-    /// Always-on guard that auto-clears the ColorSync runaway (the recurring "everything's sluggish
-    /// after a few hours" / colorsync stuck at ~75%). Defaults on; toggle persisted.
+    /// Detection-only ColorSync runaway monitor. Auto-remediation (sweep + daemon bounce) was
+    /// removed: the 2026-07-02 WindowServer crash proved bouncing doesn't cure the Air-2 self-loop
+    /// (it re-pegged within ~2 min of every bounce, then WindowServer was watchdog-killed). Only
+    /// replugging the glasses / a reboot fixes it, so all we can usefully do is warn loudly.
     let colorSyncWatchdog = ColorSyncWatchdog()
-    @Published var colorSyncWatchdogEnabled: Bool =
-        UserDefaults.standard.object(forKey: "colorSyncWatchdogEnabled") as? Bool ?? true {
+    /// Show an alert when colorsync.displayservices stays pinned (the state that has twice ended in
+    /// a WindowServer watchdog kill = full session reset). Off by default; persisted.
+    @Published var colorSyncAlertEnabled: Bool =
+        UserDefaults.standard.object(forKey: "colorSyncAlertEnabled") as? Bool ?? false {
         didSet {
-            UserDefaults.standard.set(colorSyncWatchdogEnabled, forKey: "colorSyncWatchdogEnabled")
-            colorSyncWatchdog.setEnabled(colorSyncWatchdogEnabled)
+            UserDefaults.standard.set(colorSyncAlertEnabled, forKey: "colorSyncAlertEnabled")
+            colorSyncWatchdog.setEnabled(colorSyncAlertEnabled)
         }
     }
-    /// Set when the watchdog gives up because remediation didn't settle the runaway (the OS-side
-    /// Air-2 self-loop). Surfaced on the Diagnostics page; cleared on the next manual clean.
+    /// Set when a pinned runaway has been detected (the OS-side Air-2 self-loop). Surfaced on the
+    /// Diagnostics page; cleared on the next manual clean.
     @Published var colorSyncRunawayWarning = false
+
+    /// The un-missable warning: the runaway is a predictable countdown to a WindowServer crash
+    /// (~30–45 min of pinned CPU in both observed incidents), so tell the user to replug NOW.
+    private func presentColorSyncRunawayAlert(cpu: Double) {
+        colorSyncRunawayWarning = true
+        statusMessage = "ColorSync is stuck at \(Int(cpu))% — unplug and replug the glasses to clear it."
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "Display colour service is stuck — replug the glasses"
+        alert.informativeText =
+            "macOS's colour service (colorsync.displayservices) is pinned at \(Int(cpu))% CPU. "
+            + "This is a macOS bug triggered by the glasses, and the app cannot fix it. Left alone "
+            + "it has previously crashed the whole display session (WindowServer) after ~30 minutes."
+            + "\n\nSave your work, then unplug and replug the glasses — or reboot — to clear it."
+        alert.addButton(withTitle: "OK")
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
+    }
 
     /// Manually run the watchdog's remediation: sweep orphaned ColorSync profiles + bounce the
     /// daemons. Exposed as a Diagnostics button for when the user wants to clear it on demand.
@@ -3255,27 +3276,29 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
-    /// Clear the bloated WindowServer saved-arrangement plist(s) (the other runaway driver). Takes
-    /// full effect only after a logout/WindowServer restart, so we tell the user.
+    /// Clear the bloated WindowServer saved-arrangement plist(s) (the other runaway driver). A
+    /// logout does NOT apply it — WindowServer (which holds the arrangement state) survives logout
+    /// and rewrites the plist; only a full REBOOT restarts it, so we tell the user to reboot.
     func clearSavedDisplayConfigs() {
         let n = SystemHealth.clearSavedDisplayConfigs()
         statusMessage = n > 0
-            ? "Cleared \(n) saved display-arrangement file(s). Log out and back in to apply (backed up as .bak)."
+            ? "Cleared \(n) saved display-arrangement file(s). Restart the Mac to apply (backed up as .bak)."
             : "No saved display-arrangement files to clear."
         refreshHealthNow()
     }
 
-    /// Ask macOS to log out, so a just-cleared saved-config change applies immediately. This does NOT
-    /// happen on its own — only when the user explicitly chooses it. loginwindow shows its own
-    /// "quit all apps and log out?" confirmation, so it's never silent. Best-effort: if the Apple-
-    /// events automation prompt is denied, we tell the user to log out manually.
-    func logOutNow() {
-        let script = NSAppleScript(source: "tell application \"loginwindow\" to «event aevtlogo»")
+    /// Ask macOS to restart, so a just-cleared saved-config change applies (WindowServer only
+    /// restarts on reboot — a logout isn't enough). This does NOT happen on its own — only when the
+    /// user explicitly chooses it. loginwindow shows its own confirmation, so it's never silent.
+    /// Best-effort: if the Apple-events automation prompt is denied, we tell the user to restart
+    /// manually.
+    func restartNow() {
+        let script = NSAppleScript(source: "tell application \"loginwindow\" to «event aevtrest»")
         var error: NSDictionary?
         script?.executeAndReturnError(&error)
         if let error {
-            DebugLog.shared.log("logout request failed: \(error)")
-            statusMessage = "Couldn't start logout automatically — log out manually to apply (allow Automation if prompted)."
+            DebugLog.shared.log("restart request failed: \(error)")
+            statusMessage = "Couldn't start the restart automatically — restart manually to apply (allow Automation if prompted)."
         }
     }
 

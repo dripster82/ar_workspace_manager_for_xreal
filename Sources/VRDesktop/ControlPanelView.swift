@@ -1303,15 +1303,18 @@ struct ControlPanelView: View {
                 Text("Updates every 3 s while enabled.").font(.caption2).foregroundStyle(.secondary)
             }
             Divider()
-            Toggle("Auto-fix ColorSync runaway (recommended)", isOn: $coordinator.colorSyncWatchdogEnabled)
+            Toggle("Alert when ColorSync gets stuck", isOn: $coordinator.colorSyncAlertEnabled)
                 .font(.caption)
-            Text("Watches colorsync.displayservices; if it pins the CPU it clears stale profiles and restarts the colour daemons automatically.")
+            Text("Watches colorsync.displayservices; if it pins the CPU (the Air 2 colour self-loop, "
+                 + "which can eventually crash the display session) an alert tells you to replug the "
+                 + "glasses — the only fix. The app can't clear it automatically.")
                 .font(.caption2).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             if coordinator.colorSyncRunawayWarning {
                 HStack(alignment: .top, spacing: 4) {
                     Image(systemName: "exclamationmark.triangle.fill").font(.caption2).foregroundStyle(.red)
-                    Text("Runaway persists after auto-fix — this is the Air 2 colour self-loop. Unplug/replug the Air 2 or reboot to clear it.")
+                    Text("ColorSync is stuck — this is the Air 2 colour self-loop and can crash the "
+                         + "display session if ignored. Unplug/replug the Air 2 or reboot to clear it.")
                         .font(.caption2).foregroundStyle(.red)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -1328,17 +1331,19 @@ struct ControlPanelView: View {
             }
             .confirmationDialog("Clear saved display arrangements?",
                                 isPresented: $showClearConfigsConfirm, titleVisibility: .visible) {
-                Button("Clear & Log Out Now…", role: .destructive) {
+                Button("Clear & Restart Now…", role: .destructive) {
                     coordinator.clearSavedDisplayConfigs()
-                    coordinator.logOutNow()
+                    coordinator.restartNow()
                 }
-                Button("Clear, I'll Log Out Later") {
+                Button("Clear, I'll Restart Later") {
                     coordinator.clearSavedDisplayConfigs()
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("Removes the bloated WindowServer arrangement plist (backed up as .bak). This does NOT log you out by itself — but the change only takes effect after a logout. "
-                     + "“Log Out Now” asks macOS to log out (it shows its own confirmation and closes your apps first).")
+                Text("Removes the bloated WindowServer arrangement plist (backed up as .bak). The change "
+                     + "only takes effect after a RESTART — WindowServer survives a logout and rewrites "
+                     + "the file, so logging out is not enough. “Restart Now” asks macOS to restart (it "
+                     + "shows its own confirmation and closes your apps first).")
             }
         }
     }
