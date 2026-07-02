@@ -58,7 +58,11 @@ enum SystemHealth {
         guard let files = try? FileManager.default.contentsOfDirectory(
                 at: byHost, includingPropertiesForKeys: nil),
               let file = files.first(where: {
-                  $0.lastPathComponent.hasPrefix("com.apple.windowserver.displays.") }),
+                  // Extension must be exactly "plist": the clear leaves a `.plist.bak` backup
+                  // alongside, which also matches the prefix — pre-fix, the count read the BACKUP
+                  // and kept showing the old number after a successful clear + reboot.
+                  $0.lastPathComponent.hasPrefix("com.apple.windowserver.displays.")
+                      && $0.pathExtension == "plist" }),
               let data = try? Data(contentsOf: file),
               let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)
                 as? [String: Any],
