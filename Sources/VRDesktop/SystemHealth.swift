@@ -181,12 +181,11 @@ enum SystemHealth {
         guard let files = try? fm.contentsOfDirectory(at: byHost, includingPropertiesForKeys: nil)
         else { return 0 }
         var removed = 0
-        for f in files where f.lastPathComponent.hasPrefix("com.apple.windowserver.displays.")
-            && f.pathExtension == "plist" {
-            let backup = f.appendingPathExtension("bak")
-            try? fm.removeItem(at: backup)
-            try? fm.copyItem(at: f, to: backup)
-            if (try? fm.removeItem(at: f)) != nil { removed += 1 }
+        // Full clear: the plist AND any .bak left by earlier clears (we used to keep a backup, but
+        // a lingering 50-config .bak caused "still shows 50" confusion, and WindowServer rebuilds a
+        // fresh arrangement on the next reboot anyway — worst case you re-drag your monitor layout).
+        for f in files where f.lastPathComponent.hasPrefix("com.apple.windowserver.displays.") {
+            if (try? fm.removeItem(at: f)) != nil, f.pathExtension == "plist" { removed += 1 }
         }
         if removed > 0 { NSLog("SystemHealth: cleared \(removed) saved display-config plist(s)") }
         return removed

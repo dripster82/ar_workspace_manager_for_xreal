@@ -3343,7 +3343,7 @@ final class AppCoordinator: ObservableObject {
     func clearSavedDisplayConfigs() {
         let n = SystemHealth.clearSavedDisplayConfigs()
         statusMessage = n > 0
-            ? "Cleared \(n) saved display-arrangement file(s). Restart the Mac to apply (backed up as .bak)."
+            ? "Cleared \(n) saved display-arrangement file(s). Restart the Mac to apply."
             : "No saved display-arrangement files to clear."
         refreshHealthNow()
     }

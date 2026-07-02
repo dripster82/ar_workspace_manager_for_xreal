@@ -1365,10 +1365,11 @@ struct ControlPanelView: View {
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("Removes the bloated WindowServer arrangement plist (backed up as .bak). The change "
-                     + "only takes effect after a RESTART — WindowServer survives a logout and rewrites "
-                     + "the file, so logging out is not enough. “Restart Now” asks macOS to restart (it "
-                     + "shows its own confirmation and closes your apps first).")
+                Text("Deletes the bloated WindowServer arrangement plist — macOS rebuilds a fresh one; "
+                     + "worst case you re-drag your monitor arrangement once. The change only takes "
+                     + "effect after a RESTART — WindowServer survives a logout and rewrites the file, "
+                     + "so logging out is not enough. “Restart Now” asks macOS to restart (it shows its "
+                     + "own confirmation and closes your apps first).")
             }
         }
     }
