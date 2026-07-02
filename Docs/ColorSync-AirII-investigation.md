@@ -291,3 +291,35 @@ copy. Everything below was gathered **read-only** (no Nebula launch, no display 
 **Interpretation:** Nebula pins too → macOS/Air-2 trigger, largely out of our hands (report to
 XREAL/Apple). Nebula stays clean → compare its set-churn (it may create its displays once and never
 reconfigure) and identity scheme, and copy the difference.
+
+## Nebula comparison RESULT (2026-07-02) — Nebula reproduces the runaway. It's not us.
+
+Ran the protocol above: ARWM fully quit, Air 2 plugged in, **Nebula only**, monitored every 10 s.
+
+**Nebula provoked the identical runaway, faster than ARWM ever has:**
+
+- First `*** PINNED` sample (`displayservices` 73.5%) **~2 minutes** after Nebula started
+  (17:24 start → 17:25:40 pinned). ARWM's re-arm baseline the same day was ~75 minutes.
+- Identical signature: `colorsync.displayservices` ~70–74% with `colorsyncd` ~23–25% — the exact
+  pair/ratio seen in every ARWM incident (and in the two WindowServer-crash stackshots).
+- Pattern under Nebula: **cycling episodes** — pinned for ~2–3 min, decays to ~0–2%, re-climbs,
+  roughly every 6–7 min (ARWM's episodes tend to pin and stay pinned).
+
+**Nebula's display setup (read-only inspection while it ran):** exactly two virtual displays,
+`XrealVirtualR-1` and `XrealVirtualL-2` (1920×1080 each), plus the Air 2. Their CGDisplay UUIDs
+matched profiles/configs already in the registry from earlier Nebula sessions — i.e. **Nebula's
+virtual-display identities are stable across sessions**, and its registry churn during the test was
+negligible (displays plist grew 377 bytes; ICC profiles 6→8, just its two displays).
+
+### Conclusion
+
+Stable identities + only 2 displays + ~zero churn **still pins the daemon within minutes**. The
+runaway is therefore a **macOS + Air 2 (+ virtual display?) interaction, not a consequence of
+ARWM's display churn or identity scheme**. Consequences for us:
+
+- Churn-reduction work (display reuse etc.) remains good hygiene but is NOT the lever for the
+  runaway — stop investing in it as a "fix".
+- The realistic mitigation stands: detect the pin → tell the user to replug (clears in ~25 s).
+- This is XREAL's own app reproducing it, on macOS 26.5.1 — strong material for an upstream report
+  to XREAL and/or Apple Feedback Assistant (attach the monitor logs + the two WindowServer
+  watchdog stackshots).
