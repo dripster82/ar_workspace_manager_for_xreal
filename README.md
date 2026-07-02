@@ -4,8 +4,18 @@ Turn your XREAL glasses into a head-tracked, multi-monitor spatial workspace on 
 many virtual displays as you like, arrange them in the space around you, and drag your Mac windows
 onto them — all rendered into the glasses with low-latency head tracking.
 
-> **Requirements:** XREAL **Air 2 / Air 2 Pro** *or* **One / One Pro** glasses connected over USB-C
-> DisplayPort, and an **Apple Silicon** Mac running **macOS 14 (Sonoma) or later**.
+> **Requirements:** a supported pair of XREAL glasses connected over USB-C DisplayPort, and an
+> **Apple Silicon** Mac running **macOS 14 (Sonoma) or later**.
+
+### Supported devices
+
+| Glasses | Head tracking | Notes |
+|---|---|---|
+| **XREAL Air** (original) | 3DoF (IMU over HID) | Same Air path as the Air 2, incl. host brightness control |
+| **XREAL Air 2** | 3DoF (IMU over HID) | Full support, incl. host brightness control |
+| **XREAL Air 2 Pro** | 3DoF (IMU over HID) | Full support, incl. host brightness control |
+| **XREAL One** | 3DoF (IMU over USB-ethernet) | Enable **Ethernet** in the glasses' menu; use flat **Follow** mode — see below |
+| **XREAL One Pro** | 3DoF (IMU over USB-ethernet) | As One, plus automatic mount-tilt correction; the Eye accessory's 6DoF isn't exposed to the host, so tracking stays 3DoF |
 
 > ### XREAL One / One Pro
 > The One series works, with three things to know (their onboard X1 chip behaves differently from the
@@ -42,6 +52,10 @@ The app asks for these the first time each is needed (you can manage them under
 | **Screen Recording** | Capturing your Mac's screens to show them in the glasses | **Yes** — AR can't render without it |
 | **Accessibility** | Moving/arranging windows (⌃⌥W, window layout save & restore) | Optional |
 | **Microphone** | Recording the glasses view *with audio* | Optional |
+| **Speech Recognition** | Hands-free voice commands (recognition runs on-device) | Optional |
+| **Calendars** | Showing your **Apple Calendar** agenda on the calendar HUD widget | Optional |
+| **Reminders** | Showing/updating an **Apple Reminders** list on the List HUD widget | Optional |
+| **Automation** (Apple Events) | Logging you out when you choose *Log Out Now* after clearing saved display arrangements | Optional |
 
 > If you remove a virtual display on a **standard (non-admin)** account, macOS may ask once for
 > permission so the app can tidy up that display's leftover colour profile. This is handled by a
@@ -89,9 +103,17 @@ between them from the top bar.
   **move-window-to-the-screen-you're-looking-at** (⌃⌥W)
 
 **HUD widgets** (head-locked, optional)
-- Clock, battery, **Slack** unreads, **GitHub** PR-triage counts, **Google Calendar** agenda with
-  **meeting alarms** (shown centre-FOV while AR runs; optionally also as a desktop panel when AR is off)
-- Reusable HUD profiles; group widgets into stacks; per-widget styling
+- Clock, battery, **Slack** unreads, **GitHub** PR-triage counts, and a **calendar** agenda with
+  **meeting alarms** — backed by **Google Calendar**, **Apple Calendar**, or both
+  (shown centre-FOV while AR runs; optionally also as a desktop panel when AR is off)
+- **List** widget for a quick to-do read-out — an in-app checklist or your **Apple Reminders**
+- Standard widget sizes; reusable HUD profiles; group widgets into stacks; per-widget styling
+
+**Voice control** (experimental, AR only)
+- Trigger app actions by voice — recenter, focus, passthrough, screenshot, record, find cursor,
+  move window to gaze, brightness, and more — plus **"switch to &lt;workspace&gt;"** by name
+- **Push-to-talk** (⌃⌥A) or a continuous **wake word** (default *"computer"*); on-device speech
+- Trigger phrases are editable per command, with fuzzy matching that absorbs mis-hearings
 
 ![HUD widgets](assets/hud-widgets.png?v=3)
 
@@ -124,6 +146,7 @@ between them from the top bar.
 | ⌃⌥P | Screenshot the glasses view → Desktop |
 | ⌃⌥R | Record the glasses view → Movies |
 | ⌃⌥M | Mute / unmute the recording mic |
+| ⌃⌥A | Push-to-talk voice command (when voice is enabled) |
 | ⌃⌥H | Show / hide help |
 | ⌃⌥Q | Quit AR Workspace Manager |
 | ⌃⌥ + brightness keys | Dim / brighten the glasses |
