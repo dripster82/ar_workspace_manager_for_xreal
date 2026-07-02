@@ -1356,20 +1356,20 @@ struct ControlPanelView: View {
             }
             .confirmationDialog("Clear saved display arrangements?",
                                 isPresented: $showClearConfigsConfirm, titleVisibility: .visible) {
-                Button("Clear & Restart Now…", role: .destructive) {
+                Button("Clear & Log Out Now…", role: .destructive) {
                     coordinator.clearSavedDisplayConfigs()
-                    coordinator.restartNow()
+                    coordinator.logOutNow()
                 }
-                Button("Clear, I'll Restart Later") {
+                Button("Clear Only") {
                     coordinator.clearSavedDisplayConfigs()
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("Deletes the bloated WindowServer arrangement plist — macOS rebuilds a fresh one; "
-                     + "worst case you re-drag your monitor arrangement once. The change only takes "
-                     + "effect after a RESTART — WindowServer survives a logout and rewrites the file, "
-                     + "so logging out is not enough. “Restart Now” asks macOS to restart (it shows its "
-                     + "own confirmation and closes your apps first).")
+                Text("Deletes the WindowServer display registry in BOTH places: your user file and the "
+                     + "system-level copy (that one asks for an admin password). macOS rebuilds them "
+                     + "fresh — worst case you re-drag your monitor arrangement once. Log out and back "
+                     + "in to apply; if the count creeps back after logging in, do a full restart "
+                     + "instead. “Log Out Now” asks macOS to log out (it shows its own confirmation).")
             }
         }
     }

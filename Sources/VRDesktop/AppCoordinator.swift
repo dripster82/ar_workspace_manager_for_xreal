@@ -3337,29 +3337,49 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
-    /// Clear the bloated WindowServer saved-arrangement plist(s) (the other runaway driver). A
-    /// logout does NOT apply it — WindowServer (which holds the arrangement state) survives logout
-    /// and rewrites the plist; only a full REBOOT restarts it, so we tell the user to reboot.
+    /// Clear the WindowServer saved-arrangement registry in BOTH locations: the user-level ByHost
+    /// plist (plain delete) and the SYSTEM-level /Library/Preferences copy (root-owned — asks for an
+    /// admin password via the standard macOS prompt). Clearing only the user copy didn't stick
+    /// across a logout (2026-07-02), most likely because the system copy re-seeds it — so the full
+    /// clear removes both, after which a log out should be enough to apply.
     func clearSavedDisplayConfigs() {
-        let n = SystemHealth.clearSavedDisplayConfigs()
-        statusMessage = n > 0
-            ? "Cleared \(n) saved display-arrangement file(s). Restart the Mac to apply."
-            : "No saved display-arrangement files to clear."
+        let userCleared = SystemHealth.clearSavedDisplayConfigs()
+        var parts: [String] = userCleared > 0 ? ["cleared \(userCleared) user config file(s)"] : []
+
+        if SystemHealth.systemDisplayConfigExists {
+            // Root-owned: run the delete with admin rights via the standard macOS auth prompt. The
+            // path is a fixed constant — never user input.
+            let src = "do shell script \"rm -f \(SystemHealth.systemDisplayConfigPath)\" with administrator privileges"
+            var error: NSDictionary?
+            NSAppleScript(source: src)?.executeAndReturnError(&error)
+            if let error {
+                let code = (error[NSAppleScript.errorNumber] as? Int) ?? 0
+                DebugLog.shared.log("system display-config clear failed: \(error)")
+                parts.append(code == -128 ? "system copy skipped (cancelled)"
+                                          : "system copy NOT cleared (admin rights needed)")
+            } else {
+                parts.append("cleared the system copy")
+                DebugLog.shared.log("cleared system display-config plist")
+            }
+        }
+
+        statusMessage = parts.isEmpty
+            ? "No saved display-arrangement files to clear."
+            : parts.joined(separator: "; ").capitalized + ". Log out and back in to apply."
         refreshHealthNow()
     }
 
-    /// Ask macOS to restart, so a just-cleared saved-config change applies (WindowServer only
-    /// restarts on reboot — a logout isn't enough). This does NOT happen on its own — only when the
-    /// user explicitly chooses it. loginwindow shows its own confirmation, so it's never silent.
-    /// Best-effort: if the Apple-events automation prompt is denied, we tell the user to restart
-    /// manually.
-    func restartNow() {
-        let script = NSAppleScript(source: "tell application \"loginwindow\" to «event aevtrest»")
+    /// Ask macOS to log out, so the just-cleared display registry is rebuilt fresh at next login.
+    /// This does NOT happen on its own — only when the user explicitly chooses it. loginwindow shows
+    /// its own confirmation, so it's never silent. Best-effort: if the Apple-events automation
+    /// prompt is denied, we tell the user to log out manually.
+    func logOutNow() {
+        let script = NSAppleScript(source: "tell application \"loginwindow\" to «event aevtlogo»")
         var error: NSDictionary?
         script?.executeAndReturnError(&error)
         if let error {
-            DebugLog.shared.log("restart request failed: \(error)")
-            statusMessage = "Couldn't start the restart automatically — restart manually to apply (allow Automation if prompted)."
+            DebugLog.shared.log("logout request failed: \(error)")
+            statusMessage = "Couldn't start the logout automatically — log out manually to apply (allow Automation if prompted)."
         }
     }
 

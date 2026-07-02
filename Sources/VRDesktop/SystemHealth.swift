@@ -190,4 +190,14 @@ enum SystemHealth {
         if removed > 0 { NSLog("SystemHealth: cleared \(removed) saved display-config plist(s)") }
         return removed
     }
+
+    /// The SYSTEM-level WindowServer display registry (`DisplayAnyUserSets` + UUID mappings —
+    /// any-user scope, root-owned). Discovered 2026-07-02: clearing only the user-level ByHost plist
+    /// didn't stick across a logout, most likely because this copy re-seeds it, so a full clear must
+    /// remove both. `/Library/Preferences` isn't group-writable, so deleting it needs admin rights.
+    static let systemDisplayConfigPath = "/Library/Preferences/com.apple.windowserver.displays.plist"
+
+    static var systemDisplayConfigExists: Bool {
+        FileManager.default.fileExists(atPath: systemDisplayConfigPath)
+    }
 }
