@@ -1339,6 +1339,16 @@ struct ControlPanelView: View {
                     Spacer()
                 }
             }
+            HStack(spacing: 4) {
+                Text("Previous session ended:").font(.caption2).foregroundStyle(.secondary)
+                Text(coordinator.previousSessionExit)
+                    .font(.caption2)
+                    .foregroundStyle(coordinator.previousSessionExit.contains("CRASH") ? .red : .secondary)
+            }
+            Text("Full history: Application Support ▸ AR Workspace Manager ▸ display-churn.log "
+                 + "(one line per app session + churn event, tagged with the boot-session id).")
+                .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             HStack {
                 Button("Refresh") { coordinator.refreshHealthNow() }.controlSize(.small)
                 Button("Clean ColorSync now") { coordinator.cleanColorSyncNow() }.controlSize(.small)

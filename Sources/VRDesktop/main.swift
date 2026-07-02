@@ -505,6 +505,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         coordinator.voice.stop()
         coordinator.stopAR()
         coordinator.saveWorkspaces()
+        coordinator.endChurnSession()   // AFTER stopAR so the final destroys are in the totals
     }
 
     // Keep running in the menu bar when the window is closed.

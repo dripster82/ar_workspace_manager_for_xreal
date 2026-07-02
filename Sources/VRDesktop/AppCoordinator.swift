@@ -132,6 +132,8 @@ final class AppCoordinator: ObservableObject {
     }
     /// [0] = current session, [1] = previous, [2] = the one before.
     @Published private(set) var displayChurnHistory: [DisplayChurnRecord] = []
+    /// How the previous app session ended (crash forensics), shown on Diagnostics.
+    @Published private(set) var previousSessionExit: String = ""
 
     private func startChurnSession() {
         let d = UserDefaults.standard
@@ -143,6 +145,16 @@ final class AppCoordinator: ObservableObject {
         displayChurnHistory = Array(displayChurnHistory.prefix(3))
         saveChurnHistory()
         virtualDisplays.onChurn = { [weak self] in self?.recordChurn() }
+
+        // The append-only big-picture log (+ crash forensics): how did the LAST session end, and
+        // which boot session is this run part of? (The ColorSync self-loop is boot-scoped.)
+        let prev = ChurnLog.detectPreviousExit()
+        previousSessionExit = prev.label
+        ChurnLog.append("session-start boot=\(ChurnLog.bootSessionUUID()) ws-pid=\(ChurnLog.windowServerPID()) "
+                        + "build=\(BuildInfo.commit) prev-session=\(prev.label)")
+        if case .windowServerCrash = prev {
+            DebugLog.shared.log("Previous session ended in a WindowServer crash (session reset)")
+        }
     }
 
     private func recordChurn() {
@@ -151,6 +163,15 @@ final class AppCoordinator: ObservableObject {
         displayChurnHistory[0].destroyed = virtualDisplays.sessionDestroyed
         displayChurnHistory[0].reused = virtualDisplays.sessionReused
         saveChurnHistory()
+        ChurnLog.append("churn created=\(virtualDisplays.sessionCreated) "
+                        + "destroyed=\(virtualDisplays.sessionDestroyed) reused=\(virtualDisplays.sessionReused)")
+    }
+
+    /// Called from applicationWillTerminate: close out the churn log + mark the clean exit.
+    func endChurnSession() {
+        ChurnLog.append("session-end created=\(virtualDisplays.sessionCreated) "
+                        + "destroyed=\(virtualDisplays.sessionDestroyed) reused=\(virtualDisplays.sessionReused)")
+        ChurnLog.markCleanExit()
     }
 
     private func saveChurnHistory() {
