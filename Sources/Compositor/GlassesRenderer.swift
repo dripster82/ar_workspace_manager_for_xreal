@@ -324,6 +324,25 @@ public final class GlassesRenderer: NSObject {
 
     public func clearBrightness() { showBrightness = false }
 
+    /// Bottom-centre media progress bar (shown briefly on media transport actions). Separate slot from
+    /// the brightness bar so they don't clobber each other.
+    public var showMediaProgress = false
+    private var mediaProgressTexture: MTLTexture?
+    @discardableResult
+    public func setMediaProgressImage(_ cgImage: CGImage) -> Bool {
+        guard let tex = makeOverlayTexture(cgImage) else { return false }
+        mediaProgressTexture = tex
+        showMediaProgress = true
+        return true
+    }
+    public func clearMediaProgress() { showMediaProgress = false }
+
+    private func drawMediaProgressOverlay(commandBuffer: MTLCommandBuffer, target: MTLTexture) {
+        guard showMediaProgress, let tex = mediaProgressTexture else { return }
+        drawOverlay(tex, commandBuffer: commandBuffer, target: target,
+                    heightFraction: 0.09, maxWidthFraction: 0.72, anchor: .bottom(marginNDC: 0.05))
+    }
+
     /// Set the top-centre recording indicator (e.g. "● REC").
     @discardableResult
     public func setRecordingImage(_ cgImage: CGImage) -> Bool {
@@ -634,6 +653,14 @@ public final class GlassesRenderer: NSObject {
         lock.unlock()
     }
 
+    /// Full-FOV media: when set, the provided texture is stretched across the ENTIRE display each
+    /// frame (a fullscreen blit), filling the FOV edge-to-edge regardless of the video's aspect. Used
+    /// for the media player's "Full view" position; nil = off. Read on the render thread under `lock`.
+    private var fullscreenMediaProvider: (() -> MTLTexture?)?
+    public func setFullscreenMedia(_ provider: (() -> MTLTexture?)?) {
+        lock.lock(); fullscreenMediaProvider = provider; lock.unlock()
+    }
+
     /// Atlas render target for a wide-canvas screen (recreated on size change). Mipmapped so
     /// anisotropic sharpening has lower levels to sample; storage is private (GPU-only).
     private func canvasAtlas(for id: UUID, width: Int, height: Int) -> MTLTexture? {
@@ -917,6 +944,7 @@ public final class GlassesRenderer: NSObject {
 
         lock.lock()
         let currentScreens = screens
+        let mediaProvider = fullscreenMediaProvider
         let resetCaches = pendingCacheReset
         pendingCacheReset = false
         lock.unlock()
@@ -995,9 +1023,25 @@ public final class GlassesRenderer: NSObject {
             }
         }
 
+        // Full-FOV media: stretch the video across the whole drawable (over the scene, under the HUD).
+        if let mediaProvider, let tex = mediaProvider(), let dp = downscalePipeline {
+            let mpass = MTLRenderPassDescriptor()
+            mpass.colorAttachments[0].texture = drawable.texture
+            mpass.colorAttachments[0].loadAction = .load
+            mpass.colorAttachments[0].storeAction = .store
+            if let enc = commandBuffer.makeRenderCommandEncoder(descriptor: mpass) {
+                enc.setRenderPipelineState(dp)
+                enc.setFragmentTexture(tex, index: 0)
+                enc.setFragmentSamplerState(linearSampler, index: 0)
+                enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+                enc.endEncoding()
+            }
+        }
+
         drawHelpOverlay(commandBuffer: commandBuffer, target: drawable.texture)
         drawPickerOverlay(commandBuffer: commandBuffer, target: drawable.texture)
         drawBrightnessOverlay(commandBuffer: commandBuffer, target: drawable.texture)
+        drawMediaProgressOverlay(commandBuffer: commandBuffer, target: drawable.texture)
         drawRecordingOverlay(commandBuffer: commandBuffer, target: drawable.texture)
         drawVoiceOverlay(commandBuffer: commandBuffer, target: drawable.texture)
         // For a debug dump or screenshot, also composite the HUD overlays into the readable scene

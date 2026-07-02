@@ -19,6 +19,7 @@ public final class CaptureSource: NSObject, @unchecked Sendable {
     private let device: MTLDevice
     private var textureCache: CVMetalTextureCache!
     private var stream: SCStream?
+    private var streamConfig: SCStreamConfiguration?
     // Below the render/display-link priority band so capture yields to rendering rather
     // than competing for cores (which was delaying frame delivery → head-tracking stalls).
     private let outputQueue = DispatchQueue(label: "capture.output", qos: .userInitiated)
@@ -83,14 +84,31 @@ public final class CaptureSource: NSObject, @unchecked Sendable {
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: outputQueue)
         try await stream.startCapture()
         self.stream = stream
+        self.streamConfig = config
         lock.lock(); wantCapture = true; lastSampleAt = CACurrentMediaTime(); restarting = false; lock.unlock()
     }
 
-    public func stop() async {
+    /// Change the live capture frame rate WITHOUT tearing the stream down (SCStream.updateConfiguration
+    /// is seamless — no teardown blip). Used to throttle to ~1 fps behind full-view video and restore
+    /// the normal rate on exit. The head-tracked reprojection is unaffected either way.
+    public func setFrameRate(_ fps: Int) {
+        guard let stream, let config = streamConfig else { return }
+        config.minimumFrameInterval = CMTime(value: 1, timescale: Int32(max(1, fps)))
+        Task { try? await stream.updateConfiguration(config) }
+    }
+
+    /// Restore the user-configured capture rate.
+    public func restoreFrameRate() { setFrameRate(Self.captureFPS) }
+
+    /// Stop the capture stream. `keepLastFrame` retains the last delivered texture so `latestTexture`
+    /// keeps returning that frozen frame (its CVMetalTexture backing stays valid after the stream
+    /// stops) — used when pausing capture behind full-view video so the screens don't flash black when
+    /// capture resumes; the frozen frame shows until the first live frame replaces it.
+    public func stop(keepLastFrame: Bool = false) async {
         lock.lock(); wantCapture = false; lock.unlock()
         try? await stream?.stopCapture()
         stream = nil
-        clearLatest()
+        if !keepLastFrame { clearLatest() }
     }
 
     /// Seconds since the stream last delivered a sample. While alive the stream delivers frames

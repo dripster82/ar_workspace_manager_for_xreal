@@ -4,10 +4,10 @@ import Compositor
 import Metal
 import SwiftUI
 
-/// A head-locked video player pinned to one of five FOV positions: the four corners (like the window
-/// hotspots) or full-FOV. Decodes with `AVPlayer` and renders as a head-locked `SceneScreen`, so it
-/// coexists with the AR screens and moves with your view. Spatial (world-locked) placement is a later
-/// phase. Sources are file URLs — local disk or a mounted network drive.
+/// A head-locked video player with a playlist, pinned to one of five FOV positions: the four corners
+/// (like the window hotspots) or full-FOV. Decodes with `AVPlayer` and renders as a head-locked
+/// `SceneScreen` (corners) or a fullscreen blit (full view) — no ScreenCaptureKit, so none of the
+/// screen-recording/DRM blackout. Sources are file URLs — local disk or a mounted network drive.
 @MainActor
 final class MediaPlayerManager: ObservableObject {
     enum Position: Int, CaseIterable, Identifiable {
@@ -25,57 +25,205 @@ final class MediaPlayerManager: ObservableObject {
         }
     }
 
+    struct Item: Identifiable, Hashable { let id = UUID(); let url: URL; var name: String { url.lastPathComponent } }
+
     /// Placement of a pinned screen: centre (yaw/pitch, radians; +yaw = left, +pitch = up), distance,
     /// and the max box (metres) the video is fit inside (aspect-preserved).
     private struct Slot { let yaw: Float; let pitch: Float; let distance: Float; let maxW: Float; let maxH: Float }
 
-    @Published private(set) var position: Position = .off
-    @Published private(set) var fileName: String?
+    @Published private(set) var position: Position = .fullFOV
     @Published private(set) var playing = false
+    @Published private(set) var playlist: [Item] = []
+    @Published private(set) var currentIndex: Int?
+    /// Shown in the Media page when a file can't be played (unsupported container, missing file, …).
+    @Published var errorMessage: String?
+
+    /// Playback is gated on AR being active (no point decoding when the glasses aren't showing it) and
+    /// on the user's intent — so the video only plays in AR and pauses when AR stops.
+    private var arActive = false
+    private var wantsPlay = false
 
     private let source: MediaPlayerSource
-    /// Stable id so the renderer caches this screen's mesh across frames.
     private let sceneID = UUID(uuidString: "0000B0B0-0000-0000-0000-0000000000A1")!
     /// Called when the pinned screen needs rebuilding (position/media change), so the owner re-renders.
     var onChange: (() -> Void)?
+    /// Called with a user-facing message when a file can't be played.
+    var onError: ((String) -> Void)?
 
-    init(device: MTLDevice) { source = MediaPlayerSource(device: device) }
+    private var saveTimer: Timer?
+
+    init(device: MTLDevice) {
+        source = MediaPlayerSource(device: device)
+        source.onEnded = { [weak self] in self?.next() }        // playlist auto-advance
+        source.onReady = { [weak self] in self?.onChange?() }   // rebuild scene once frames exist
+        source.onError = { [weak self] msg in
+            guard let self else { return }
+            self.errorMessage = msg
+            self.wantsPlay = false; self.playing = false
+            self.onChange?()   // drop the (blank) screen → black
+            self.onError?(msg)
+        }
+        restore()
+        // Persist the play position every few seconds so a resume is at most a few seconds off.
+        let t = Timer(timeInterval: 3, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.saveTime() }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        saveTimer = t
+    }
+
+    // MARK: Persistence
+
+    private enum Key {
+        static let playlist = "media.playlist", index = "media.index"
+        static let position = "media.position", time = "media.time"
+    }
+
+    private func persist() {
+        let d = UserDefaults.standard
+        d.set(playlist.map { $0.url.absoluteString }, forKey: Key.playlist)
+        d.set(currentIndex ?? -1, forKey: Key.index)
+        d.set(position.rawValue, forKey: Key.position)
+    }
+
+    private func saveTime() {
+        guard source.hasMedia else { return }
+        UserDefaults.standard.set(source.currentTime, forKey: Key.time)
+    }
+
+    /// Restore the saved playlist + position + resume point on launch. The current item is loaded
+    /// PAUSED at its saved time, so pressing Play (or ⌃⌥K) picks up where you left off.
+    private func restore() {
+        let d = UserDefaults.standard
+        guard let paths = d.stringArray(forKey: Key.playlist), !paths.isEmpty else { return }
+        playlist = paths.compactMap { URL(string: $0) }.map { Item(url: $0) }
+        if let p = Position(rawValue: d.integer(forKey: Key.position)) { position = p }
+        let idx = d.integer(forKey: Key.index)
+        if playlist.indices.contains(idx) {
+            currentIndex = idx
+            source.load(url: playlist[idx].url, startAt: d.double(forKey: Key.time), autoplay: false)
+            playing = false
+        }
+    }
 
     var hasMedia: Bool { source.hasMedia }
+    var currentName: String? { currentIndex.flatMap { playlist.indices.contains($0) ? playlist[$0].name : nil } }
+    /// Playback position for the transient progress bar.
+    var progress: (current: Double, duration: Double) { (source.currentTime, source.duration) }
 
-    func open(url: URL) {
-        source.load(url: url)
-        fileName = url.lastPathComponent
-        playing = true
-        if position == .off { position = .fullFOV }   // show it somewhere on first open
+    // MARK: Playlist
+
+    /// Add files to the playlist; start playing the first new one if nothing is playing yet.
+    func addFiles(_ urls: [URL]) {
+        let wasEmpty = playlist.isEmpty
+        playlist.append(contentsOf: urls.map { Item(url: $0) })
+        if wasEmpty, let first = playlist.indices.first { play(at: first) }
+        persist()
+        onChange?()
+    }
+
+    func play(at index: Int) {
+        guard playlist.indices.contains(index) else { return }
+        currentIndex = index
+        errorMessage = nil
+        source.load(url: playlist[index].url, autoplay: false)   // applyPlayback decides
+        wantsPlay = true
+        applyPlayback()
+        UserDefaults.standard.set(0.0, forKey: Key.time)   // new item starts at the beginning
+        persist()
+        onChange?()
+    }
+
+    /// Start/stop the actual decode based on AR being active, user intent, and a visible position.
+    private func applyPlayback() {
+        let shouldPlay = arActive && wantsPlay && position != .off && source.hasMedia
+        if shouldPlay { source.play() } else { source.pause() }
+        playing = source.isPlaying
+    }
+
+    /// Called by the coordinator on AR start/stop — the video only plays while AR is running.
+    func setAR(active: Bool) { arActive = active; applyPlayback() }
+
+    func removeItem(_ id: Item.ID) {
+        guard let idx = playlist.firstIndex(where: { $0.id == id }) else { return }
+        let wasCurrent = idx == currentIndex
+        playlist.remove(at: idx)
+        if let c = currentIndex {
+            if idx < c { currentIndex = c - 1 }
+            else if wasCurrent { currentIndex = nil; source.stop(); playing = false }
+        }
+        persist()
+        onChange?()
+    }
+
+    func move(from: IndexSet, to: Int) {
+        let currentID = currentIndex.flatMap { playlist.indices.contains($0) ? playlist[$0].id : nil }
+        playlist.move(fromOffsets: from, toOffset: to)
+        currentIndex = currentID.flatMap { id in playlist.firstIndex { $0.id == id } }
+        persist()
+        onChange?()
+    }
+
+    func next() {
+        guard let c = currentIndex, c + 1 < playlist.count else { return }
+        play(at: c + 1)
+    }
+
+    func previous() {
+        guard let c = currentIndex, c - 1 >= 0 else { return }
+        play(at: c - 1)
+    }
+
+    // MARK: Transport
+
+    func togglePlay() { wantsPlay.toggle(); applyPlayback(); saveTime() }
+    func skip(_ seconds: Double) { source.seek(by: seconds) }
+    func clearError() { errorMessage = nil }
+
+    /// Stop playing and hide the media screen, but KEEP the playlist. The current video stays loaded
+    /// at its position, so choosing a position again + Play resumes where you left off.
+    func stop() {
+        wantsPlay = false
+        position = .off
+        applyPlayback()   // pauses (position is .off)
+        saveTime()
+        persist()
+        onChange?()
+    }
+
+    /// Empty the playlist and unload everything (an explicit "clear", separate from Stop).
+    func clearPlaylist() {
+        source.stop()
+        playlist = []
+        currentIndex = nil
+        wantsPlay = false
+        playing = false
+        UserDefaults.standard.set(0.0, forKey: Key.time)
+        persist()
         onChange?()
     }
 
     func setPosition(_ p: Position) {
         position = p
-        if p == .off { source.pause(); playing = false }
+        applyPlayback()   // .off pauses; a visible position resumes if the user wants it and AR is on
+        persist()
         onChange?()
     }
 
-    func togglePlay() {
-        source.togglePlay()
-        playing = source.isPlaying
+    // MARK: Rendering
+
+    /// Full-FOV stretches over the whole display via the renderer's fullscreen blit; returns that
+    /// texture provider when Full view is active.
+    func fullscreenProvider() -> (() -> MTLTexture?)? {
+        guard position == .fullFOV, source.isReady else { return nil }   // isReady → no blank box
+        return { [weak source] in source?.latestTexture }
     }
 
-    func stop() {
-        source.stop()
-        fileName = nil
-        position = .off
-        playing = false
-        onChange?()
-    }
-
-    /// The head-locked `SceneScreen` for the current position, or nil when off / no media loaded.
+    /// The head-locked corner `SceneScreen` for positions 1–4, or nil (off / not-ready / full-FOV).
     func sceneScreen() -> SceneScreen? {
-        guard position != .off, source.hasMedia else { return nil }
+        guard position != .off, position != .fullFOV, source.isReady else { return nil }
         let slot = Self.slot(for: position)
         let aspect = max(0.1, source.aspect)
-        // Fit the video inside the slot box, preserving aspect.
         let width = (aspect >= slot.maxW / slot.maxH) ? slot.maxW : slot.maxH * aspect
         return SceneScreen(
             id: sceneID,
@@ -86,8 +234,6 @@ final class MediaPlayerManager: ObservableObject {
             textureProvider: { [weak source] in source?.latestTexture })
     }
 
-    /// FOV geometry. Corner boxes match the window-hotspot slots (vertical FOV ≈ 23°, horizontal ≈
-    /// 40° at per-eye 1920×1080); full-FOV fills that box centred.
     private static func slot(for p: Position) -> Slot {
         switch p {
         case .topLeft:     return Slot(yaw:  0.2496, pitch:  0.1292, distance: 1.4, maxW: 0.26, maxH: 0.17)
@@ -95,7 +241,7 @@ final class MediaPlayerManager: ObservableObject {
         case .bottomLeft:  return Slot(yaw:  0.2496, pitch: -0.1292, distance: 1.4, maxW: 0.26, maxH: 0.17)
         case .bottomRight: return Slot(yaw: -0.2496, pitch: -0.1292, distance: 1.4, maxW: 0.26, maxH: 0.17)
         case .fullFOV, .off:
-            return Slot(yaw: 0, pitch: 0, distance: 1.4, maxW: 1.02, maxH: 0.57)
+            return Slot(yaw: 0, pitch: 0, distance: 1.4, maxW: 1.40, maxH: 0.78)
         }
     }
 }

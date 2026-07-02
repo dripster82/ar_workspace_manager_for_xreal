@@ -164,6 +164,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var windowPickerHotKeyRef: EventHotKeyRef?
     private var recalibrateHotKeyRef: EventHotKeyRef?
     private var pushToTalkHotKeyRef: EventHotKeyRef?
+    private var mediaPos1Ref, mediaPos2Ref, mediaPos3Ref, mediaPos4Ref, mediaPos5Ref: EventHotKeyRef?
+    private var mediaStopRef, mediaPlayPauseRef, mediaRewindRef, mediaSkipRef: EventHotKeyRef?
     private static let recenterHotKeyID: UInt32 = 1
     private static let stopARHotKeyID: UInt32 = 2
     private static let helpHotKeyID: UInt32 = 3
@@ -183,6 +185,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private static let windowPickerHotKeyID: UInt32 = 17
     private static let recalibrateHotKeyID: UInt32 = 18
     private static let pushToTalkHotKeyID: UInt32 = 19
+    // Media player: ⌃⌥1–5 = Top-left / Top-right / Bottom-left / Bottom-right / Full view,
+    // ⌃⌥0 = Stop, ⌃⌥K = Play/Pause, ⌃⌥← = Rewind 10s, ⌃⌥→ = Skip 10s.
+    private static let mediaPos1ID: UInt32 = 20
+    private static let mediaPos2ID: UInt32 = 21
+    private static let mediaPos3ID: UInt32 = 22
+    private static let mediaPos4ID: UInt32 = 23
+    private static let mediaPos5ID: UInt32 = 24
+    private static let mediaStopID: UInt32 = 25
+    private static let mediaPlayPauseID: UInt32 = 26
+    private static let mediaRewindID: UInt32 = 27
+    private static let mediaSkipID: UInt32 = 28
 
     private func registerGlobalRecenterHotKey() {
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
@@ -226,6 +239,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 case AppDelegate.windowPickerHotKeyID: delegate.windowPicker.toggle()
                 case AppDelegate.recalibrateHotKeyID: delegate.coordinator.requestCalibration()
                 case AppDelegate.pushToTalkHotKeyID: delegate.coordinator.startPushToTalk()
+                case AppDelegate.mediaPos1ID: delegate.coordinator.setMediaPosition(.topLeft)
+                case AppDelegate.mediaPos2ID: delegate.coordinator.setMediaPosition(.topRight)
+                case AppDelegate.mediaPos3ID: delegate.coordinator.setMediaPosition(.bottomLeft)
+                case AppDelegate.mediaPos4ID: delegate.coordinator.setMediaPosition(.bottomRight)
+                case AppDelegate.mediaPos5ID: delegate.coordinator.setMediaPosition(.fullFOV)
+                case AppDelegate.mediaStopID: delegate.coordinator.stopMedia()
+                case AppDelegate.mediaPlayPauseID: delegate.coordinator.toggleMediaPlay()
+                case AppDelegate.mediaRewindID: delegate.coordinator.mediaSkip(-10)
+                case AppDelegate.mediaSkipID: delegate.coordinator.mediaSkip(10)
                 case AppDelegate.quitHotKeyID: NSApp.terminate(nil)
                 default: break
                 }
@@ -260,6 +282,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         register(kVK_ANSI_W, AppDelegate.windowPickerHotKeyID, &windowPickerHotKeyRef)
         register(kVK_ANSI_B, AppDelegate.recalibrateHotKeyID, &recalibrateHotKeyRef)
         register(kVK_ANSI_A, AppDelegate.pushToTalkHotKeyID, &pushToTalkHotKeyRef)
+        register(kVK_ANSI_1, AppDelegate.mediaPos1ID, &mediaPos1Ref)
+        register(kVK_ANSI_2, AppDelegate.mediaPos2ID, &mediaPos2Ref)
+        register(kVK_ANSI_3, AppDelegate.mediaPos3ID, &mediaPos3Ref)
+        register(kVK_ANSI_4, AppDelegate.mediaPos4ID, &mediaPos4Ref)
+        register(kVK_ANSI_5, AppDelegate.mediaPos5ID, &mediaPos5Ref)
+        register(kVK_ANSI_0, AppDelegate.mediaStopID, &mediaStopRef)
+        register(kVK_ANSI_K, AppDelegate.mediaPlayPauseID, &mediaPlayPauseRef)
+        register(kVK_LeftArrow, AppDelegate.mediaRewindID, &mediaRewindRef)
+        register(kVK_RightArrow, AppDelegate.mediaSkipID, &mediaSkipRef)
     }
 
     /// A plain Escape hotkey is registered only while it's actually wanted — when an alarm is

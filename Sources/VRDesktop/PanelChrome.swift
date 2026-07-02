@@ -14,7 +14,7 @@ enum PanelTheme {
 /// Top-level destinations in the sidebar.
 enum PanelRoute: String, CaseIterable, Identifiable {
     case dashboard, workspace, hudWidgets
-    case windowRules, voiceCommands
+    case media, windowRules, voiceCommands
     case settings, diagnostics
     var id: String { rawValue }
 
@@ -23,6 +23,7 @@ enum PanelRoute: String, CaseIterable, Identifiable {
         case .dashboard: return "Dashboard"
         case .workspace: return "Workspace"
         case .hudWidgets: return "HUD Widgets"
+        case .media: return "Media"
         case .windowRules: return "Window Rules"
         case .voiceCommands: return "Voice Commands"
         case .settings: return "Settings"
@@ -34,6 +35,7 @@ enum PanelRoute: String, CaseIterable, Identifiable {
         case .dashboard: return "Overview and quick actions"
         case .workspace: return "Arrange the displays in your workspace"
         case .hudWidgets: return "Customise your HUD (always in view)"
+        case .media: return "Play videos on a head-locked screen"
         case .windowRules: return "Automatically place apps on screens"
         case .voiceCommands: return "Hands-free control"
         case .settings: return "Preferences and advanced settings"
@@ -45,6 +47,7 @@ enum PanelRoute: String, CaseIterable, Identifiable {
         case .dashboard: return "square.grid.2x2"
         case .workspace: return "rectangle.3.group"
         case .hudWidgets: return "square.text.square"
+        case .media: return "play.rectangle"
         case .windowRules: return "wand.and.rays"
         case .voiceCommands: return "mic"
         case .settings: return "gearshape"
@@ -103,7 +106,7 @@ struct SidebarView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    group("MAIN", [.dashboard, .workspace, .hudWidgets])
+                    group("MAIN", [.dashboard, .workspace, .hudWidgets, .media])
                     group("AUTOMATION", [.windowRules, .voiceCommands])
                     group("SYSTEM", [.settings, .diagnostics])
                 }

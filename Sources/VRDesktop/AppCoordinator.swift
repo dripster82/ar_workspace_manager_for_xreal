@@ -364,6 +364,7 @@ final class AppCoordinator: ObservableObject {
         if let device = renderer?.device {
             let mp = MediaPlayerManager(device: device)
             mp.onChange = { [weak self] in self?.applyRenderedScene() }
+            mp.onError = { [weak self] msg in self?.statusMessage = msg }
             mediaPlayer = mp
         }
         widgetManager = WidgetManager(renderer: renderer)
@@ -1903,6 +1904,8 @@ final class AppCoordinator: ObservableObject {
         }
 
         renderer.showLabels = labelsVisible
+        mediaPlayer?.setAR(active: true)   // media only plays while AR runs
+        renderer.setFullscreenMedia(mediaPlayer?.fullscreenProvider())
         var initialScreens = assembleScene(pairs)
         if let media = mediaPlayer?.sceneScreen() { initialScreens.append(media) }
         renderer.setScreens(initialScreens)
@@ -2184,7 +2187,9 @@ final class AppCoordinator: ObservableObject {
         guard let renderer, arActive,
               let workspace = workspaceStore.activeWorkspace else { return }
         // The head-locked media player (if pinned) renders over everything else, and stays even in
-        // passthrough mode (workspace screens hidden).
+        // passthrough mode (workspace screens hidden). Full view goes through the fullscreen blit.
+        renderer.setFullscreenMedia(mediaPlayer?.fullscreenProvider())
+        updateFullscreenCaptureIdle()
         let media = mediaPlayer?.sceneScreen()
         if screensHidden {
             renderer.setScreens([media].compactMap { $0 })
@@ -2204,25 +2209,89 @@ final class AppCoordinator: ObservableObject {
 
     // MARK: Media player (head-locked video)
 
-    /// Pick a video file (local disk or a mounted network drive) and play it in the pinned FOV screen.
+    /// Add video file(s) to the playlist (local disk or a mounted network drive). No
+    /// `allowedContentTypes` filter: matching a UTType per file makes the panel crawl (it resolves
+    /// every item's type, brutal over the network). Shown async via `begin` so it never blocks the
+    /// main thread / render loop.
     func openMediaFile() {
-        let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.allowedContentTypes = [.movie, .video, .audiovisualContent, .mpeg4Movie, .quickTimeMovie]
-        panel.allowsOtherFileTypes = true   // let unusual containers (e.g. .mkv) through too
-        panel.prompt = "Play"
-        panel.message = "Choose a video file — on this Mac or a mounted network drive."
-        guard panel.runModal() == .OK, let url = panel.url else { return }
         guard let mediaPlayer else { statusMessage = "Media player unavailable"; return }
-        mediaPlayer.open(url: url)
-        statusMessage = arActive ? "Playing \(url.lastPathComponent)"
-                                 : "Loaded \(url.lastPathComponent) — start AR to see it"
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.canDownloadUbiquitousContents = false
+        panel.prompt = "Add"
+        panel.message = "Choose video file(s) — on this Mac or a mounted network drive."
+        panel.begin { [weak self] response in
+            guard response == .OK, !panel.urls.isEmpty, let self else { return }
+            mediaPlayer.addFiles(panel.urls)
+            self.statusMessage = self.arActive ? "Added \(panel.urls.count) to the playlist"
+                                               : "Added \(panel.urls.count) — start AR to watch"
+        }
+    }
+
+    // Full-view video covers the whole FOV, so the captured screens behind it aren't visible — after a
+    // short grace period we stop the capture streams (saves CPU/battery and drops the screen-recording
+    // indicator while watching). Restarted the moment full view is left or AR stops.
+    private var fullscreenCaptureTimer: Timer?
+    private var capturesThrottledForMedia = false
+
+    private func updateFullscreenCaptureIdle() {
+        let fullVideo = arActive && mediaPlayer?.position == .fullFOV && (mediaPlayer?.hasMedia ?? false)
+        if fullVideo {
+            if capturesThrottledForMedia || fullscreenCaptureTimer != nil { return }
+            fullscreenCaptureTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, self.arActive, self.mediaPlayer?.position == .fullFOV else { return }
+                    self.fullscreenCaptureTimer = nil
+                    self.capturesThrottledForMedia = true
+                    // Throttle to ~1 fps — NOT stop. updateConfiguration is seamless (no stream
+                    // teardown = no blip); the video keeps playing at full rate via AVPlayer.
+                    for c in self.captures.values { c.setFrameRate(1) }
+                    DebugLog.shared.log("media: throttled \(self.captures.count) capture(s) to 1fps for full-view video")
+                }
+            }
+        } else {
+            endFullscreenCaptureIdle()
+        }
+    }
+
+    /// Cancel the pending idle timer and restore the normal capture frame rate.
+    private func endFullscreenCaptureIdle() {
+        fullscreenCaptureTimer?.invalidate(); fullscreenCaptureTimer = nil
+        guard capturesThrottledForMedia else { return }
+        capturesThrottledForMedia = false
+        for c in captures.values { c.restoreFrameRate() }
+        DebugLog.shared.log("media: restored capture frame rate after full-view video")
     }
 
     func setMediaPosition(_ p: MediaPlayerManager.Position) { mediaPlayer?.setPosition(p) }
-    func toggleMediaPlay() { mediaPlayer?.togglePlay() }
-    func stopMedia() { mediaPlayer?.stop() }
+    func toggleMediaPlay() { mediaPlayer?.togglePlay(); flashMediaProgress() }
+    func mediaSkip(_ seconds: Double) { mediaPlayer?.skip(seconds); flashMediaProgress() }
+    func mediaNext() { mediaPlayer?.next(); flashMediaProgress() }
+    func mediaPrevious() { mediaPlayer?.previous(); flashMediaProgress() }
+    func stopMedia() { mediaPlayer?.stop(); flashMediaProgress() }   // stop + hide, keeps the playlist
+    func clearMediaPlaylist() { mediaPlayer?.clearPlaylist() }
+
+    /// Flash the in-AR progress bar for ~2s (on skip / play-pause / stop). No-op outside AR. Rendered
+    /// on the next runloop tick so a just-issued seek's new position is reflected.
+    private var mediaProgressHideTimer: Timer?
+    private func flashMediaProgress() {
+        guard arActive, mediaPlayer?.hasMedia == true else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let renderer = self.renderer, let mp = self.mediaPlayer else { return }
+            let p = mp.progress
+            let r = ImageRenderer(content: MediaProgressView(current: p.current, duration: p.duration,
+                                                             playing: mp.playing))
+            r.scale = 2; r.isOpaque = false
+            if let image = r.cgImage { renderer.setMediaProgressImage(image) }
+        }
+        mediaProgressHideTimer?.invalidate()
+        let t = Timer(timeInterval: 2.0, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.renderer?.clearMediaProgress() }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        mediaProgressHideTimer = t
+    }
 
     /// Result of a window-move attempt (⌃⌥W picker).
     enum WindowMoveResult { case moved(String), noTarget, failed(String) }
@@ -3440,6 +3509,8 @@ final class AppCoordinator: ObservableObject {
     func stopAR(snapshotLayout: Bool = true) {
         guard arActive else { return }
         DebugLog.shared.log("stopAR(snapshotLayout: \(snapshotLayout))")
+        mediaPlayer?.setAR(active: false)              // pause the video when AR stops
+        endFullscreenCaptureIdle()                     // undo any fullscreen capture pause
         if isRecording { toggleRecording() } // finalise any in-progress recording
         // Record which apps are on which screen BEFORE the virtual displays are destroyed
         // (destroying them makes macOS scatter their windows onto other displays).

@@ -13,10 +13,25 @@ import QuartzCore
 public final class MediaPlayerSource: @unchecked Sendable {
     public let player = AVPlayer()
 
+    /// Called on the main queue when a file can't be played (unsupported container/codec, missing
+    /// file, no video track, …) with a user-facing message.
+    public var onError: ((String) -> Void)?
+    /// Called on the main queue when the current item plays to its end (for playlist auto-advance).
+    public var onEnded: (() -> Void)?
+    /// Called on the main queue when the item becomes ready to play (a frame is available) — lets the
+    /// owner rebuild the scene so the screen only appears once there's real video, not a blank box.
+    public var onReady: (() -> Void)?
+
+    /// True once the current item is ready to play (has decodable frames). False while loading or on
+    /// failure — used to avoid drawing an empty/garbage screen.
+    public var isReady: Bool { player.currentItem?.status == .readyToPlay }
+
     private let device: MTLDevice
     private var textureCache: CVMetalTextureCache!
     private let lock = NSLock()
     private var output: AVPlayerItemVideoOutput?
+    private var statusObs: NSKeyValueObservation?
+    private var endObs: NSObjectProtocol?
     private var latest: (texture: MTLTexture, backing: CVMetalTexture)?
     /// Keep a few recent CVMetalTexture backings alive so a texture handed to the renderer isn't freed
     /// under an in-flight GPU frame (same lifetime concern as CaptureSource).
@@ -33,8 +48,28 @@ public final class MediaPlayerSource: @unchecked Sendable {
     private func setAspect(_ a: Float) { lock.lock(); _aspect = a; lock.unlock() }
     public var hasMedia: Bool { player.currentItem != nil }
 
-    /// Load a file URL and begin playing. Forces BGRA output so the frame is a single Metal texture.
-    public func load(url: URL) {
+    /// Seconds into the current item (0 if none). Used to persist resume position.
+    public var currentTime: Double {
+        let t = player.currentTime().seconds
+        return t.isFinite ? t : 0
+    }
+
+    /// Total length of the current item in seconds (0 if unknown / no item).
+    public var duration: Double {
+        let d = player.currentItem?.duration.seconds ?? 0
+        return d.isFinite ? d : 0
+    }
+
+    private var pendingSeek: Double = 0
+
+    /// Load a file URL. Forces BGRA output so the frame is a single Metal texture. `startAt` seeks to a
+    /// saved position once the item is ready; `autoplay` false loads it paused (for resume-on-launch).
+    /// Reports load failures (e.g. unsupported containers like .mkv) via `onError`.
+    public func load(url: URL, startAt: Double = 0, autoplay: Bool = true) {
+        statusObs?.invalidate()
+        if let endObs { NotificationCenter.default.removeObserver(endObs) }
+        pendingSeek = startAt
+
         let item = AVPlayerItem(url: url)
         let attrs: [String: Any] = [
             kCVPixelBufferMetalCompatibilityKey as String: true,
@@ -43,9 +78,44 @@ public final class MediaPlayerSource: @unchecked Sendable {
         let out = AVPlayerItemVideoOutput(pixelBufferAttributes: attrs)
         item.add(out)
         lock.lock(); output = out; latest = nil; recentBackings.removeAll(); lock.unlock()
+
+        // Surface a load failure with a helpful message (macOS/AVFoundation can't open Matroska/MKV,
+        // AVI, WMV, FLV, WebM and some codecs — the frame would otherwise just stay blank).
+        statusObs = item.observe(\.status, options: [.new]) { [weak self] item, _ in
+            guard let self else { return }
+            if item.status == .readyToPlay {
+                if self.pendingSeek > 0 {
+                    let t = self.pendingSeek; self.pendingSeek = 0
+                    self.player.seek(to: CMTime(seconds: t, preferredTimescale: 600),
+                                     toleranceBefore: .zero, toleranceAfter: .zero)
+                }
+                DispatchQueue.main.async { self.onReady?() }
+            }
+            guard item.status == .failed else { return }
+            let ext = url.pathExtension.uppercased()
+            let unsupported = ["MKV", "AVI", "WMV", "FLV", "WEBM", "TS", "M2TS", "OGV"]
+            let msg = unsupported.contains(ext)
+                ? "\(ext) isn't supported by macOS video — convert it to MP4 or MOV (H.264/HEVC)."
+                : (item.error?.localizedDescription ?? "Couldn't open this video.")
+            DispatchQueue.main.async { self.onError?(msg) }
+        }
+        endObs = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
+        ) { [weak self] _ in self?.onEnded?() }
+
         player.replaceCurrentItem(with: item)
-        player.play()
+        if autoplay { player.play() } else { player.pause() }
         resolveAspect(item: item)
+    }
+
+    /// Seek by a relative offset in seconds (negative = back), clamped to the item's bounds.
+    public func seek(by seconds: Double) {
+        guard let item = player.currentItem else { return }
+        let dur = item.duration.seconds
+        let now = player.currentTime().seconds
+        let target = max(0, min(now + seconds, dur.isFinite ? dur - 0.1 : now + seconds))
+        player.seek(to: CMTime(seconds: target, preferredTimescale: 600),
+                    toleranceBefore: .zero, toleranceAfter: .zero)
     }
 
     public func play() { player.play() }
@@ -56,6 +126,8 @@ public final class MediaPlayerSource: @unchecked Sendable {
     public func stop() {
         player.pause()
         player.replaceCurrentItem(with: nil)
+        statusObs?.invalidate(); statusObs = nil
+        if let endObs { NotificationCenter.default.removeObserver(endObs); self.endObs = nil }
         lock.lock(); output = nil; latest = nil; recentBackings.removeAll(); lock.unlock()
     }
 

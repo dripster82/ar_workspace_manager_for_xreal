@@ -28,6 +28,11 @@ final class WindowDragMonitor {
 
     func start() {
         guard monitors.isEmpty else { return }
+        // Cap AX messaging: `handleDown` hit-tests the window under the cursor on EVERY left-click via
+        // AXUIElementCopyElementAtPosition. If the target is slow or out-of-process (e.g. the Open/Save
+        // panel's XPC service), the default ~6s AX timeout would block the main thread on every click.
+        // A short cap makes the worst case negligible (drag hit-test is best-effort anyway).
+        AXUIElementSetMessagingTimeout(systemWide, 0.15)
         let down: NSEvent.EventTypeMask = [.leftMouseDown]
         let drag: NSEvent.EventTypeMask = [.leftMouseDragged]
         let up: NSEvent.EventTypeMask = [.leftMouseUp]

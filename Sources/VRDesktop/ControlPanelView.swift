@@ -75,6 +75,7 @@ struct ControlPanelView: View {
         case .dashboard: dashboardPage
         case .workspace: workspacePage
         case .hudWidgets: hudWidgetsPage
+        case .media: mediaPage
         case .windowRules:
             ComingSoon(title: "Window Rules",
                        detail: "Automatically place apps on screens. The rule editor is coming; for "
@@ -82,6 +83,17 @@ struct ControlPanelView: View {
         case .voiceCommands: voiceCommandsPage
         case .settings: settingsPage
         case .diagnostics: diagnosticsSection
+        }
+    }
+
+    @ViewBuilder private var mediaPage: some View {
+        if let media = coordinator.mediaPlayer {
+            VStack(alignment: .leading, spacing: 14) {
+                card("Player", "play.rectangle") { MediaPlayerControls(media: media, coordinator: coordinator) }
+                card("Playlist", "list.bullet") { MediaPlaylist(media: media, coordinator: coordinator) }
+            }
+        } else {
+            ComingSoon(title: "Media", detail: "The renderer isn't ready yet — try again in a moment.")
         }
     }
 
@@ -131,11 +143,6 @@ struct ControlPanelView: View {
                     quickAction("Record", "record.circle", "⌃⌥R", arOnly: true) { coordinator.toggleRecording() }
                     quickAction("Mute Mic", "mic.slash", "⌃⌥M", arOnly: true) { coordinator.toggleMicMute() }
                     quickAction("Help", "keyboard", "⌃⌥H") { coordinator.onToggleHelp?() }
-                }
-            }
-            if let media = coordinator.mediaPlayer {
-                card("Media", "play.rectangle") {
-                    MediaPlayerControls(media: media, coordinator: coordinator)
                 }
             }
         }
@@ -2474,28 +2481,41 @@ private struct IMUDiagnosticsRows: View {
     }
 }
 
-/// Head-locked video player controls: pick a file, choose one of the 5 FOV positions, play/pause.
+/// Head-locked video player: transport controls + the 5 FOV positions. The playlist lives in
+/// `MediaPlaylist`. Global shortcuts (AR active): ⌃⌥1–5 positions, ⌃⌥0 stop, ⌃⌥K play/pause,
+/// ⌃⌥← / ⌃⌥→ rewind / skip 10s.
 struct MediaPlayerControls: View {
     @ObservedObject var media: MediaPlayerManager
     let coordinator: AppCoordinator
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Button("Open video…") { coordinator.openMediaFile() }.controlSize(.small)
-                if media.hasMedia {
-                    Button(media.playing ? "Pause" : "Play") { coordinator.toggleMediaPlay() }
-                        .controlSize(.small)
-                    Button("Stop") { coordinator.stopMedia() }.controlSize(.small)
+            if let error = media.errorMessage {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    Text(error).font(.caption).fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 4)
+                    Button { media.clearError() } label: { Image(systemName: "xmark.circle.fill") }
+                        .buttonStyle(.plain).foregroundStyle(.secondary)
                 }
+                .padding(8)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color.orange.opacity(0.15)))
+            }
+            Text(media.currentName ?? "Nothing playing")
+                .font(.caption).foregroundStyle(media.hasMedia ? .primary : .secondary)
+                .lineLimit(1).truncationMode(.middle)
+
+            HStack(spacing: 6) {
+                transport("backward.end.fill", "Previous (in playlist)") { coordinator.mediaPrevious() }
+                transport("gobackward.10", "Rewind 10s · ⌃⌥←") { coordinator.mediaSkip(-10) }
+                transport(media.playing ? "pause.fill" : "play.fill", "Play/Pause · ⌃⌥K") { coordinator.toggleMediaPlay() }
+                transport("goforward.10", "Skip 10s · ⌃⌥→") { coordinator.mediaSkip(10) }
+                transport("forward.end.fill", "Next (in playlist)") { coordinator.mediaNext() }
+                transport("stop.fill", "Stop · ⌃⌥0") { coordinator.stopMedia() }
                 Spacer()
             }
-            if let name = media.fileName {
-                Text(name).font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-            } else {
-                Text("Local file or a mounted network drive.")
-                    .font(.caption2).foregroundStyle(.secondary)
-            }
+            .disabled(!media.hasMedia)
+
             HStack(spacing: 8) {
                 Text("Position").font(.caption)
                 Picker("", selection: Binding(get: { media.position },
@@ -2503,10 +2523,93 @@ struct MediaPlayerControls: View {
                     ForEach(MediaPlayerManager.Position.allCases) { Text($0.label).tag($0) }
                 }.labelsHidden().fixedSize()
                 Spacer()
+                Text("⌃⌥1–5").font(.caption2).foregroundStyle(.secondary)
             }
             if !coordinator.arActive {
                 Text("Start AR to see the video in the glasses.")
                     .font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func transport(_ symbol: String, _ help: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) { Image(systemName: symbol).frame(width: 22) }
+            .buttonStyle(.bordered).controlSize(.small).help(help)
+    }
+}
+
+/// The transient in-AR progress bar, rasterized to a texture and shown for ~2s on transport actions.
+struct MediaProgressView: View {
+    let current: Double
+    let duration: Double
+    let playing: Bool
+
+    private func fmt(_ s: Double) -> String {
+        guard s.isFinite, s >= 0 else { return "0:00" }
+        let t = Int(s.rounded()); return String(format: "%d:%02d", t / 60, t % 60)
+    }
+
+    var body: some View {
+        let frac = duration > 0 ? min(1, max(0, current / duration)) : 0
+        let barW: CGFloat = 380
+        return HStack(spacing: 14) {
+            Image(systemName: playing ? "play.fill" : "pause.fill").font(.system(size: 15))
+            Text(fmt(current)).font(.system(.subheadline, design: .rounded).monospacedDigit())
+                .frame(width: 54, alignment: .trailing)
+            ZStack(alignment: .leading) {
+                Capsule().fill(.white.opacity(0.25)).frame(width: barW, height: 8)
+                Capsule().fill(.white).frame(width: max(8, barW * frac), height: 8)
+            }.frame(width: barW)
+            Text(fmt(duration)).font(.system(.subheadline, design: .rounded).monospacedDigit())
+                .frame(width: 54, alignment: .leading)
+        }
+        .padding(.horizontal, 24).padding(.vertical, 14)
+        .background(Color.black.opacity(0.55), in: Capsule())
+        .overlay(Capsule().strokeBorder(.white.opacity(0.15)))
+        .foregroundStyle(.white)
+    }
+}
+
+/// The video playlist: add files, click to play, reorder, remove. Plays through automatically.
+struct MediaPlaylist: View {
+    @ObservedObject var media: MediaPlayerManager
+    let coordinator: AppCoordinator
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Button("Add videos…") { coordinator.openMediaFile() }.controlSize(.small)
+                Spacer()
+                if !media.playlist.isEmpty {
+                    Text("\(media.playlist.count) item\(media.playlist.count == 1 ? "" : "s")")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    Button("Clear") { coordinator.clearMediaPlaylist() }.controlSize(.small)
+                }
+            }
+            if media.playlist.isEmpty {
+                Text("Add local or network-drive videos. They play one after another. "
+                     + "(MP4/MOV, H.264/HEVC — not MKV/AVI.)")
+                    .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            } else {
+                List {
+                    ForEach(Array(media.playlist.enumerated()), id: \.element.id) { idx, item in
+                        HStack(spacing: 8) {
+                            Image(systemName: idx == media.currentIndex
+                                  ? (media.playing ? "play.fill" : "pause.fill") : "film")
+                                .font(.caption2)
+                                .foregroundStyle(idx == media.currentIndex ? Color.accentColor : .secondary)
+                            Text(item.name).font(.caption).lineLimit(1).truncationMode(.middle)
+                            Spacer()
+                            Button { coordinator.mediaPlayer?.removeItem(item.id) } label: {
+                                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                            }.buttonStyle(.plain)
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture { coordinator.mediaPlayer?.play(at: idx) }
+                    }
+                    .onMove { coordinator.mediaPlayer?.move(from: $0, to: $1) }
+                }
+                .listStyle(.plain).frame(height: min(260, CGFloat(media.playlist.count) * 30 + 12))
             }
         }
     }
