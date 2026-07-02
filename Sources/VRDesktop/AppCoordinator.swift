@@ -544,6 +544,10 @@ final class AppCoordinator: ObservableObject {
         colorSyncWatchdog.onRunawayDetected = { [weak self] cpu in
             self?.presentColorSyncRunawayAlert(cpu: cpu)
         }
+        colorSyncWatchdog.onRecovered = { [weak self] in
+            self?.colorSyncRunawayWarning = false
+            self?.statusMessage = "ColorSync recovered."
+        }
         colorSyncWatchdog.setEnabled(colorSyncAlertEnabled)
         startChurnSession()   // begin this session's display-churn record (Diagnostics)
         // Populate the layout with the currently-connected monitors (positioning-only/green).
@@ -3321,21 +3325,9 @@ final class AppCoordinator: ObservableObject {
         alert.runModal()
     }
 
-    /// Manually run the watchdog's remediation: sweep orphaned ColorSync profiles + bounce the
-    /// daemons. Exposed as a Diagnostics button for when the user wants to clear it on demand.
-    func cleanColorSyncNow() {
-        colorSyncRunawayWarning = false
-        let removed = SystemHealth.sweepOrphanProfiles()
-        statusMessage = "Cleared \(removed) stale ColorSync profile(s); restarting display colour service…"
-        PrivilegedHelperClient.shared.bounceColorSyncDaemons { [weak self] ok in
-            Task { @MainActor in
-                self?.statusMessage = ok
-                    ? "ColorSync reset — should settle in a few seconds."
-                    : "Swept profiles; couldn't restart the daemon (approve the helper in Login Items)."
-                self?.refreshHealthNow()
-            }
-        }
-    }
+    // "Clean ColorSync now" was removed 2026-07-02: its daemon bounce is proven futile against the
+    // self-loop (see ColorSyncWatchdog), and the orphan-profile sweep it also did already runs
+    // automatically at launch and on Stop AR — the button was a false affordance.
 
     /// Clear the WindowServer saved-arrangement registry in BOTH locations: the user-level ByHost
     /// plist (plain delete) and the SYSTEM-level /Library/Preferences copy (root-owned — asks for an

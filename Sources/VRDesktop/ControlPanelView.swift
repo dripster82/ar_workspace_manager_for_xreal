@@ -1351,7 +1351,6 @@ struct ControlPanelView: View {
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
                 Button("Refresh") { coordinator.refreshHealthNow() }.controlSize(.small)
-                Button("Clean ColorSync now") { coordinator.cleanColorSyncNow() }.controlSize(.small)
                 Button("Clear saved configs…") { showClearConfigsConfirm = true }.controlSize(.small)
             }
             .confirmationDialog("Clear saved display arrangements?",

@@ -23,6 +23,9 @@ final class ColorSyncWatchdog {
     /// Called once per runaway episode when the daemon has been pinned for the sustained window.
     /// Resets (and can fire again) only after the CPU fully recovers (< 25%).
     var onRunawayDetected: ((Double) -> Void)?
+    /// Called when a previously-alerted episode fully recovers (CPU back under 25%) — e.g. the user
+    /// replugged the glasses — so the app can clear its warning banner.
+    var onRecovered: (() -> Void)?
 
     private var timer: Timer?
     private var consecutiveHigh = 0
@@ -64,7 +67,11 @@ final class ColorSyncWatchdog {
     private func evaluate(cpu: Double) {
         guard cpu >= pinThreshold else {
             consecutiveHigh = 0
-            if cpu < 25 { alertedThisEpisode = false }   // fully recovered — next episode alerts again
+            if cpu < 25, alertedThisEpisode {            // fully recovered — next episode alerts again
+                alertedThisEpisode = false
+                DebugLog.shared.log("ColorSync alert: recovered (\(Int(cpu))%)")
+                onRecovered?()
+            }
             return
         }
         consecutiveHigh += 1
