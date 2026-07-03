@@ -347,3 +347,19 @@ Baseline established: **Nebula = cyclic, self-recovering, indefinitely. ARWM = t
 (47+ min, no dips, twice fatal) is session-specific to us.** Next: the identical monitored run with
 ARWM only (Step 2), then knob isolation (Step 3: 2-screen workspace, backgrounds off, no switching)
 if the difference holds.
+
+### Wedge-onset observation (2026-07-03 15:14) — reconfiguring on a HOT daemon tips it
+
+Cleanest onset capture yet: after an app crash (15:01) the daemon sat *elevated* (20–45%,
+oscillating) for ~12 min digesting the teardown; the app relaunched at 15:14:03 and created its
+virtual displays; **ten seconds later (15:14:20) the daemon hard-pinned at ~72% and stayed wedged
+13+ min** (the 6-min alert fired correctly — first true positive).
+
+Working hypothesis for burst-vs-wedge: a display reconfiguration landing on an **already-hot**
+daemon wedges it; the same reconfiguration on a cold daemon just bursts. Fits Nebula (creates its
+2 displays once, from cold, never reconfigures → only ever bursts) and both crash days (crash →
+teardown churn → elevated daemon → next reconfiguration → wedge).
+
+Candidate mitigation to test: before creating/destroying virtual displays (AR start/stop,
+workspace switch, app relaunch), sample `colorsync.displayservices`; if it's hot (say >20%), wait
+for it to settle (a few seconds, bounded) before reconfiguring — deny the wedge its trigger window.
