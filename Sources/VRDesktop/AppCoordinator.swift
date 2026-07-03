@@ -1110,16 +1110,31 @@ final class AppCoordinator: ObservableObject {
         updateCheckMessage = message
     }
 
-    /// Choose the right .dmg for this Mac. Releases ship per-arch assets named with friendly labels
-    /// (…-Apple-Silicon.dmg / …-Intel.dmg, from 0.7.x) — earlier dual-arch cuts used -arm64/-x86_64,
-    /// so both spellings match; fall back to any .dmg (older single-asset releases).
+    /// True when this Mac's HARDWARE is Apple Silicon — detected at runtime, not compile time, so an
+    /// Intel build running under Rosetta still updates to the native Apple Silicon DMG instead of
+    /// keeping itself on Intel forever. arm64 builds only run on Apple Silicon; an x86_64 build
+    /// checks sysctl.proc_translated (1 = Rosetta ⇒ the hardware is really Apple Silicon).
+    static var hardwareIsAppleSilicon: Bool {
+        #if arch(arm64)
+        return true
+        #else
+        var translated: Int32 = 0
+        var size = MemoryLayout<Int32>.size
+        if sysctlbyname("sysctl.proc_translated", &translated, &size, nil, 0) == 0 {
+            return translated == 1
+        }
+        return false
+        #endif
+    }
+
+    /// Choose the right .dmg for this Mac's hardware. Releases ship per-arch assets named with
+    /// friendly labels (…-Apple-Silicon.dmg / …-Intel.dmg, from 0.7.x) — earlier dual-arch cuts used
+    /// -arm64/-x86_64, so both spellings match; fall back to any .dmg (older single-asset releases).
     static func pickDMGAsset(_ assets: [(name: String, url: String)]) -> URL? {
         let dmgs = assets.filter { $0.name.lowercased().hasSuffix(".dmg") }
-        #if arch(arm64)
-        let markers = ["apple-silicon", "applesilicon", "arm64"]
-        #else
-        let markers = ["intel", "x86_64", "x86-64"]
-        #endif
+        let markers = hardwareIsAppleSilicon
+            ? ["apple-silicon", "applesilicon", "arm64"]
+            : ["intel", "x86_64", "x86-64"]
         let match = dmgs.first { d in markers.contains { d.name.lowercased().contains($0) } } ?? dmgs.first
         return match.flatMap { URL(string: $0.url) }
     }
