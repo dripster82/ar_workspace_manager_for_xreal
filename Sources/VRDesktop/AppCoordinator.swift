@@ -1426,18 +1426,23 @@ final class AppCoordinator: ObservableObject {
         let wideMode = aspect >= 3.0
 
         let alert = NSAlert()
-        alert.alertStyle = .warning
+        // We can't read the One series' onboard display mode from the host, so we can't confirm
+        // Follow mode positively — only flag the Wide/Anchor case when we can see its ultrawide
+        // resolution. When nothing looks wrong, keep this informational rather than alarming.
+        alert.alertStyle = wideMode ? .warning : .informational
         alert.messageText = wideMode
             ? "Turn off the glasses' Wide / Anchor mode first"
-            : "Set the glasses to flat “Follow” mode first"
-        alert.informativeText = (wideMode
+            : "If your glasses are already in flat “Follow” mode, you're good to go"
+        alert.informativeText = wideMode
             ? "Your XREAL One is showing a \(Int(bounds.width))×\(Int(bounds.height)) ultrawide — that's its "
-              + "onboard Wide (anchored) mode. "
-            : "")
-            + "The One series can anchor the screen in space with its own X1 chip. This app does its own "
-            + "head-tracked anchoring, so with the glasses' Anchor/Wide mode on, two trackers fight and the "
-            + "screen drifts opposite your head.\n\nOn the glasses, switch to the plain flat 1920×1080 "
-            + "“Follow” display mode (their button menu), then start AR."
+              + "onboard Wide (anchored) mode. The One series can anchor the screen in space with its own X1 "
+              + "chip, and this app does its own head-tracked anchoring, so with Anchor/Wide on the two "
+              + "trackers fight and the screen drifts opposite your head.\n\nOn the glasses, switch to the "
+              + "plain flat 1920×1080 “Follow” display mode (their button menu), then start AR."
+            : "The One series can also anchor the screen in space with its own X1 chip, which would fight "
+              + "this app's head-tracked anchoring. This app can't read the glasses' current mode, so it "
+              + "can't check for you.\n\nIf the screen drifts opposite your head after starting, switch the "
+              + "glasses to their plain flat “Follow” display mode (their button menu)."
         alert.addButton(withTitle: "Start anyway")
         alert.addButton(withTitle: "Cancel")
         alert.showsSuppressionButton = true

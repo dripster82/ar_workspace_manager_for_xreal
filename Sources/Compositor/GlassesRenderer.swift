@@ -11,6 +11,9 @@ import simd
 /// external monitor as a stand-in) using CAMetalLayer + CAMetalDisplayLink.
 public final class GlassesRenderer: NSObject {
     public let device: MTLDevice
+    /// Memoryless render targets are an Apple-family (TBDR) feature; Intel/AMD Mac GPUs abort on a
+    /// memoryless texture descriptor, so we fall back to `.private` MSAA storage there.
+    private let supportsMemorylessTargets: Bool
     private let commandQueue: MTLCommandQueue
     // Recreated per output session: reusing a layer/display-link across virtual-display
     // add/remove cycles leaves stale entries in QuartzCore's display link list and
@@ -198,6 +201,7 @@ public final class GlassesRenderer: NSObject {
         guard let device = MTLCreateSystemDefaultDevice(),
               let queue = device.makeCommandQueue() else { return nil }
         self.device = device
+        self.supportsMemorylessTargets = device.supportsFamily(.apple1)
         self.commandQueue = queue
         self.poseStore = poseStore
         super.init()
@@ -562,26 +566,28 @@ public final class GlassesRenderer: NSObject {
         return try device.makeRenderPipelineState(descriptor: desc)
     }
 
-    /// MSAA color target (memoryless on Apple GPUs — free bandwidth-wise) and a matching
-    /// multisample depth buffer; both rebuilt when the drawable size changes.
+    /// MSAA color target (memoryless on Apple GPUs — free bandwidth-wise; `.private` on Intel/AMD
+    /// Macs, which don't support memoryless render targets) and a matching multisample depth buffer;
+    /// both rebuilt when the drawable size changes.
     private func msaaTextures(width: Int, height: Int) -> (color: MTLTexture, depth: MTLTexture)? {
         let w = max(1, width), h = max(1, height)
         if let c = msaaColorTexture, let d = depthTextureMS, c.width == w, c.height == h {
             return (c, d)
         }
+        let msaaStorage: MTLStorageMode = supportsMemorylessTargets ? .memoryless : .private
         let colorDesc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .bgra8Unorm, width: w, height: h, mipmapped: false)
         colorDesc.textureType = .type2DMultisample
         colorDesc.sampleCount = sampleCount
         colorDesc.usage = .renderTarget
-        colorDesc.storageMode = .memoryless
+        colorDesc.storageMode = msaaStorage
 
         let depthDesc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: Self.depthFormat, width: w, height: h, mipmapped: false)
         depthDesc.textureType = .type2DMultisample
         depthDesc.sampleCount = sampleCount
         depthDesc.usage = .renderTarget
-        depthDesc.storageMode = .memoryless
+        depthDesc.storageMode = msaaStorage
 
         guard let color = device.makeTexture(descriptor: colorDesc),
               let depth = device.makeTexture(descriptor: depthDesc) else { return nil }
