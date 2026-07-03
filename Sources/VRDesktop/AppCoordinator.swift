@@ -3346,6 +3346,14 @@ final class AppCoordinator: ObservableObject {
         alert.runModal()
     }
 
+    /// Diagnostics "Preview" button: show the stuck alert with a sample value so its tone/wording
+    /// can be checked without waiting for a real wedge. Resets the sticky warning banner after.
+    func previewColorSyncAlert() {
+        presentColorSyncRunawayAlert(cpu: 73)
+        colorSyncRunawayWarning = false
+        statusMessage = "That was a preview — ColorSync is fine."
+    }
+
     // "Clean ColorSync now" was removed 2026-07-02: its daemon bounce is proven futile against the
     // self-loop (see ColorSyncWatchdog), and the orphan-profile sweep it also did already runs
     // automatically at launch and on Stop AR — the button was a false affordance.

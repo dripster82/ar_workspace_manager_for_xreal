@@ -1303,8 +1303,14 @@ struct ControlPanelView: View {
                 Text("Updates every 3 s while enabled.").font(.caption2).foregroundStyle(.secondary)
             }
             Divider()
-            Toggle("Alert when ColorSync gets stuck", isOn: $coordinator.colorSyncAlertEnabled)
-                .font(.caption)
+            HStack {
+                Toggle("Alert when ColorSync gets stuck", isOn: $coordinator.colorSyncAlertEnabled)
+                    .font(.caption)
+                Spacer()
+                Button("Preview") { coordinator.previewColorSyncAlert() }
+                    .controlSize(.small)
+                    .help("Show the alert with a sample value, to check its wording/tone.")
+            }
             Text("Watches colorsync.displayservices; if it pins the CPU (the Air 2 colour self-loop, "
                  + "which can eventually crash the display session) an alert tells you to replug the "
                  + "glasses — the only fix. The app can't clear it automatically.")
