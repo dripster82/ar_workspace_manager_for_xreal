@@ -225,21 +225,36 @@ public final class VLCPlayerSource: @unchecked Sendable {
     // MARK: Frame path (called from the libvlc callbacks below)
 
     /// Format setup: allocate double buffers for the decoded size and request BGRA output.
+    /// NB the vmem contract: buffers are freed ONLY in `cleanup()` (or deinit) — never here. An
+    /// earlier version freed the old buffers in setup on a mid-play format re-init, while the
+    /// decoder could still be writing into one handed out by a previous lock callback → write into
+    /// freed memory → heap corruption that crashed elsewhere (the renderer's mip-cache dictionary).
+    /// VLC guarantees cleanup runs with the old vout quiesced, so freeing belongs there.
     fileprivate func setup(width: inout UInt32, height: inout UInt32,
                            pitch: inout UInt32, lines: inout UInt32) -> UInt32 {
         let w = Int(width), h = Int(height)
         let p = (w * 4 + 63) & ~63          // 64-byte-aligned pitch keeps libvlc's blitters happy
         let l = (h + 31) & ~31
         lock.lock()
-        freeBuffers()
         front = UnsafeMutableRawPointer.allocate(byteCount: p * l, alignment: 64)
         back = UnsafeMutableRawPointer.allocate(byteCount: p * l, alignment: 64)
         frameW = w; frameH = h; framePitch = p
+        frameDirty = false
         _aspect = h > 0 ? Float(w) / Float(h) : 16.0 / 9.0
         textureRing = []; current = nil      // recreate at the new size on next upload
         lock.unlock()
         pitch = UInt32(p); lines = UInt32(l)
         return 1
+    }
+
+    /// vmem cleanup: the vout is torn down and no decode is in flight, so it's safe to free the
+    /// frame buffers (under the lock, so the render thread can't be mid-read of `front`). Runs on a
+    /// mid-play format re-init (followed by a fresh setup) and at stop.
+    fileprivate func cleanup() {
+        lock.lock()
+        freeBuffers()
+        frameDirty = false
+        lock.unlock()
     }
 
     fileprivate func lockFrame(planes: UnsafeMutablePointer<UnsafeMutableRawPointer?>?) {
@@ -329,7 +344,8 @@ private func vlcSetupCB(opaque: UnsafeMutablePointer<UnsafeMutableRawPointer?>?,
 }
 
 private func vlcCleanupCB(opaque: UnsafeMutableRawPointer?) {
-    // Buffers are freed/reallocated in setup() and deinit; nothing to do per-teardown.
+    guard let opaque else { return }
+    Unmanaged<VLCPlayerSource>.fromOpaque(opaque).takeUnretainedValue().cleanup()
 }
 
 private func vlcLockCB(opaque: UnsafeMutableRawPointer?,
