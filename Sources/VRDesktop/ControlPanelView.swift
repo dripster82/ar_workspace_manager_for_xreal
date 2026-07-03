@@ -923,6 +923,11 @@ struct ControlPanelView: View {
                     + "run loop, so rendering keeps scheduler priority over background apps "
                     + "(VS Code/Docker/etc.) on a busy machine.")
 
+            Toggle("Restart head tracking if it stops", isOn: $coordinator.imuWatchdogEnabled)
+                .help("If the glasses stop sending head-tracking data during AR (anchored screens "
+                    + "start following your head), the connection is restarted automatically; if "
+                    + "that doesn't revive it you get a warning and a spoken heads-up.")
+
             if coordinator.arActive {
                 VStack(alignment: .leading, spacing: 4) {
                     Toggle("Stereo (SBS) — experimental", isOn: Binding(
@@ -1344,15 +1349,8 @@ struct ControlPanelView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            Divider()
-            Toggle("Restart head tracking if it stops", isOn: $coordinator.imuWatchdogEnabled)
-                .font(.caption)
-            Text("If the glasses stop sending head-tracking data during AR (anchored screens start "
-                 + "following your head), the connection is restarted automatically; if that doesn't "
-                 + "revive it you get a warning here and a spoken heads-up.")
-                .font(.caption2).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
             if coordinator.imuStallWarning {
+                Divider()
                 HStack(alignment: .top, spacing: 4) {
                     Image(systemName: "exclamationmark.triangle.fill").font(.caption2).foregroundStyle(.red)
                     Text("No head-tracking data from the glasses — anchored screens will follow your "
