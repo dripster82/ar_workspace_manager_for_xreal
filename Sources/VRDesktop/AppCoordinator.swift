@@ -3340,8 +3340,8 @@ final class AppCoordinator: ObservableObject {
             "macOS's colour service has been stuck at \(Int(cpu))% CPU for several minutes — a known "
             + "macOS quirk with the glasses connected (it happens under XREAL's own app too), and not "
             + "something this app can clear.\n\nNo rush, but if it stays stuck the Mac gets sluggish "
-            + "and the display session can eventually reset. When convenient, unplug and replug the "
-            + "glasses — that clears it in a few seconds."
+            + "and the display session can eventually reset. When convenient, unplug the glasses, "
+            + "leave them unplugged for about 30 seconds, then plug them back in — that clears it."
         alert.addButton(withTitle: "OK")
         alert.runModal()
     }

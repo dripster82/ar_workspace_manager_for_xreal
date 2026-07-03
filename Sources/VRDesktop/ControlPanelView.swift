@@ -2612,7 +2612,9 @@ struct MediaProgressView: View {
 
     private func fmt(_ s: Double) -> String {
         guard s.isFinite, s >= 0 else { return "0:00" }
-        let t = Int(s.rounded()); return String(format: "%d:%02d", t / 60, t % 60)
+        let t = Int(s.rounded())
+        let h = t / 3600, m = (t % 3600) / 60, sec = t % 60
+        return h > 0 ? String(format: "%d:%02d:%02d", h, m, sec) : String(format: "%d:%02d", m, sec)
     }
 
     var body: some View {
