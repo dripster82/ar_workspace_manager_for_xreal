@@ -245,6 +245,7 @@ final class MediaPlayerManager: ObservableObject {
         }
     }
     func skip(_ seconds: Double) { source.seek(by: seconds) }
+    func seek(to seconds: Double) { source.seek(to: seconds); saveTime() }
     func clearError() { errorMessage = nil }
 
     /// Stop playing and hide the media screen, but KEEP the playlist. The current video stays loaded

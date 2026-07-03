@@ -2454,6 +2454,7 @@ final class AppCoordinator: ObservableObject {
     func setMediaPosition(_ p: MediaPlayerManager.Position) { mediaPlayer?.setPosition(p) }
     func toggleMediaPlay() { mediaPlayer?.togglePlay(); flashMediaProgress() }
     func mediaSkip(_ seconds: Double) { mediaPlayer?.skip(seconds); flashMediaProgress() }
+    func mediaSeek(to seconds: Double) { mediaPlayer?.seek(to: seconds); flashMediaProgress() }
     func mediaNext() { mediaPlayer?.next(); flashMediaProgress() }
     func mediaPrevious() { mediaPlayer?.previous(); flashMediaProgress() }
     func stopMedia() { mediaPlayer?.stop(); flashMediaProgress() }   // stop + hide, keeps the playlist

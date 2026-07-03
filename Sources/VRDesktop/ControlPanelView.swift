@@ -2601,6 +2601,13 @@ struct MediaPlayerControls: View {
     @ObservedObject var media: MediaPlayerManager
     let coordinator: AppCoordinator
 
+    /// Scrubber state: while dragging we show the drag position (not the live one), and seek on
+    /// release. `tick` just forces a redraw so the live position/labels advance while playing.
+    @State private var scrubPosition: Double = 0
+    @State private var scrubbing = false
+    @State private var tick = Date()
+    private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let error = media.errorMessage {
@@ -2635,6 +2642,26 @@ struct MediaPlayerControls: View {
             }
             .disabled(!media.hasMedia || media.loading)   // no transport while the file is opening
 
+            if media.hasMedia, !media.loading {
+                let duration = max(media.progress.duration, 1)
+                HStack(spacing: 8) {
+                    Text(timeLabel(scrubbing ? scrubPosition : media.progress.current))
+                        .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                        .frame(width: 52, alignment: .trailing)
+                    Slider(value: Binding(
+                        get: { scrubbing ? scrubPosition : min(media.progress.current, duration) },
+                        set: { scrubPosition = $0 }
+                    ), in: 0...duration) { editing in
+                        scrubbing = editing
+                        if !editing { coordinator.mediaSeek(to: scrubPosition) }
+                    }
+                    Text(timeLabel(duration))
+                        .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                        .frame(width: 52, alignment: .leading)
+                }
+                .onReceive(ticker) { now in if !scrubbing { tick = now } }  // redraw for live position
+            }
+
             HStack(spacing: 8) {
                 Text("Position").font(.caption)
                 Picker("", selection: Binding(get: { media.position },
@@ -2654,6 +2681,11 @@ struct MediaPlayerControls: View {
     private func transport(_ symbol: String, _ help: String, _ action: @escaping () -> Void) -> some View {
         Button(action: action) { Image(systemName: symbol).frame(width: 22) }
             .buttonStyle(.bordered).controlSize(.small).help(help)
+    }
+
+    private func timeLabel(_ seconds: Double) -> String {
+        let s = MediaPlaylist.durationLabel(seconds)
+        return s.isEmpty ? "0:00" : s
     }
 }
 

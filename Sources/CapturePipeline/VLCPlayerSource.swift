@@ -157,6 +157,15 @@ public final class VLCPlayerSource: @unchecked Sendable {
         lock.unlock()
     }
 
+    /// Seek to an absolute position in seconds, clamped to the item's bounds.
+    public func seek(to seconds: Double) {
+        guard let player else { return }
+        var target = max(0, seconds)
+        let dur = duration
+        if dur > 0 { target = min(target, dur - 0.5) }
+        libvlc_media_player_set_time(player, libvlc_time_t(target * 1000))
+    }
+
     /// Seek by a relative offset in seconds (negative = back), clamped to the item's bounds.
     public func seek(by seconds: Double) {
         guard let player else { return }
