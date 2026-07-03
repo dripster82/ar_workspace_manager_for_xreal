@@ -1034,7 +1034,21 @@ final class AppCoordinator: ObservableObject {
         return bundleVersion
     }
 
-    /// Query the repo's latest published release and flag if it's newer than this build. Unauthenticated
+    /// Which releases the user opts into: Stable (default), RC (stable + release candidates), or
+    /// Beta (everything). Switching channels re-checks — and can offer a DOWNGRADE (e.g. on
+    /// 0.8.0-RC2 with the channel set to Stable, the latest stable 0.7.3 is offered as a switch).
+    @Published var updateChannel: UpdateChannel =
+        UpdateChannel(rawValue: UserDefaults.standard.string(forKey: "updateChannel") ?? "") ?? .stable {
+        didSet {
+            UserDefaults.standard.set(updateChannel.rawValue, forKey: "updateChannel")
+            checkForUpdates()
+        }
+    }
+    /// True when the offered version is a channel *switch* below the current version (downgrade) —
+    /// shown on the About page but deliberately NOT nagged via the sidebar/menu badge.
+    @Published var updateIsDowngrade = false
+
+    /// Query the repo's releases and offer the best match for the chosen channel. Unauthenticated
     /// (public endpoint, 60 req/hr) — runs silently on launch and on demand from the About page.
     func checkForUpdates() {
         guard !checkingForUpdate else { return }
@@ -1042,7 +1056,7 @@ final class AppCoordinator: ObservableObject {
         updateCheckMessage = nil
         Task { @MainActor in
             defer { checkingForUpdate = false }
-            guard let url = URL(string: "https://api.github.com/repos/\(Self.updateRepo)/releases/latest") else { return }
+            guard let url = URL(string: "https://api.github.com/repos/\(Self.updateRepo)/releases?per_page=30") else { return }
             var req = URLRequest(url: url)
             req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
             req.timeoutInterval = 10
@@ -1055,19 +1069,32 @@ final class AppCoordinator: ObservableObject {
                 }
                 struct GHAsset: Decodable { let name: String; let browser_download_url: String }
                 struct GHRelease: Decodable { let tag_name: String; let html_url: String; let draft: Bool; let assets: [GHAsset] }
-                let rel = try JSONDecoder().decode(GHRelease.self, from: data)
-                let latest = rel.tag_name.trimmingCharacters(in: CharacterSet(charactersIn: "vV "))
-                if !rel.draft, Self.versionIsNewer(latest, than: appVersion), let u = URL(string: rel.html_url) {
-                    updateAvailableVersion = latest
-                    updateURL = u
-                    updateDownloadAssetURL = rel.assets.first { $0.name.lowercased().hasSuffix(".dmg") }
-                        .flatMap { URL(string: $0.browser_download_url) }
-                    updateCheckMessage = "Update available: v\(latest)."
+                let releases = try JSONDecoder().decode([GHRelease].self, from: data)
+
+                // Best release for the channel: version-tagged (skips e.g. "intel-test"), not a
+                // draft, channel-eligible, highest precedence (beta < RC < stable within a version).
+                let candidates: [(version: AppVersion, release: GHRelease)] = releases.compactMap { rel in
+                    guard !rel.draft, let v = AppVersion(rel.tag_name),
+                          self.updateChannel.includes(v.channel) else { return nil }
+                    return (v, rel)
+                }
+                guard let best = candidates.max(by: { $0.version < $1.version }),
+                      let current = AppVersion(appVersion) else {
+                    clearUpdateOffer(message: "No releases found for the \(updateChannel.label) channel.")
+                    return
+                }
+
+                if best.version == current {
+                    clearUpdateOffer(message: "You're on the latest \(updateChannel.label.lowercased()) version (v\(appVersion)).")
                 } else {
-                    updateAvailableVersion = nil
-                    updateURL = nil
-                    updateDownloadAssetURL = nil
-                    updateCheckMessage = "You're on the latest version (v\(appVersion))."
+                    updateAvailableVersion = best.version.raw
+                    updateURL = URL(string: best.release.html_url)
+                    updateDownloadAssetURL = Self.pickDMGAsset(
+                        best.release.assets.map { ($0.name, $0.browser_download_url) })
+                    updateIsDowngrade = best.version < current
+                    updateCheckMessage = updateIsDowngrade
+                        ? "Latest \(updateChannel.label.lowercased()) is v\(best.version.raw) — below your v\(appVersion) pre-release; switching will downgrade."
+                        : "Update available: v\(best.version.raw)."
                 }
             } catch {
                 updateCheckMessage = "Update check failed: \(error.localizedDescription)"
@@ -1075,16 +1102,25 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
-    /// Compare dotted numeric versions ("0.2.0" > "0.1.3"); non-numeric parts count as 0.
-    static func versionIsNewer(_ a: String, than b: String) -> Bool {
-        let pa = a.split(separator: ".").map { Int($0) ?? 0 }
-        let pb = b.split(separator: ".").map { Int($0) ?? 0 }
-        for i in 0..<max(pa.count, pb.count) {
-            let x = i < pa.count ? pa[i] : 0
-            let y = i < pb.count ? pb[i] : 0
-            if x != y { return x > y }
-        }
-        return false
+    private func clearUpdateOffer(message: String) {
+        updateAvailableVersion = nil
+        updateURL = nil
+        updateDownloadAssetURL = nil
+        updateIsDowngrade = false
+        updateCheckMessage = message
+    }
+
+    /// Choose the right .dmg for this Mac: releases now ship per-arch assets (…-arm64.dmg /
+    /// …-x86_64.dmg); prefer the matching one, fall back to any .dmg (older single-asset releases).
+    static func pickDMGAsset(_ assets: [(name: String, url: String)]) -> URL? {
+        let dmgs = assets.filter { $0.name.lowercased().hasSuffix(".dmg") }
+        #if arch(arm64)
+        let mine = "arm64"
+        #else
+        let mine = "x86_64"
+        #endif
+        let match = dmgs.first { $0.name.lowercased().contains(mine) } ?? dmgs.first
+        return match.flatMap { URL(string: $0.url) }
     }
 
     /// Download the latest release's .dmg, verify it's our genuine notarised build, swap the running

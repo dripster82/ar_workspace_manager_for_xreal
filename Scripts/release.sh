@@ -11,7 +11,10 @@
 # Steps: guard (main / clean / pushed) → build + notarize app → build + notarize dmg →
 #        create/refresh the GitHub release with the dmg attached.
 #
-# Usage:  Scripts/release.sh
+# Usage:  Scripts/release.sh [version]
+#         No argument → stable, auto-incremented from the highest stable V* tag.
+#         With one    → exact version, e.g. 0.8.0-beta1 or 0.8.0-RC2 (a -suffix publishes as a
+#                       GitHub PRE-RELEASE, picked up only by the app's RC/Beta update channels).
 # Env:    CODESIGN_IDENTITY (default below) · NOTARY_PROFILE (default notary-arwm)
 # Prereqs: Developer ID Application cert, stored notarytool profile, and the `gh` CLI authenticated.
 set -euo pipefail
@@ -38,25 +41,38 @@ if [[ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]]; then
   echo "✗ Local main differs from origin/main — push main first (the release tag points at HEAD)."; exit 1
 fi
 
-# --- Decide the version (tag-driven) ---------------------------------------------------------------
-HEAD_TAG="$(git tag --points-at HEAD 'V*' | sort -V | tail -1)"
-if [[ -n "$HEAD_TAG" ]]; then
-  TAG="$HEAD_TAG"
-  VERSION="${TAG#V}"
-  echo "==> HEAD is already tagged $TAG — rebuilding/re-publishing that version."
-else
-  LATEST="$(git tag -l 'V*' | sort -V | tail -1)"
-  if [[ -z "$LATEST" ]]; then
-    VERSION="0.1"
-  else
-    base="${LATEST#V}"            # e.g. 0.3
-    pre="${base%.*}"             # 0
-    last="${base##*.}"           # 3
-    if [[ "$pre" == "$base" ]]; then VERSION="$((base + 1))"; else VERSION="$pre.$((last + 1))"; fi
-  fi
+# --- Decide the version (tag-driven, or explicit for beta/RC) --------------------------------------
+if [[ -n "${1:-}" ]]; then
+  VERSION="$1"
+  [[ "$VERSION" == [0-9]* ]] || { echo "✗ Version must start with a number (e.g. 0.8.0-beta1)."; exit 1; }
   TAG="V$VERSION"
-  echo "==> No tag on HEAD — auto-incrementing ${LATEST:-(none)} → $TAG"
+  echo "==> Explicit version: $TAG"
+else
+  HEAD_TAG="$(git tag --points-at HEAD 'V*' | sort -V | tail -1)"
+  if [[ -n "$HEAD_TAG" ]]; then
+    TAG="$HEAD_TAG"
+    VERSION="${TAG#V}"
+    echo "==> HEAD is already tagged $TAG — rebuilding/re-publishing that version."
+  else
+    # Auto-increment from the highest STABLE tag only, so beta/RC tags don't derail numbering.
+    LATEST="$(git tag -l 'V*' | grep -v -- '-' | sort -V | tail -1)"
+    if [[ -z "$LATEST" ]]; then
+      VERSION="0.1"
+    else
+      base="${LATEST#V}"            # e.g. 0.3
+      pre="${base%.*}"             # 0
+      last="${base##*.}"           # 3
+      if [[ "$pre" == "$base" ]]; then VERSION="$((base + 1))"; else VERSION="$pre.$((last + 1))"; fi
+    fi
+    TAG="V$VERSION"
+    echo "==> No tag on HEAD — auto-incrementing ${LATEST:-(none)} → $TAG"
+  fi
 fi
+
+# A -suffix (beta/RC) publishes as a GitHub pre-release: excluded from /releases/latest and from
+# the app's Stable update channel; offered on the RC/Beta channels per the suffix.
+PRERELEASE_FLAG=()
+[[ "$VERSION" == *-* ]] && PRERELEASE_FLAG=(--prerelease)
 
 # Architectures to ship as separate DMGs. arm64 = Apple Silicon, x86_64 = Intel. The vendored
 # libjson-c.a is universal so both cross-compile from this machine.
@@ -117,6 +133,7 @@ else
   gh release create "$TAG" "${DMGS[@]}" \
     --title "$TAG" \
     --target "$(git rev-parse HEAD)" \
+    "${PRERELEASE_FLAG[@]}" \
     --notes-file "$NOTES"
   echo "✅ Published release $TAG (tagged HEAD) with ${#DMGS[@]} dmgs + changelog."
 fi

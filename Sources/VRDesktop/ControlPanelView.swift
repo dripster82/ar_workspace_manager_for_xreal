@@ -178,6 +178,18 @@ struct ControlPanelView: View {
                         Text("AR Workspace Manager for XREAL").font(.headline)
                         Text("Version \(coordinator.appVersion) · Build \(BuildInfo.commit) · \(BuildInfo.date)")
                             .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                        HStack(spacing: 8) {
+                            Text("Updates").font(.caption)
+                            Picker("", selection: $coordinator.updateChannel) {
+                                ForEach(UpdateChannel.allCases) { Text($0.label).tag($0) }
+                            }
+                            .labelsHidden().fixedSize()
+                            .help("Stable gets only finished releases. Release candidates adds RC "
+                                  + "builds; Betas adds everything. Switching back to a calmer channel "
+                                  + "can offer a downgrade to its latest version.")
+                            Spacer()
+                        }
+                        .controlSize(.small)
                         HStack(spacing: 10) {
                             Button { coordinator.checkForUpdates() } label: {
                                 if coordinator.checkingForUpdate {
@@ -189,7 +201,9 @@ struct ControlPanelView: View {
                             .disabled(coordinator.checkingForUpdate || coordinator.updateInstalling)
                             if let v = coordinator.updateAvailableVersion {
                                 if coordinator.updateDownloadAssetURL != nil {
-                                    Button("Download & Install v\(v)") { coordinator.installUpdate() }
+                                    Button(coordinator.updateIsDowngrade
+                                           ? "Switch to v\(v) (downgrade)"
+                                           : "Download & Install v\(v)") { coordinator.installUpdate() }
                                         .buttonStyle(.borderedProminent)
                                         .disabled(coordinator.updateInstalling)
                                 }
@@ -201,6 +215,10 @@ struct ControlPanelView: View {
                             }
                         }
                         .controlSize(.small)
+                        if coordinator.updateAvailableVersion != nil, let msg = coordinator.updateCheckMessage {
+                            Text(msg).font(.caption2).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                         if let s = coordinator.updateInstallStatus {
                             HStack(spacing: 6) {
                                 if coordinator.updateInstalling { ProgressView().controlSize(.small) }

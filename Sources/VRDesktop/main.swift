@@ -407,7 +407,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
 
         add("Open AR Workspace Manager", #selector(openWindow))
-        if let v = coordinator.updateAvailableVersion, coordinator.updateURL != nil {
+        if let v = coordinator.updateAvailableVersion, coordinator.updateURL != nil, !coordinator.updateIsDowngrade {
             add("⬇ Update available: v\(v) — Update…", #selector(openUpdatePage))
         }
         menu.addItem(.separator())
