@@ -166,6 +166,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var pushToTalkHotKeyRef: EventHotKeyRef?
     private var mediaPos1Ref, mediaPos2Ref, mediaPos3Ref, mediaPos4Ref, mediaPos5Ref: EventHotKeyRef?
     private var mediaStopRef, mediaPlayPauseRef, mediaRewindRef, mediaSkipRef: EventHotKeyRef?
+    private var mediaNextRef, mediaPrevRef: EventHotKeyRef?
     private static let recenterHotKeyID: UInt32 = 1
     private static let stopARHotKeyID: UInt32 = 2
     private static let helpHotKeyID: UInt32 = 3
@@ -196,6 +197,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private static let mediaPlayPauseID: UInt32 = 26
     private static let mediaRewindID: UInt32 = 27
     private static let mediaSkipID: UInt32 = 28
+    private static let mediaNextID: UInt32 = 29
+    private static let mediaPrevID: UInt32 = 30
 
     private func registerGlobalRecenterHotKey() {
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
@@ -248,6 +251,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 case AppDelegate.mediaPlayPauseID: delegate.coordinator.toggleMediaPlay()
                 case AppDelegate.mediaRewindID: delegate.coordinator.mediaSkip(-10)
                 case AppDelegate.mediaSkipID: delegate.coordinator.mediaSkip(10)
+                case AppDelegate.mediaNextID: delegate.coordinator.mediaNext()
+                case AppDelegate.mediaPrevID: delegate.coordinator.mediaPrevious()
                 case AppDelegate.quitHotKeyID: NSApp.terminate(nil)
                 default: break
                 }
@@ -291,6 +296,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         register(kVK_ANSI_K, AppDelegate.mediaPlayPauseID, &mediaPlayPauseRef)
         register(kVK_LeftArrow, AppDelegate.mediaRewindID, &mediaRewindRef)
         register(kVK_RightArrow, AppDelegate.mediaSkipID, &mediaSkipRef)
+        register(kVK_UpArrow, AppDelegate.mediaNextID, &mediaNextRef)
+        register(kVK_DownArrow, AppDelegate.mediaPrevID, &mediaPrevRef)
     }
 
     /// A plain Escape hotkey is registered only while it's actually wanted — when an alarm is

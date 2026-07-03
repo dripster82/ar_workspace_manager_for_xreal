@@ -160,6 +160,7 @@ between them from the top bar.
 | ⌃⌥5 | Media: full view |
 | ⌃⌥K | Media: play / pause |
 | ⌃⌥← / ⌃⌥→ | Media: rewind / skip 10 s |
+| ⌃⌥↑ / ⌃⌥↓ | Media: next / previous in the playlist |
 | ⌃⌥0 | Media: stop (keeps the playlist) |
 | ⌃⌥H | Show / hide help |
 | ⌃⌥Q | Quit AR Workspace Manager |
