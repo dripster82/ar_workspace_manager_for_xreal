@@ -103,7 +103,8 @@ between them from the top bar.
   **move-window-to-the-screen-you're-looking-at** (⌃⌥W)
 
 **HUD widgets** (head-locked, optional)
-- Clock, battery, **Slack** unreads, **GitHub** PR-triage counts, and a **calendar** agenda with
+- Clock, battery, **Slack** unreads (optionally **read aloud** as new messages arrive, with a
+  selectable voice), **GitHub** PR-triage counts, and a **calendar** agenda with
   **meeting alarms** — backed by **Google Calendar**, **Apple Calendar**, or both
   (shown centre-FOV while AR runs; optionally also as a desktop panel when AR is off)
 - **List** widget for a quick to-do read-out — an in-app checklist or your **Apple Reminders**
@@ -116,6 +117,14 @@ between them from the top bar.
 - Trigger phrases are editable per command, with fuzzy matching that absorbs mis-hearings
 
 ![HUD widgets](assets/hud-widgets.png?v=3)
+
+**Media player** (head-locked video)
+- Play your own videos inside AR — **most formats, including MKV/AVI**, with subtitles rendered
+  uniformly (playback by bundled **VLCKit/libVLC**); files can live on the Mac or a network drive
+- **Playlist** with drag-to-reorder and auto-advance; playback position and playlist survive restarts
+- Pin the video to any of **four corners or full view** (⌃⌥1–5); transport by hotkey —
+  play/pause **⌃⌥K**, ±10 s **⌃⌥←/→**, stop **⌃⌥0** — with a transient in-AR progress bar
+- Full-view watching automatically throttles the screen captures to save power
 
 **Glasses & capture**
 - Brightness and refresh-rate (60/72/90/120 Hz) control; quality settings (anti-aliasing,
@@ -147,6 +156,11 @@ between them from the top bar.
 | ⌃⌥R | Record the glasses view → Movies |
 | ⌃⌥M | Mute / unmute the recording mic |
 | ⌃⌥A | Push-to-talk voice command (when voice is enabled) |
+| ⌃⌥1–4 | Media: pin the video to a corner (TL · TR · BL · BR) |
+| ⌃⌥5 | Media: full view |
+| ⌃⌥K | Media: play / pause |
+| ⌃⌥← / ⌃⌥→ | Media: rewind / skip 10 s |
+| ⌃⌥0 | Media: stop (keeps the playlist) |
 | ⌃⌥H | Show / hide help |
 | ⌃⌥Q | Quit AR Workspace Manager |
 | ⌃⌥ + brightness keys | Dim / brighten the glasses |
@@ -173,10 +187,11 @@ between them from the top bar.
 - **Microphone prompt never appeared?** Recording only requests the mic the first time you record;
   if it was previously denied, re-enable it in System Settings → Privacy & Security → Microphone.
 - **High CPU from `colorsync.displayservices`?** This is a macOS-side issue triggered by the glasses
-  as a display, not the app. The **Diagnostics** page shows live CPU of the usual offenders and
-  display-registry counts so you can spot it; see
-  [Docs/ColorSync-AirII-investigation.md](Docs/ColorSync-AirII-investigation.md) for the cause and
-  fixes (keep the glasses on their default colour profile).
+  as a display, not the app (XREAL's own Nebula app provokes it too). The fix: unplug the glasses,
+  wait ~30 seconds, plug them back in. The **Diagnostics** page shows the daemon's live CPU and can
+  optionally **alert you** when it's been stuck for several minutes ("Alert when ColorSync gets
+  stuck"); see [Docs/ColorSync-AirII-investigation.md](Docs/ColorSync-AirII-investigation.md) for
+  the full investigation (and keep the glasses on their default colour profile).
 
 - Virtual displays rely on macOS's private display APIs, so exact behaviour can vary between macOS
   releases.
@@ -231,8 +246,11 @@ This is a source-available license, not an OSI "open source" license, because it
 commercial use. For commercial licensing, contact the author.
 
 Bundled third-party components keep their own licenses: MIT code from nrealAirLinuxDriver /
-xrealair-sdk-macos and xioTechnologies Fusion, and the BSD-licensed hidapi macOS backend
-(`Sources/CXrealDriver/LICENSE-*`).
+xrealair-sdk-macos and xioTechnologies Fusion, the BSD-licensed hidapi macOS backend
+(`Sources/CXrealDriver/LICENSE-*`), and **VLCKit / libVLC** (© VideoLAN, **LGPL 2.1**) for media
+playback — dynamically linked and replaceable in the app bundle's Frameworks folder; license text
+ships with the app (About page → "View LGPL license") and the framework is fetched at build time by
+`Scripts/fetch-vlckit.sh`.
 
 ## Credits
 

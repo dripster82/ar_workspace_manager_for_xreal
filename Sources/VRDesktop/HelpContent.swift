@@ -48,6 +48,15 @@ enum HelpContent {
                 Shortcut(keys: "⌃⌥L", action: "Show / hide screen name labels"),
             ]),
         Section(
+            title: "Media player", column: 1,
+            shortcuts: [
+                Shortcut(keys: "⌃⌥1–4", action: "Pin the video to a corner (TL · TR · BL · BR)"),
+                Shortcut(keys: "⌃⌥5", action: "Video full view"),
+                Shortcut(keys: "⌃⌥K", action: "Play / pause"),
+                Shortcut(keys: "⌃⌥← ⌃⌥→", action: "Rewind / skip 10 s"),
+                Shortcut(keys: "⌃⌥0", action: "Stop (keeps the playlist)"),
+            ]),
+        Section(
             title: "App", column: 1,
             shortcuts: [
                 Shortcut(keys: "⌃⌥H", action: "Show / hide this help"),
