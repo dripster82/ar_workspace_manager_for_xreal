@@ -335,3 +335,15 @@ Consequences for us:
 - The realistic mitigation stands: detect the pin → tell the user to replug (clears in ~25 s).
 - Upstream report material is strong either way: XREAL's own app exhibits the loop on macOS 26.5.1
   (attach monitor logs + the two WindowServer watchdog stackshots).
+
+### Nebula long-run baseline (overnight 2026-07-02→03, ~16 h) — cyclic forever, never wedges
+
+Monitor ran 17:23→09:13 (5,574 samples @10 s): **150 pinned episodes**, metronomic ~7-min period,
+each ~2–2.4 min then a full release to ~0–2%. **Longest episode: 3.1 min**; longest stretch even
+above 20% was 4.3 min. It never once wedged. (Averaged over the night the cycle still burns ~47% of
+a core on `colorsync.displayservices` — the bug costs Nebula sessions too, just never fatally.)
+
+Baseline established: **Nebula = cyclic, self-recovering, indefinitely. ARWM = the sustained wedge
+(47+ min, no dips, twice fatal) is session-specific to us.** Next: the identical monitored run with
+ARWM only (Step 2), then knob isolation (Step 3: 2-screen workspace, backgrounds off, no switching)
+if the difference holds.
