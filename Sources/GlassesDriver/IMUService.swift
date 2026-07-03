@@ -32,6 +32,11 @@ public final class IMUService: @unchecked Sendable {
     private var netDevice = device_imu_net_type()
     private var thread: Thread?
     private var running = false
+    /// Set to bounce the inner read loop: close and re-probe the device without stopping the
+    /// thread. Needed because a device that is open but silently delivering nothing (issue #3 —
+    /// glasses in their onboard follow mode, or a wedged HID stream) never returns an error from
+    /// `device_imu_read`, so the loop spins forever and the 2s re-probe never engages.
+    private var restartRequested = false
     /// Latest IMU temperature (°C), read AFTER each `device_imu_read` returns. We must NOT touch
     /// `device` inside `handleUpdate` (the callback runs while `&device` is held inout by the read,
     /// and a concurrent access trips Swift's exclusivity check → abort), so we stash it here.
@@ -112,6 +117,16 @@ public final class IMUService: @unchecked Sendable {
         }
     }
 
+    /// Close and reopen the device without stopping the read thread. Idempotent — safe to call
+    /// repeatedly (e.g. from a watchdog); a no-op when the service isn't running or the loop is
+    /// already in its between-devices re-probe. Takes effect within ~100ms (the read timeout).
+    public func restart() {
+        queue.async { [self] in
+            guard running else { return }
+            restartRequested = true
+        }
+    }
+
     public func recenter(includeRoll: Bool = true) { poseStore.recenter(includeRoll: includeRoll) }
 
     /// Measure the residual yaw drift while the glasses rest still on a flat surface, then subtract
@@ -134,6 +149,9 @@ public final class IMUService: @unchecked Sendable {
 
     private func readLoop() {
         while running {
+            // A restart request arriving while we're between devices is already satisfied by the
+            // probe below — clear it so it can't immediately bounce the next successful open.
+            restartRequested = false
             // 1) XREAL Air series — IMU is a HID report stream. Unchanged behaviour for Air users.
             var dev = device_imu_type()
             if device_imu_open(&dev, imuEventCallback) == DEVICE_IMU_ERROR_NO_ERROR {
@@ -142,7 +160,7 @@ public final class IMUService: @unchecked Sendable {
                 usingNetworkIMU = false
                 announceConnected(productID: device.product_id, transport: "HID")
                 NSLog("IMUService: opened (HID) VID 0x%04x PID 0x%04x", device.vendor_id, device.product_id)
-                while running {
+                while running, !restartRequested {
                     let r = device_imu_read(&device, 100) // ms timeout
                     if r == DEVICE_IMU_ERROR_UNPLUGGED || r == DEVICE_IMU_ERROR_NO_DEVICE || r == DEVICE_IMU_ERROR_NO_HANDLE {
                         break
@@ -150,6 +168,10 @@ public final class IMUService: @unchecked Sendable {
                     lastTemperature = device.temperature  // safe here: the read's inout access has ended
                 }
                 device_imu_close(&device)
+                if restartRequested {
+                    restartRequested = false
+                    NSLog("IMUService: restart requested — reopening device (HID)")
+                }
                 DispatchQueue.main.async { self.state = .disconnected }
                 continue
             }
@@ -163,7 +185,7 @@ public final class IMUService: @unchecked Sendable {
                 usingNetworkIMU = true
                 announceConnected(productID: netDevice.product_id, transport: "network")
                 NSLog("IMUService: opened (network) PID 0x%04x", netDevice.product_id)
-                while running {
+                while running, !restartRequested {
                     let r = device_imu_net_read(&netDevice, 100) // ms timeout
                     if r == DEVICE_IMU_ERROR_UNPLUGGED || r == DEVICE_IMU_ERROR_NO_DEVICE || r == DEVICE_IMU_ERROR_NO_HANDLE {
                         break
@@ -171,6 +193,10 @@ public final class IMUService: @unchecked Sendable {
                     lastTemperature = netDevice.temperature  // One-series IMU temperature
                 }
                 device_imu_net_close(&netDevice)
+                if restartRequested {
+                    restartRequested = false
+                    NSLog("IMUService: restart requested — reopening device (network)")
+                }
                 DispatchQueue.main.async { self.state = .disconnected }
                 continue
             }

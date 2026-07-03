@@ -562,6 +562,23 @@ final class AppCoordinator: ObservableObject {
             self?.statusMessage = "ColorSync recovered."
         }
         colorSyncWatchdog.setEnabled(colorSyncAlertEnabled)
+
+        // IMU stream-loss watchdog (issue #3): auto-restart a silently dead head-tracking stream,
+        // and warn (banner + speech) if the restarts don't revive it.
+        imuWatchdog.enabled = imuWatchdogEnabled
+        imuWatchdog.onRestartRequested = { attempt in
+            DebugLog.shared.log("IMU watchdog: stream stalled — restart attempt \(attempt)")
+            IMUService.shared.restart()
+        }
+        imuWatchdog.onStallAlert = { [weak self] in
+            self?.presentIMUStallAlert()
+        }
+        imuWatchdog.onRecovered = { [weak self] in
+            self?.imuStallWarning = false
+            self?.statusMessage = "Head tracking recovered."
+            self?.announcer.speak("Head tracking recovered.")
+            DebugLog.shared.log("IMU watchdog: stream recovered")
+        }
         startChurnSession()   // begin this session's display-churn record (Diagnostics)
         // Populate the layout with the currently-connected monitors (positioning-only/green).
         syncPhysicalMonitors()
@@ -846,6 +863,15 @@ final class AppCoordinator: ObservableObject {
         // entire panel — a ~45 ms hitch that starved the renderer — so the readouts were frozen in AR.)
         live.imuRate = rate
         live.renderFPS = fps
+
+        // IMU stream-loss watchdog: only meaningful while AR runs with glasses nominally connected
+        // and not mid display-mode switch (SBS renegotiation stalls rates benignly). A real unplug
+        // sets glassesState = .disconnected and is surfaced elsewhere.
+        var connected = false
+        if case .connected = glassesState { connected = true }
+        imuWatchdog.evaluate(rate: simulateIMUStall ? 0 : rate,
+                             gatesOpen: arActive && connected && !switchingDisplayMode,
+                             now: now)
         live.euler = e
         live.imuTemperature = Double(pose.temperature)
         live.linearAccel = (Double(pose.acceleration.x), Double(pose.acceleration.y), Double(pose.acceleration.z))
@@ -2005,6 +2031,7 @@ final class AppCoordinator: ObservableObject {
         if let media = mediaPlayer?.sceneScreen() { initialScreens.append(media) }
         renderer.setScreens(initialScreens)
         arActive = true
+        imuWatchdog.deferChecks(for: 5, now: CACurrentMediaTime()) // device may still be settling
         let hud = displayedHUDProfile
         widgetManager?.setLayout(widgets: hud?.widgets ?? [], stacks: hud?.stacks ?? [])
         widgetManager?.start()
@@ -3346,6 +3373,39 @@ final class AppCoordinator: ObservableObject {
         alert.runModal()
     }
 
+    /// Detector + auto-restart for a silently dead IMU stream (issue #3): anchored screens freeze
+    /// and behave like follow mode with no error anywhere. Fed from updateStats()'s 0.5s tick.
+    let imuWatchdog = IMUStreamWatchdog()
+    /// Auto-restart head tracking when the stream stalls, and warn if restarts don't revive it.
+    /// On by default — unlike the ColorSync monitor this is a silent correctness loss (anchor mode
+    /// quietly becomes follow mode) and the auto-restart is harmless. Persisted.
+    @Published var imuWatchdogEnabled: Bool =
+        UserDefaults.standard.object(forKey: "imuWatchdogEnabled") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(imuWatchdogEnabled, forKey: "imuWatchdogEnabled")
+            imuWatchdog.enabled = imuWatchdogEnabled
+        }
+    }
+    /// Set when the IMU stream stayed dead through all automatic restarts. Surfaced on the
+    /// Diagnostics page; cleared automatically when samples flow again.
+    @Published var imuStallWarning = false
+    /// Debug hook: launch with ARWM_SIMULATE_IMU_STALL=1 to feed the watchdog a zero rate (the
+    /// real rate is untouched), exercising detect → restart → alert without hardware.
+    private let simulateIMUStall = ProcessInfo.processInfo.environment["ARWM_SIMULATE_IMU_STALL"] == "1"
+
+    /// All IMU restarts failed — the stream is dead but the display link is fine, so the user sees
+    /// screens that follow their head. No modal (they're wearing the glasses and a dialog on a
+    /// follow-behaving screen is hostile): banner + status + a spoken heads-up, auto-cleared on
+    /// recovery. Wording covers the known non-bug cause — the glasses' own follow mode (issue #3).
+    private func presentIMUStallAlert() {
+        imuStallWarning = true
+        statusMessage = "No head-tracking data from the glasses — anchored screens will follow your "
+            + "head. If the glasses are in their own follow/smoothing mode, switch them to anchor "
+            + "(native) mode; otherwise unplug and replug the USB cable."
+        announcer.speak("Head tracking lost. Check the glasses are in anchor mode, or replug them.")
+        DebugLog.shared.log("IMU watchdog: stream still dead after restarts — user alerted")
+    }
+
     /// Diagnostics "Preview" button: show the stuck alert with a sample value so its tone/wording
     /// can be checked without waiting for a real wedge. Resets the sticky warning banner after.
     func previewColorSyncAlert() {
@@ -3630,6 +3690,7 @@ final class AppCoordinator: ObservableObject {
                                          refresh: glassesRefreshRate)
         }
         arActive = true
+        imuWatchdog.deferChecks(for: 5, now: CACurrentMediaTime())
         lastWindowSnapshot = CACurrentMediaTime()
         if arActivity == nil {
             arActivity = ProcessInfo.processInfo.beginActivity(
@@ -3688,6 +3749,8 @@ final class AppCoordinator: ObservableObject {
         screensHidden = false
         glassesDisplayID = 0
         arActive = false
+        imuWatchdog.reset()   // a stall episode shouldn't outlive the session it happened in
+        imuStallWarning = false
         lastArrangementSignature = []
         outputScreenName = nil
         statusMessage = "AR stopped"

@@ -1345,6 +1345,24 @@ struct ControlPanelView: View {
                 }
             }
             Divider()
+            Toggle("Restart head tracking if it stops", isOn: $coordinator.imuWatchdogEnabled)
+                .font(.caption)
+            Text("If the glasses stop sending head-tracking data during AR (anchored screens start "
+                 + "following your head), the connection is restarted automatically; if that doesn't "
+                 + "revive it you get a warning here and a spoken heads-up.")
+                .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if coordinator.imuStallWarning {
+                HStack(alignment: .top, spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle.fill").font(.caption2).foregroundStyle(.red)
+                    Text("No head-tracking data from the glasses — anchored screens will follow your "
+                         + "head. If the glasses are in their own follow/smoothing mode, switch them "
+                         + "to anchor (native) mode; otherwise unplug and replug the USB cable.")
+                        .font(.caption2).foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Divider()
             healthRow("ColorSync display profiles", coordinator.displayProfileCount, warn: 30,
                       hint: "Lots of stale per-display profiles bloat the ColorSync registry.")
             healthRow("Saved display configs", coordinator.displayConfigCount, warn: 50,
