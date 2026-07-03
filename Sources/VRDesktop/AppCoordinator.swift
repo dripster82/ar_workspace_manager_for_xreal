@@ -2091,7 +2091,7 @@ final class AppCoordinator: ObservableObject {
 
         renderer.showLabels = labelsVisible
         mediaPlayer?.setAR(active: true)   // media only plays while AR runs
-        renderer.setFullscreenMedia(mediaPlayer?.fullscreenProvider())
+        renderer.setFullscreenMedia(mediaPlayer?.fullscreenProvider(), stretch: mediaStretchFullView)
         var initialScreens = assembleScene(pairs)
         if let media = mediaPlayer?.sceneScreen() { initialScreens.append(media) }
         renderer.setScreens(initialScreens)
@@ -2375,7 +2375,7 @@ final class AppCoordinator: ObservableObject {
               let workspace = workspaceStore.activeWorkspace else { return }
         // The head-locked media player (if pinned) renders over everything else, and stays even in
         // passthrough mode (workspace screens hidden). Full view goes through the fullscreen blit.
-        renderer.setFullscreenMedia(mediaPlayer?.fullscreenProvider())
+        renderer.setFullscreenMedia(mediaPlayer?.fullscreenProvider(), stretch: mediaStretchFullView)
         updateFullscreenCaptureIdle()
         let media = mediaPlayer?.sceneScreen()
         if screensHidden {
@@ -2449,6 +2449,15 @@ final class AppCoordinator: ObservableObject {
         capturesThrottledForMedia = false
         for c in captures.values { c.restoreFrameRate() }
         DebugLog.shared.log("media: restored capture frame rate after full-view video")
+    }
+
+    /// Full-view scaling: false (default) = keep the video's aspect with black bars; true = stretch
+    /// to fill the FOV. Applied live via the renderer's fullscreen pass.
+    @Published var mediaStretchFullView: Bool = UserDefaults.standard.bool(forKey: "mediaStretchFullView") {
+        didSet {
+            UserDefaults.standard.set(mediaStretchFullView, forKey: "mediaStretchFullView")
+            applyRenderedScene()
+        }
     }
 
     func setMediaPosition(_ p: MediaPlayerManager.Position) { mediaPlayer?.setPosition(p) }

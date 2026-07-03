@@ -2671,6 +2671,12 @@ struct MediaPlayerControls: View {
                 Spacer()
                 Text("⌃⌥1–5").font(.caption2).foregroundStyle(.secondary)
             }
+            Toggle("Stretch to fill in full view", isOn: Binding(
+                get: { coordinator.mediaStretchFullView },
+                set: { coordinator.mediaStretchFullView = $0 }))
+                .font(.caption)
+                .help("Off keeps the video's shape with black bars; on stretches it edge-to-edge "
+                      + "(non-16:9 videos will distort).")
             if !coordinator.arActive {
                 Text("Start AR to see the video in the glasses.")
                     .font(.caption2).foregroundStyle(.secondary)

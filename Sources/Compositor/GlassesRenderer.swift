@@ -659,12 +659,14 @@ public final class GlassesRenderer: NSObject {
         lock.unlock()
     }
 
-    /// Full-FOV media: when set, the provided texture is stretched across the ENTIRE display each
-    /// frame (a fullscreen blit), filling the FOV edge-to-edge regardless of the video's aspect. Used
-    /// for the media player's "Full view" position; nil = off. Read on the render thread under `lock`.
+    /// Full-FOV media: when set, the provided texture is drawn across the display each frame over a
+    /// black background. `stretch` fills edge-to-edge regardless of aspect; otherwise the video is
+    /// aspect-fit with black bars (letterbox/pillarbox). Used for the media player's "Full view"
+    /// position; nil = off. Read on the render thread under `lock`.
     private var fullscreenMediaProvider: (() -> MTLTexture?)?
-    public func setFullscreenMedia(_ provider: (() -> MTLTexture?)?) {
-        lock.lock(); fullscreenMediaProvider = provider; lock.unlock()
+    private var fullscreenMediaStretch = false
+    public func setFullscreenMedia(_ provider: (() -> MTLTexture?)?, stretch: Bool = false) {
+        lock.lock(); fullscreenMediaProvider = provider; fullscreenMediaStretch = stretch; lock.unlock()
     }
 
     /// Atlas render target for a wide-canvas screen (recreated on size change). Mipmapped so
@@ -951,6 +953,7 @@ public final class GlassesRenderer: NSObject {
         lock.lock()
         let currentScreens = screens
         let mediaProvider = fullscreenMediaProvider
+        let mediaStretch = fullscreenMediaStretch
         let resetCaches = pendingCacheReset
         pendingCacheReset = false
         lock.unlock()
@@ -1029,16 +1032,28 @@ public final class GlassesRenderer: NSObject {
             }
         }
 
-        // Full-FOV media: stretch the video across the whole drawable (over the scene, under the HUD).
+        // Full-FOV media: draw the video across the drawable over black (under the HUD overlays).
+        // Stretch fills edge-to-edge; otherwise aspect-fit inside a black frame (letterbox).
         if let mediaProvider, let tex = mediaProvider(), let dp = downscalePipeline {
             let mpass = MTLRenderPassDescriptor()
             mpass.colorAttachments[0].texture = drawable.texture
-            mpass.colorAttachments[0].loadAction = .load
+            mpass.colorAttachments[0].loadAction = .clear   // black bars + hides the scene behind
+            mpass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
             mpass.colorAttachments[0].storeAction = .store
             if let enc = commandBuffer.makeRenderCommandEncoder(descriptor: mpass) {
                 enc.setRenderPipelineState(dp)
                 enc.setFragmentTexture(tex, index: 0)
                 enc.setFragmentSamplerState(linearSampler, index: 0)
+                if !mediaStretch, tex.width > 0, tex.height > 0 {
+                    // Aspect-fit viewport centred in the drawable (fullscreen_vertex fills NDC, so
+                    // the viewport IS the video rect).
+                    let W = Double(drawable.texture.width), H = Double(drawable.texture.height)
+                    let texA = Double(tex.width) / Double(tex.height)
+                    var vw = W, vh = H
+                    if texA > W / H { vh = W / texA } else { vw = H * texA }
+                    enc.setViewport(MTLViewport(originX: (W - vw) / 2, originY: (H - vh) / 2,
+                                                width: vw, height: vh, znear: 0, zfar: 1))
+                }
                 enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
                 enc.endEncoding()
             }
