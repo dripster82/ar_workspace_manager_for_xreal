@@ -17,7 +17,13 @@ final class ColorSyncWatchdog {
     /// ~74–100%; benign AR-time bursts peak ~30–53% and decay, so 65% over several samples avoids them.
     private let pinThreshold = 65.0
     /// Consecutive over-threshold samples before alerting (× interval = sustained time required).
-    private let samplesToTrigger = 3
+    /// 12 × 30 s = 6 minutes UNBROKEN, because the loop has two modes (measured 2026-07-02/03, incl.
+    /// a 16 h Nebula baseline): benign self-recovering BURSTS that hold 65–74% for up to ~3.1 min
+    /// (150 observed, all recovered), and the fatal WEDGE that holds 45+ min until WindowServer
+    /// dies. The old 3-sample (~90 s) gate fired on bursts — a false alarm; 6 min filters every
+    /// observed burst and still alerts well inside the ~30–45 min runway before WindowServer risk.
+    /// Any single below-threshold sample resets the count, so a burst can't accumulate across gaps.
+    private let samplesToTrigger = 12
     private let interval: TimeInterval = 30
 
     /// Called once per runaway episode when the daemon has been pinned for the sustained window.
