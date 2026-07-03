@@ -58,6 +58,14 @@ final class MediaPlayerManager: ObservableObject {
     /// Remaining not-yet-played indices for shuffle mode; refilled when exhausted (if looping) or
     /// when the playlist/shuffle state changes.
     private var shuffleBag: [Int] = []
+    /// What actually played, newest last, for history-based Previous (essential under shuffle, and
+    /// nicer than index−1 after manual jumps too). Item IDs, not indices, so playlist edits can't
+    /// point it at the wrong video. Capped — beyond ~20 steps "previous" stops being navigation.
+    private var playHistory: [Item.ID] = []
+    private let playHistoryCap = 20
+    /// Set while Previous is navigating so play(at:) doesn't push the departure onto the history
+    /// (which would make repeated Previous ping-pong between two items).
+    private var navigatingBack = false
     /// True from load until the first frame is decodable — network files can take a while, so the
     /// UI shows a spinner (and AR a "Loading…" card) instead of sitting silently blank.
     @Published private(set) var loading = false
@@ -195,6 +203,10 @@ final class MediaPlayerManager: ObservableObject {
             onChange?()
             return
         }
+        if !navigatingBack, let c = currentIndex, c != index, playlist.indices.contains(c) {
+            playHistory.append(playlist[c].id)
+            if playHistory.count > playHistoryCap { playHistory.removeFirst() }
+        }
         currentIndex = index
         errorMessage = nil
         loading = true
@@ -273,6 +285,16 @@ final class MediaPlayerManager: ObservableObject {
     }
 
     func previous() {
+        // Walk back through what actually played (works under shuffle and after manual jumps);
+        // fall back to index−1 when there's no usable history.
+        while let id = playHistory.popLast() {
+            if let idx = playlist.firstIndex(where: { $0.id == id }) {
+                navigatingBack = true
+                play(at: idx)
+                navigatingBack = false
+                return
+            }   // removed from the playlist since — skip it
+        }
         guard let c = currentIndex, c - 1 >= 0 else { return }
         play(at: c - 1)
     }
@@ -313,6 +335,7 @@ final class MediaPlayerManager: ObservableObject {
         source.stop()
         playlist = []
         currentIndex = nil
+        playHistory = []
         wantsPlay = false
         playing = false
         clearLoading()    // a clear mid-load left the spinner running forever

@@ -2632,7 +2632,7 @@ struct MediaPlayerControls: View {
             }
 
             HStack(spacing: 6) {
-                transport("backward.end.fill", "Previous (in playlist)") { coordinator.mediaPrevious() }
+                transport("backward.end.fill", "Previous (what played before)") { coordinator.mediaPrevious() }
                 transport("gobackward.10", "Rewind 10s · ⌃⌥←") { coordinator.mediaSkip(-10) }
                 transport(media.playing ? "pause.fill" : "play.fill", "Play/Pause · ⌃⌥K") { coordinator.toggleMediaPlay() }
                 transport("goforward.10", "Skip 10s · ⌃⌥→") { coordinator.mediaSkip(10) }
