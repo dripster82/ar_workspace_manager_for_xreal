@@ -2754,8 +2754,14 @@ struct MediaPlaylist: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
+            HStack(spacing: 12) {
                 Button("Add videos…") { coordinator.openMediaFile() }.controlSize(.small)
+                Toggle("Loop", isOn: $media.loopPlaylist)
+                    .toggleStyle(.checkbox).font(.caption)
+                    .help("When the last video ends, start the playlist again.")
+                Toggle("Shuffle", isOn: $media.shuffle)
+                    .toggleStyle(.checkbox).font(.caption)
+                    .help("Play in random order — no repeats until every video has played once.")
                 Spacer()
                 if !media.playlist.isEmpty {
                     Text("\(media.playlist.count) item\(media.playlist.count == 1 ? "" : "s")")

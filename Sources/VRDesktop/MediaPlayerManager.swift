@@ -43,6 +43,21 @@ final class MediaPlayerManager: ObservableObject {
     @Published private(set) var currentIndex: Int?
     /// Shown in the Media page when a file can't be played (unsupported container, missing file, …).
     @Published var errorMessage: String?
+    /// Loop the playlist: when the last item ends, continue from the first (with shuffle, refill the
+    /// shuffle order and keep going). Persisted.
+    @Published var loopPlaylist: Bool = UserDefaults.standard.bool(forKey: "media.loop") {
+        didSet { UserDefaults.standard.set(loopPlaylist, forKey: "media.loop") }
+    }
+    /// Play items in random order (no repeats until every item has played once). Persisted.
+    @Published var shuffle: Bool = UserDefaults.standard.bool(forKey: "media.shuffle") {
+        didSet {
+            UserDefaults.standard.set(shuffle, forKey: "media.shuffle")
+            if shuffle { refillShuffleBag() }
+        }
+    }
+    /// Remaining not-yet-played indices for shuffle mode; refilled when exhausted (if looping) or
+    /// when the playlist/shuffle state changes.
+    private var shuffleBag: [Int] = []
     /// True from load until the first frame is decodable — network files can take a while, so the
     /// UI shows a spinner (and AR a "Loading…" card) instead of sitting silently blank.
     @Published private(set) var loading = false
@@ -154,6 +169,7 @@ final class MediaPlayerManager: ObservableObject {
         let items = urls.map { Item(url: $0) }
         playlist.append(contentsOf: items)
         items.forEach { probeDuration($0) }
+        if shuffle { refillShuffleBag() }   // new items join the pool
         if wasEmpty, let first = playlist.indices.first { play(at: first) }
         persist()
         onChange?()
@@ -216,6 +232,7 @@ final class MediaPlayerManager: ObservableObject {
                 clearLoading()   // removing the item that was still loading
             }
         }
+        if shuffle { refillShuffleBag() }   // indices shifted — rebuild the pool
         persist()
         onChange?()
     }
@@ -224,13 +241,35 @@ final class MediaPlayerManager: ObservableObject {
         let currentID = currentIndex.flatMap { playlist.indices.contains($0) ? playlist[$0].id : nil }
         playlist.move(fromOffsets: from, toOffset: to)
         currentIndex = currentID.flatMap { id in playlist.firstIndex { $0.id == id } }
+        if shuffle { refillShuffleBag() }   // indices reordered — rebuild the pool
         persist()
         onChange?()
     }
 
+    private func refillShuffleBag() {
+        shuffleBag = Array(playlist.indices).filter { $0 != currentIndex }.shuffled()
+    }
+
+    /// The index to play next, honouring shuffle and loop. nil = nothing left (stop).
+    private func nextIndex() -> Int? {
+        guard !playlist.isEmpty else { return nil }
+        if shuffle {
+            // Drop indices invalidated by playlist edits.
+            shuffleBag.removeAll { !playlist.indices.contains($0) }
+            if shuffleBag.isEmpty {
+                guard loopPlaylist else { return nil }
+                refillShuffleBag()
+                if shuffleBag.isEmpty { return currentIndex }   // single-item playlist: loop it
+            }
+            return shuffleBag.isEmpty ? nil : shuffleBag.removeFirst()
+        }
+        if let c = currentIndex, c + 1 < playlist.count { return c + 1 }
+        return loopPlaylist ? 0 : nil
+    }
+
     func next() {
-        guard let c = currentIndex, c + 1 < playlist.count else { return }
-        play(at: c + 1)
+        guard let i = nextIndex() else { return }
+        play(at: i)
     }
 
     func previous() {
@@ -245,8 +284,8 @@ final class MediaPlayerManager: ObservableObject {
     /// End-of-item: advance through the playlist; at the end, stop cleanly so the state (and the
     /// playlist icon) doesn't stay "playing" forever on a finished list.
     private func handleEnded() {
-        if let c = currentIndex, c + 1 < playlist.count {
-            play(at: c + 1)
+        if let i = nextIndex() {
+            play(at: i)
         } else {
             wantsPlay = false
             playing = false
