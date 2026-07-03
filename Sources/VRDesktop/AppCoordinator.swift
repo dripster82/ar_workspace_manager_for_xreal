@@ -818,8 +818,12 @@ final class AppCoordinator: ObservableObject {
         // sample (idle frames included) for a few seconds while AR runs, restart it.
         if arActive {
             for capture in captures.values where capture.secondsSinceLastSample > 5 {
-                DebugLog.shared.log(String(format: "capture %u stalled %.1fs — restarting",
-                                           capture.displayID, capture.secondsSinceLastSample))
+                // Snapshot the duration NOW: DebugLog.log's message is an @autoclosure evaluated
+                // later on the log queue, by which time restartCapture() has reset the timer — so
+                // the log used to claim "stalled 0.0s" for every real stall.
+                let stalledFor = capture.secondsSinceLastSample
+                let id = capture.displayID
+                DebugLog.shared.log(String(format: "capture %u stalled %.1fs — restarting", id, stalledFor))
                 capture.restartCapture()
             }
             // Escalation: a glasses-only display sleep/wake doesn't fire didWakeNotification, so the
