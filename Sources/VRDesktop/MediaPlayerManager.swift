@@ -128,15 +128,23 @@ final class MediaPlayerManager: ObservableObject {
         if playlist.indices.contains(idx) {
             currentIndex = idx
             loading = true   // cleared by onReady once the resume frame is decoded
-            source.load(url: playlist[idx].url, startAt: d.double(forKey: Key.time), autoplay: false)
+            restoredResumeTime = d.double(forKey: Key.time)
+            source.load(url: playlist[idx].url, startAt: restoredResumeTime, autoplay: false)
             playing = false
         }
     }
 
     var hasMedia: Bool { source.hasMedia }
     var currentName: String? { currentIndex.flatMap { playlist.indices.contains($0) ? playlist[$0].name : nil } }
-    /// Playback position for the transient progress bar.
-    var progress: (current: Double, duration: Double) { (source.currentTime, source.duration) }
+    /// The resume position restored at launch. libvlc reports position 0 until playback actually
+    /// runs (the :start-time seek applies at play), so the UI would read 0:00 before the first
+    /// Play — this fills the gap. Cleared once real playback reports a position.
+    private var restoredResumeTime: Double = 0
+    /// Playback position for the scrubber / progress bar.
+    var progress: (current: Double, duration: Double) {
+        let c = source.currentTime
+        return (c > 0.5 ? c : max(c, restoredResumeTime), source.duration)
+    }
 
     // MARK: Playlist
 
@@ -174,6 +182,7 @@ final class MediaPlayerManager: ObservableObject {
         currentIndex = index
         errorMessage = nil
         loading = true
+        restoredResumeTime = 0   // a newly chosen item starts fresh
         onLoading?(playlist[index].name)
         source.load(url: playlist[index].url, autoplay: false)   // applyPlayback decides
         wantsPlay = true
@@ -245,7 +254,7 @@ final class MediaPlayerManager: ObservableObject {
         }
     }
     func skip(_ seconds: Double) { source.seek(by: seconds) }
-    func seek(to seconds: Double) { source.seek(to: seconds); saveTime() }
+    func seek(to seconds: Double) { restoredResumeTime = seconds; source.seek(to: seconds); saveTime() }
     func clearError() { errorMessage = nil }
 
     /// Stop playing and hide the media screen, but KEEP the playlist. The current video stays loaded
