@@ -69,7 +69,7 @@ public final class VLCPlayerSource: @unchecked Sendable {
 
     public var currentTime: Double {
         guard let player else { return 0 }
-        return Double(libvlc_media_player_get_time(player)) / 1000
+        return max(0, Double(libvlc_media_player_get_time(player)) / 1000)  // libvlc: -1 = no media
     }
 
     public var duration: Double {

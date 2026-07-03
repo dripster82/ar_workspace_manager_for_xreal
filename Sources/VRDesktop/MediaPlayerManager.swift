@@ -107,8 +107,13 @@ final class MediaPlayerManager: ObservableObject {
     }
 
     private func saveTime() {
-        guard source.hasMedia else { return }
-        UserDefaults.standard.set(source.currentTime, forKey: Key.time)
+        // Only persist a MEANINGFUL position: during load/priming libvlc reports -1/0, and the 3s
+        // timer used to overwrite the saved resume point with ~0 right after every launch — quit
+        // (or update the app) inside that window and the resume data was lost.
+        guard source.hasMedia, source.isReady else { return }
+        let t = source.currentTime
+        guard t > 0 else { return }
+        UserDefaults.standard.set(t, forKey: Key.time)
     }
 
     /// Restore the saved playlist + position + resume point on launch. The current item is loaded
@@ -157,6 +162,15 @@ final class MediaPlayerManager: ObservableObject {
 
     func play(at index: Int) {
         guard playlist.indices.contains(index) else { return }
+        // Clicking the item that's already loaded RESUMES it (post-restart, the restored item sits
+        // paused at its saved position — a row click used to reload it from zero, losing the resume
+        // point). Only choosing a different item, or re-clicking one that failed to load, reloads.
+        if index == currentIndex, source.hasMedia, errorMessage == nil {
+            wantsPlay = true
+            applyPlayback()
+            onChange?()
+            return
+        }
         currentIndex = index
         errorMessage = nil
         loading = true
@@ -164,7 +178,7 @@ final class MediaPlayerManager: ObservableObject {
         source.load(url: playlist[index].url, autoplay: false)   // applyPlayback decides
         wantsPlay = true
         applyPlayback()
-        UserDefaults.standard.set(0.0, forKey: Key.time)   // new item starts at the beginning
+        UserDefaults.standard.set(0.0, forKey: Key.time)   // a newly chosen item starts at the beginning
         persist()
         onChange?()
     }
