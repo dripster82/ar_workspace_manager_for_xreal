@@ -74,9 +74,11 @@ fi
 PRERELEASE_FLAG=()
 [[ "$VERSION" == *-* ]] && PRERELEASE_FLAG=(--prerelease)
 
-# Architectures to ship as separate DMGs. arm64 = Apple Silicon, x86_64 = Intel. The vendored
-# libjson-c.a is universal so both cross-compile from this machine.
+# Architectures to ship as separate DMGs, with user-friendly names (non-techies pick "Apple-Silicon"
+# or "Intel", not arm64/x86_64). The vendored libjson-c.a is universal so both cross-compile from
+# this machine. NB the in-app updater matches these labels (AppCoordinator.pickDMGAsset) — keep in sync.
 ARCHES=(arm64 x86_64)
+arch_label() { [[ "$1" == "arm64" ]] && echo "Apple-Silicon" || echo "Intel"; }
 
 # --- Changelog (generated from commits since the previous tag; you review/edit before publishing) ---
 NOTES="$ROOT/build/release-notes-$TAG.md"
@@ -113,9 +115,10 @@ for ARCH in $ARCHES; do
   ARWM_ARCH="$ARCH" ARWM_VERSION="$VERSION" CODESIGN_IDENTITY="$IDENTITY" "$ROOT/Scripts/build-app.sh" release
   "$ROOT/Scripts/notarize.sh" "$PROFILE"
 
-  ADMG="$ROOT/build/AR-Workspace-Manager-$VERSION-$ARCH.dmg"
-  echo "==> [dmg] build + notarize $ARCH dmg"
-  DMG_VOLNAME="AR Workspace Manager $VERSION ($ARCH)" CODESIGN_IDENTITY="$IDENTITY" \
+  LABEL="$(arch_label "$ARCH")"
+  ADMG="$ROOT/build/AR-Workspace-Manager-$VERSION-$LABEL.dmg"
+  echo "==> [dmg] build + notarize $LABEL dmg"
+  DMG_VOLNAME="AR Workspace Manager $VERSION (${LABEL//-/ })" CODESIGN_IDENTITY="$IDENTITY" \
     "$ROOT/Scripts/make-dmg.sh" "$APP" "$ADMG"
   xcrun notarytool submit "$ADMG" --keychain-profile "$PROFILE" --wait
   xcrun stapler staple "$ADMG"

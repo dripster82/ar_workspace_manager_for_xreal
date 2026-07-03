@@ -1110,16 +1110,17 @@ final class AppCoordinator: ObservableObject {
         updateCheckMessage = message
     }
 
-    /// Choose the right .dmg for this Mac: releases now ship per-arch assets (…-arm64.dmg /
-    /// …-x86_64.dmg); prefer the matching one, fall back to any .dmg (older single-asset releases).
+    /// Choose the right .dmg for this Mac. Releases ship per-arch assets named with friendly labels
+    /// (…-Apple-Silicon.dmg / …-Intel.dmg, from 0.7.x) — earlier dual-arch cuts used -arm64/-x86_64,
+    /// so both spellings match; fall back to any .dmg (older single-asset releases).
     static func pickDMGAsset(_ assets: [(name: String, url: String)]) -> URL? {
         let dmgs = assets.filter { $0.name.lowercased().hasSuffix(".dmg") }
         #if arch(arm64)
-        let mine = "arm64"
+        let markers = ["apple-silicon", "applesilicon", "arm64"]
         #else
-        let mine = "x86_64"
+        let markers = ["intel", "x86_64", "x86-64"]
         #endif
-        let match = dmgs.first { $0.name.lowercased().contains(mine) } ?? dmgs.first
+        let match = dmgs.first { d in markers.contains { d.name.lowercased().contains($0) } } ?? dmgs.first
         return match.flatMap { URL(string: $0.url) }
     }
 
