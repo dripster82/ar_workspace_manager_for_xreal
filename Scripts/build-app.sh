@@ -60,6 +60,8 @@ VLCKIT_FW="$ROOT/vendor/VLCKit/VLCKit.xcframework/macos-arm64_x86_64/VLCKit.fram
 if [[ -d "$VLCKIT_FW" ]]; then
   mkdir -p "$APP/Contents/Frameworks"
   cp -R "$VLCKIT_FW" "$APP/Contents/Frameworks/"
+  # LGPL 2.1 compliance: ship the license text with the app (surfaced on the About page).
+  cp "$ROOT/vendor/VLCKit/COPYING.txt" "$APP/Contents/Resources/VLCKit-LICENSE.txt"
 else
   echo "✗ VLCKit not found — run Scripts/fetch-vlckit.sh first."; exit 1
 fi

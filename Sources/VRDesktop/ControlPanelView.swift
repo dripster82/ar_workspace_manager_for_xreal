@@ -213,6 +213,25 @@ struct ControlPanelView: View {
                             Link("Releases", destination: URL(string: "https://github.com/dripster82/ar_workspace_manager_for_xreal/releases")!)
                         }
                         .font(.caption).controlSize(.small)
+                        Divider().padding(.vertical, 2)
+                        // LGPL 2.1 attribution for the bundled VLCKit (dynamically linked, so it can
+                        // be swapped by replacing the framework in Contents/Frameworks).
+                        Text("Acknowledgements").font(.caption.weight(.medium))
+                        Text("Media playback uses VLCKit / libVLC — © VideoLAN and authors, licensed "
+                             + "under the GNU LGPL 2.1. VLCKit is dynamically linked and can be replaced "
+                             + "in the app bundle's Frameworks folder.")
+                            .font(.caption2).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        HStack(spacing: 14) {
+                            Link("VLCKit source", destination: URL(string: "https://code.videolan.org/videolan/VLCKit")!)
+                            Button("View LGPL license") {
+                                if let url = Bundle.main.url(forResource: "VLCKit-LICENSE", withExtension: "txt") {
+                                    NSWorkspace.shared.open(url)
+                                }
+                            }
+                            .buttonStyle(.link)
+                        }
+                        .font(.caption).controlSize(.small)
                     }
                 }
             }
