@@ -832,9 +832,17 @@ final class AppCoordinator: ObservableObject {
 
         // Capture stall watchdog: SCStream can freeze after sleep / display reconfiguration — the
         // last frame stays on screen looking like the capture died. If a stream hasn't delivered a
-        // sample (idle frames included) for a few seconds while AR runs, restart it.
+        // sample for a while during AR, restart it.
+        //
+        // Threshold history: 5 s caused a RESTART STORM (up to ~1,800/day) — on this macOS, SCK
+        // simply stops delivering for fully STATIC content (honest logging showed every "stall" at
+        // 5.0–5.5 s, i.e. the threshold itself, recurring every ~20 s while e.g. watching a video
+        // with the desktop screens idle). Each needless restart is a stream teardown — the exact
+        // freed-IOSurface window behind the recurring prepareSharpTextures heap-corruption crash
+        // (2026-06-30, 07-03 ×2). 30 s keeps real recovery (sleep/wake, reconfig) while cutting the
+        // teardown churn ~10×; genuinely dead streams also surface via didStopWithError.
         if arActive {
-            for capture in captures.values where capture.secondsSinceLastSample > 5 {
+            for capture in captures.values where capture.secondsSinceLastSample > 30 {
                 // Snapshot the duration NOW: DebugLog.log's message is an @autoclosure evaluated
                 // later on the log queue, by which time restartCapture() has reset the timer — so
                 // the log used to claim "stalled 0.0s" for every real stall.
@@ -849,8 +857,8 @@ final class AppCoordinator: ObservableObject {
             // screens stay frozen. If anything is still badly stalled past the point where restarts
             // should've worked, rebuild the whole AR session once (recreates virtual displays +
             // output). Debounced so it can't loop while displays settle.
-            if let worst = captures.values.map(\.secondsSinceLastSample).max(), worst > 12,
-               now - lastFullRecovery > 30 {
+            if let worst = captures.values.map(\.secondsSinceLastSample).max(), worst > 45,
+               now - lastFullRecovery > 60 {
                 lastFullRecovery = now
                 DebugLog.shared.log(String(format: "capture stalled %.0fs despite restarts — full AR recovery", worst))
                 restartARIfActive(preserveLayout: true)
