@@ -3327,21 +3327,22 @@ final class AppCoordinator: ObservableObject {
     /// Diagnostics page; cleared on the next manual clean.
     @Published var colorSyncRunawayWarning = false
 
-    /// The un-missable warning: the runaway is a predictable countdown to a WindowServer crash
-    /// (~30–45 min of pinned CPU in both observed incidents), so tell the user to replug NOW.
+    /// Heads-up that the runaway has been pinned for 6+ min (the wedge, not a benign burst).
+    /// Deliberately gentle — informational style, calm wording — since there's ~25–40 min of
+    /// runway before the session is actually at risk; the point is awareness, not panic.
     private func presentColorSyncRunawayAlert(cpu: Double) {
         colorSyncRunawayWarning = true
-        statusMessage = "ColorSync is stuck at \(Int(cpu))% — unplug and replug the glasses to clear it."
+        statusMessage = "ColorSync has been busy at \(Int(cpu))% for a while — replug the glasses when convenient."
         let alert = NSAlert()
-        alert.alertStyle = .critical
-        alert.messageText = "Display colour service is stuck — replug the glasses"
+        alert.alertStyle = .informational
+        alert.messageText = "The display colour service is running high"
         alert.informativeText =
-            "macOS's colour service (colorsync.displayservices) is pinned at \(Int(cpu))% CPU. "
-            + "This is a macOS bug triggered by the glasses, and the app cannot fix it. Left alone "
-            + "it has previously crashed the whole display session (WindowServer) after ~30 minutes."
-            + "\n\nSave your work, then unplug and replug the glasses — or reboot — to clear it."
+            "macOS's colour service has been stuck at \(Int(cpu))% CPU for several minutes — a known "
+            + "macOS quirk with the glasses connected (it happens under XREAL's own app too), and not "
+            + "something this app can clear.\n\nNo rush, but if it stays stuck the Mac gets sluggish "
+            + "and the display session can eventually reset. When convenient, unplug and replug the "
+            + "glasses — that clears it in a few seconds."
         alert.addButton(withTitle: "OK")
-        NSApp.activate(ignoringOtherApps: true)
         alert.runModal()
     }
 
