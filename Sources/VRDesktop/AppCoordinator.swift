@@ -867,8 +867,9 @@ final class AppCoordinator: ObservableObject {
             if let broken, now - lastFullRecovery > 60 {
                 lastFullRecovery = now
                 DebugLog.shared.log("capture \(broken.displayID) genuinely broken (restart failures=\(broken.consecutiveRestartFailures), displayActive=\(CGDisplayIsActive(broken.displayID))) — full AR recovery")
-                withColorSyncSettle("capture recovery", maxWait: 30,
-                                    toast: "Recovering screen capture — waiting for the display service to settle…") { [weak self] in
+                // No toast: auto-recovery is background housekeeping the user usually never
+                // notices — only user-initiated actions (AR start, workspace switch) justify one.
+                withColorSyncSettle("capture recovery", maxWait: 30) { [weak self] in
                     self?.restartARIfActive(preserveLayout: true)
                 }
             }
