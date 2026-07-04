@@ -72,6 +72,8 @@ public final class GlassesRenderer: NSObject {
     public var showVoice = false
     private var pickerTexture: MTLTexture?
     public var showPicker = false
+    private var statusToastTexture: MTLTexture?
+    public var showStatusToast = false
 
     // Head-locked HUD widgets: small alpha-blended quads drawn always-on-top in view space.
     private var widgetPipeline: MTLRenderPipelineState!
@@ -368,6 +370,18 @@ public final class GlassesRenderer: NSObject {
     }
 
     public func clearVoice() { showVoice = false }
+
+    /// Set the transient status toast (e.g. "waiting for the display service to settle"), shown
+    /// bottom-centre just above the voice indicator so mid-session waits are visible in-glasses.
+    @discardableResult
+    public func setStatusToastImage(_ cgImage: CGImage) -> Bool {
+        guard let tex = makeOverlayTexture(cgImage) else { return false }
+        statusToastTexture = tex
+        showStatusToast = true
+        return true
+    }
+
+    public func clearStatusToast() { showStatusToast = false }
 
     /// Set the centred window-picker overlay (⌃⌥W). Large, centred — same upload path as the help HUD.
     @discardableResult
@@ -1065,6 +1079,7 @@ public final class GlassesRenderer: NSObject {
         drawMediaProgressOverlay(commandBuffer: commandBuffer, target: drawable.texture)
         drawRecordingOverlay(commandBuffer: commandBuffer, target: drawable.texture)
         drawVoiceOverlay(commandBuffer: commandBuffer, target: drawable.texture)
+        drawStatusToastOverlay(commandBuffer: commandBuffer, target: drawable.texture)
         // For a debug dump or screenshot, also composite the HUD overlays into the readable scene
         // target so the captured image matches what's on screen (the drawable is unreadable).
         if dumpDir != nil || shotURL != nil || recording {
@@ -1129,6 +1144,13 @@ public final class GlassesRenderer: NSObject {
         guard showVoice, let tex = voiceTexture else { return }
         drawOverlay(tex, commandBuffer: commandBuffer, target: target,
                     heightFraction: 0.08, maxWidthFraction: 0.7, anchor: .bottom(marginNDC: 0.06))
+    }
+
+    /// Draw the transient status toast, bottom-centre above the voice indicator.
+    private func drawStatusToastOverlay(commandBuffer: MTLCommandBuffer, target: MTLTexture) {
+        guard showStatusToast, let tex = statusToastTexture else { return }
+        drawOverlay(tex, commandBuffer: commandBuffer, target: target,
+                    heightFraction: 0.06, maxWidthFraction: 0.7, anchor: .bottom(marginNDC: 0.18))
     }
 
     /// Draw the centred help/cursor HUD as an alpha-blended quad on top of the given target.

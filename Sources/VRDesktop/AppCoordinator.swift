@@ -3322,6 +3322,14 @@ final class AppCoordinator: ObservableObject {
     private var settleToast: NSPanel?
     private func showSettleToast(_ text: String) {
         hideSettleToast()
+        // Mid-session (workspace switch / capture recovery) the user is looking through the
+        // glasses, where a desktop panel is invisible — mirror the toast into the AR overlay too.
+        if arActive, let renderer {
+            let ir = ImageRenderer(content: SettleToastView(text: text))
+            ir.scale = 2
+            ir.isOpaque = false
+            if let cg = ir.cgImage { renderer.setStatusToastImage(cg) }
+        }
         let view = NSHostingView(rootView: SettleToastView(text: text))
         view.frame.size = view.fittingSize
         let panel = NSPanel(contentRect: view.frame,
@@ -3346,6 +3354,7 @@ final class AppCoordinator: ObservableObject {
     private func hideSettleToast() {
         settleToast?.orderOut(nil)
         settleToast = nil
+        renderer?.clearStatusToast()
     }
 
     /// Restart AR on the same output so a workspace change rebuilds its virtual displays.
