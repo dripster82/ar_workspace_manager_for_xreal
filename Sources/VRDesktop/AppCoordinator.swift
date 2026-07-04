@@ -867,7 +867,8 @@ final class AppCoordinator: ObservableObject {
             if let broken, now - lastFullRecovery > 60 {
                 lastFullRecovery = now
                 DebugLog.shared.log("capture \(broken.displayID) genuinely broken (restart failures=\(broken.consecutiveRestartFailures), displayActive=\(CGDisplayIsActive(broken.displayID))) — full AR recovery")
-                withColorSyncSettle("capture recovery", maxWait: 30) { [weak self] in
+                withColorSyncSettle("capture recovery", maxWait: 30,
+                                    toast: "Recovering screen capture — waiting for the display service to settle…") { [weak self] in
                     self?.restartARIfActive(preserveLayout: true)
                 }
             }
@@ -2065,7 +2066,9 @@ final class AppCoordinator: ObservableObject {
         // Display creation on a busy ColorSync daemon is the wedge trigger — wait for a valley
         // first (bounded; instant when the daemon is idle, which is the common case).
         if !settled {
-            withColorSyncSettle("AR start", onWait: { [weak self] in
+            withColorSyncSettle("AR start",
+                                toast: "Starting AR — waiting for the display service to settle…",
+                                onWait: { [weak self] in
                 self?.statusMessage = "Waiting for the display service to settle…"
             }) { [weak self] in self?.beginAR(on: screen, settled: true) }
             return
@@ -3112,7 +3115,9 @@ final class AppCoordinator: ObservableObject {
         if !settled {
             let targets = workspace.virtualScreens.filter { $0.showInAR && $0.mirrorOfVirtual == nil }
             if virtualDisplays.wouldChurn(targets) {
-                withColorSyncSettle("workspace switch", onWait: { [weak self] in
+                withColorSyncSettle("workspace switch",
+                                    toast: "Switching workspace — waiting for the display service to settle…",
+                                    onWait: { [weak self] in
                     self?.statusMessage = "Waiting for the display service to settle…"
                 }) { [weak self] in self?.switchWorkspaceIncremental(to: workspace, settled: true) }
                 return
@@ -3279,6 +3284,7 @@ final class AppCoordinator: ObservableObject {
     /// reconfiguration we sample its CPU and, if it's busy, wait for a valley — bounded by `maxWait`
     /// so the UX can never hang: after that we proceed anyway and log it.
     private func withColorSyncSettle(_ label: String, maxWait: TimeInterval = 12,
+                                     toast: String? = nil,
                                      onWait: (() -> Void)? = nil,
                                      then action: @escaping () -> Void) {
         let start = CACurrentMediaTime()
@@ -3286,10 +3292,12 @@ final class AppCoordinator: ObservableObject {
         func attempt() {
             DispatchQueue.global(qos: .userInitiated).async {
                 let cpu = SystemHealth.processCPU(matching: ["colorsync.displayservices"]).first?.cpu ?? 0
-                DispatchQueue.main.async {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
                     let waited = CACurrentMediaTime() - start
                     if cpu < 25 || waited >= maxWait {
                         if waiting {
+                            self.hideSettleToast()
                             DebugLog.shared.log(String(format: "colorsync settle: %@ proceeding after %.0fs (daemon %.0f%%)", label, waited, cpu))
                         }
                         action()
@@ -3297,6 +3305,7 @@ final class AppCoordinator: ObservableObject {
                         if !waiting {
                             waiting = true
                             onWait?()
+                            if let toast { self.showSettleToast(toast) }
                             DebugLog.shared.log(String(format: "colorsync settle: daemon busy (%.0f%%) — delaying %@ up to %.0fs", cpu, label, maxWait))
                         }
                         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { attempt() }
@@ -3305,6 +3314,38 @@ final class AppCoordinator: ObservableObject {
             }
         }
         attempt()
+    }
+
+    /// Small floating "waiting…" toast shown while the settle guard delays a display action, so a
+    /// hotkey-triggered AR start doesn't look like the app hung when the control panel is closed.
+    /// Non-activating, click-through, auto-hidden the moment the guarded action proceeds.
+    private var settleToast: NSPanel?
+    private func showSettleToast(_ text: String) {
+        hideSettleToast()
+        let view = NSHostingView(rootView: SettleToastView(text: text))
+        view.frame.size = view.fittingSize
+        let panel = NSPanel(contentRect: view.frame,
+                            styleMask: [.borderless, .nonactivatingPanel],
+                            backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.level = .floating
+        panel.ignoresMouseEvents = true
+        panel.collectionBehavior = [.canJoinAllSpaces, .transient]
+        panel.contentView = view
+        if let screen = NSScreen.main {
+            let f = screen.visibleFrame
+            panel.setFrameOrigin(NSPoint(x: f.midX - view.frame.width / 2,
+                                         y: f.minY + f.height * 0.18))
+        }
+        panel.orderFrontRegardless()
+        settleToast = panel
+    }
+    private func hideSettleToast() {
+        settleToast?.orderOut(nil)
+        settleToast = nil
     }
 
     /// Restart AR on the same output so a workspace change rebuilds its virtual displays.
@@ -3897,5 +3938,20 @@ final class AppCoordinator: ObservableObject {
 
     func moveOutputWindow(x: Double, y: Double) {
         renderer?.moveOutput(to: CGPoint(x: x, y: y))
+    }
+}
+
+
+/// Content of the settle-guard toast: spinner + one line, capsule dark background.
+private struct SettleToastView: View {
+    let text: String
+    var body: some View {
+        HStack(spacing: 10) {
+            ProgressView().controlSize(.small)
+            Text(text).font(.callout)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        .background(.regularMaterial, in: Capsule())
+        .overlay(Capsule().strokeBorder(.white.opacity(0.15)))
     }
 }
