@@ -3296,28 +3296,71 @@ final class AppCoordinator: ObservableObject {
         // low reading proves nothing. Require two consecutive samples < 25% before proceeding;
         // the idle case pays one extra 0.6 s confirm, invisible next to display creation.
         var lowStreak = 0
+        var finished = false
+        var keyMonitors: [Any] = []
+        func removeMonitors() {
+            keyMonitors.forEach { NSEvent.removeMonitor($0) }
+            keyMonitors = []
+        }
+        // outcome: .settled (or never waited), .skipped (user pressed ⏎), .timedOut (maxWait hit hot)
+        enum SettleOutcome { case settled, skipped, timedOut }
+        func proceed(_ outcome: SettleOutcome, cpu: Double) {
+            guard !finished else { return }
+            finished = true
+            removeMonitors()
+            let waited = CACurrentMediaTime() - start
+            switch outcome {
+            case .settled:
+                if waiting {
+                    self.hideSettleToast()
+                    DebugLog.shared.log(String(format: "colorsync settle: %@ proceeding after %.0fs (daemon %.0f%%)", label, waited, cpu))
+                } else {
+                    // Log the no-wait case too, so "guard passed instantly" is
+                    // distinguishable from "guard never ran" when reading the log.
+                    DebugLog.shared.log(String(format: "colorsync settle: %@ clear (daemon %.0f%%)", label, cpu))
+                }
+            case .skipped:
+                self.hideSettleToast()
+                DebugLog.shared.log(String(format: "colorsync settle: %@ — user skipped the wait after %.0fs (daemon %.0f%%)", label, waited, cpu))
+            case .timedOut:
+                DebugLog.shared.log(String(format: "colorsync settle: %@ did NOT settle after %.0fs (daemon %.0f%%) — proceeding", label, waited, cpu))
+                if toast != nil {
+                    self.showSettleWarning("Display service didn't settle — continuing anyway. If things stay sluggish, unplug the glasses for ~30 seconds.")
+                } else {
+                    self.hideSettleToast()
+                }
+            }
+            action()
+        }
         func attempt() {
             DispatchQueue.global(qos: .userInitiated).async {
                 let cpu = SystemHealth.processCPU(matching: ["colorsync.displayservices"]).first?.cpu ?? 0
                 DispatchQueue.main.async { [weak self] in
-                    guard let self else { return }
+                    guard let self, !finished else { return }
                     let waited = CACurrentMediaTime() - start
                     lowStreak = cpu < 25 ? lowStreak + 1 : 0
-                    if lowStreak >= 2 || waited >= maxWait {
-                        if waiting {
-                            self.hideSettleToast()
-                            DebugLog.shared.log(String(format: "colorsync settle: %@ proceeding after %.0fs (daemon %.0f%%)", label, waited, cpu))
-                        } else {
-                            // Log the no-wait case too, so "guard passed instantly" is
-                            // distinguishable from "guard never ran" when reading the log.
-                            DebugLog.shared.log(String(format: "colorsync settle: %@ clear (daemon %.0f%%)", label, cpu))
-                        }
-                        action()
+                    if lowStreak >= 2 {
+                        proceed(.settled, cpu: cpu)
+                    } else if waited >= maxWait {
+                        proceed(waiting ? .timedOut : .settled, cpu: cpu)
                     } else {
                         if cpu >= 25, !waiting {
                             waiting = true
                             onWait?()
-                            if let toast { self.showSettleToast(toast) }
+                            if let toast {
+                                self.showSettleToast(toast + "  (⏎ to continue now)")
+                                // ⏎ skips the wait: local monitor when our panel is key, global
+                                // monitor for the hotkey-start case (observe-only; needs the AX
+                                // permission the app already holds).
+                                let isSkipKey: (NSEvent) -> Bool = { $0.keyCode == 36 || $0.keyCode == 76 }
+                                if let m = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: { ev in
+                                    if isSkipKey(ev) { proceed(.skipped, cpu: cpu); return nil }
+                                    return ev
+                                }) { keyMonitors.append(m) }
+                                if let m = NSEvent.addGlobalMonitorForEvents(matching: .keyDown, handler: { ev in
+                                    if isSkipKey(ev) { proceed(.skipped, cpu: cpu) }
+                                }) { keyMonitors.append(m) }
+                            }
                             DebugLog.shared.log(String(format: "colorsync settle: daemon busy (%.0f%%) — delaying %@ up to %.0fs", cpu, label, maxWait))
                         }
                         // Fast confirm cadence until a high sample is seen; relaxed while waiting out a burst.
@@ -3329,21 +3372,54 @@ final class AppCoordinator: ObservableObject {
         attempt()
     }
 
+    /// Post-timeout warning: the guard gave up waiting and the action is going ahead on a hot
+    /// daemon. Shown for 10 s or until Esc; mirrored into AR (with retries, since an AR start's
+    /// renderer isn't live at the moment the timeout fires).
+    private func showSettleWarning(_ text: String) {
+        showSettleToast(text, warning: true)
+        for delay: TimeInterval in [2, 4] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, self.settleToast != nil, self.arActive, let renderer = self.renderer else { return }
+                let ir = ImageRenderer(content: SettleToastView(text: text, warning: true))
+                ir.scale = 2
+                ir.isOpaque = false
+                if let cg = ir.cgImage { renderer.setStatusToastImage(cg) }
+            }
+        }
+        var monitors: [Any] = []
+        var dismissed = false
+        func dismiss() {
+            guard !dismissed else { return }
+            dismissed = true
+            monitors.forEach { NSEvent.removeMonitor($0) }
+            monitors = []
+            self.hideSettleToast()
+        }
+        if let m = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: { ev in
+            if ev.keyCode == 53 { dismiss(); return nil }
+            return ev
+        }) { monitors.append(m) }
+        if let m = NSEvent.addGlobalMonitorForEvents(matching: .keyDown, handler: { ev in
+            if ev.keyCode == 53 { dismiss() }
+        }) { monitors.append(m) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { dismiss() }
+    }
+
     /// Small floating "waiting…" toast shown while the settle guard delays a display action, so a
     /// hotkey-triggered AR start doesn't look like the app hung when the control panel is closed.
     /// Non-activating, click-through, auto-hidden the moment the guarded action proceeds.
     private var settleToast: NSPanel?
-    private func showSettleToast(_ text: String) {
+    private func showSettleToast(_ text: String, warning: Bool = false) {
         hideSettleToast()
         // Mid-session (workspace switch / capture recovery) the user is looking through the
         // glasses, where a desktop panel is invisible — mirror the toast into the AR overlay too.
         if arActive, let renderer {
-            let ir = ImageRenderer(content: SettleToastView(text: text))
+            let ir = ImageRenderer(content: SettleToastView(text: text, warning: warning))
             ir.scale = 2
             ir.isOpaque = false
             if let cg = ir.cgImage { renderer.setStatusToastImage(cg) }
         }
-        let view = NSHostingView(rootView: SettleToastView(text: text))
+        let view = NSHostingView(rootView: SettleToastView(text: text, warning: warning))
         view.frame.size = view.fittingSize
         let panel = NSPanel(contentRect: view.frame,
                             styleMask: [.borderless, .nonactivatingPanel],
@@ -3967,13 +4043,18 @@ final class AppCoordinator: ObservableObject {
 /// Content of the settle-guard toast: spinner + one line, capsule dark background.
 private struct SettleToastView: View {
     let text: String
+    var warning: Bool = false
     var body: some View {
         HStack(spacing: 10) {
-            ProgressView().controlSize(.small)
+            if warning {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
+            } else {
+                ProgressView().controlSize(.small)
+            }
             Text(text).font(.callout)
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
         .background(.regularMaterial, in: Capsule())
-        .overlay(Capsule().strokeBorder(.white.opacity(0.15)))
+        .overlay(Capsule().strokeBorder(warning ? Color.yellow.opacity(0.5) : Color.white.opacity(0.15)))
     }
 }
