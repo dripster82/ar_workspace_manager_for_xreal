@@ -180,7 +180,35 @@ final class GoogleCalendarService: ObservableObject {
             state = .connected(account: name)
         } catch {
             DebugLog.shared.log("gcal refresh error: \(error.localizedDescription)")
-            state = .error("Couldn't load the calendar feed.")
+            if Self.isNetworkDown(error) {
+                // At login the app often races the Wi-Fi — with a 5-minute poll the "failed"
+                // state looked permanent. Keep nudging every 20s until the network is back.
+                state = .error("Waiting for the network — retrying…")
+                scheduleNetworkRetry()
+            } else {
+                state = .error("Couldn't load the calendar feed.")
+            }
+        }
+    }
+
+    /// Transport-level failures worth an automatic short retry (vs. real feed errors, which aren't
+    /// going to fix themselves and shouldn't hammer the server).
+    static func isNetworkDown(_ error: Error) -> Bool {
+        guard let e = error as? URLError else { return false }
+        return [.notConnectedToInternet, .networkConnectionLost, .timedOut, .cannotFindHost,
+                .cannotConnectToHost, .dnsLookupFailed, .dataNotAllowed].contains(e.code)
+    }
+
+    private var networkRetryPending = false
+    private func scheduleNetworkRetry() {
+        guard !networkRetryPending else { return }
+        networkRetryPending = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in
+            guard let self else { return }
+            self.networkRetryPending = false
+            // Only keep retrying while we're still in the failed state (success or a manual
+            // disconnect ends the loop).
+            if case .error = self.state { Task { await self.refresh() } }
         }
     }
 }

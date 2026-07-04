@@ -329,6 +329,20 @@ final class SlackService: ObservableObject {
             stopPolling()
         } catch {
             DebugLog.shared.log("slack refresh error: \(error.localizedDescription)")
+            if GoogleCalendarService.isNetworkDown(error) { scheduleNetworkRetry() }
+        }
+    }
+
+    /// Extra 20s nudge when the network itself was down (login race with Wi-Fi) — quicker than
+    /// waiting out the normal poll interval, and harmless if the poll gets there first.
+    private var networkRetryPending = false
+    private func scheduleNetworkRetry() {
+        guard !networkRetryPending else { return }
+        networkRetryPending = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in
+            guard let self else { return }
+            self.networkRetryPending = false
+            if self.token != nil { Task { await self.refresh() } }
         }
     }
 

@@ -3348,8 +3348,12 @@ final class AppCoordinator: ObservableObject {
                     DebugLog.shared.log(String(format: "colorsync settle: %@ clear (daemon %.0f%%)", label, cpu))
                 }
             case .skipped:
-                self.hideSettleToast()
                 DebugLog.shared.log(String(format: "colorsync settle: %@ — user skipped the wait after %.0fs (daemon %.0f%%)", label, waited, cpu))
+                if toast != nil {
+                    self.showSettleWarning("Started without waiting — if things stay sluggish, unplug the glasses for ~30 seconds.")
+                } else {
+                    self.hideSettleToast()
+                }
             case .timedOut:
                 DebugLog.shared.log(String(format: "colorsync settle: %@ did NOT settle after %.0fs (daemon %.0f%%) — proceeding", label, waited, cpu))
                 if toast != nil {
