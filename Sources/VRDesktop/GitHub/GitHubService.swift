@@ -104,8 +104,31 @@ final class GitHubService: ObservableObject {
             } catch GHError.unauthorized {
                 state = .error("Token rejected — check it has repo scope.")
             } catch {
-                state = .error("Connect failed: \(error.localizedDescription)")
+                if GoogleCalendarService.isNetworkDown(error) {
+                    // Launch races the Wi-Fi at login: a saved token's connect failed once and
+                    // polling never started, so the failure looked permanent. Keep retrying
+                    // every 20s until the network is back.
+                    state = .error("Waiting for the network — retrying…")
+                    scheduleConnectRetry()
+                } else {
+                    state = .error("Connect failed: \(error.localizedDescription)")
+                }
             }
+        }
+    }
+
+    private var connectRetryPending = false
+    private func scheduleConnectRetry() {
+        guard !connectRetryPending else { return }
+        connectRetryPending = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in
+            guard let self else { return }
+            self.connectRetryPending = false
+            guard !self.token.isEmpty else { return }
+            // Connect never succeeded → retry the connect; a mid-session network blip while
+            // connected → just refresh early. User disconnect (.disconnected) ends the loop.
+            if case .error = self.state { self.connect() }
+            else if self.isConnected { self.refreshNow() }
         }
     }
 
@@ -171,6 +194,7 @@ final class GitHubService: ObservableObject {
             DebugLog.shared.log("github: rate-limited, backing off until \(self.rateLimitedUntil.map { "\($0)" } ?? "?") (staying connected)")
         } catch {
             DebugLog.shared.log("github refresh error: \(error.localizedDescription)")
+            if GoogleCalendarService.isNetworkDown(error) { scheduleConnectRetry() }
         }
     }
 
