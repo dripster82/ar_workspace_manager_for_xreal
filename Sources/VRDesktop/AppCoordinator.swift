@@ -3300,6 +3300,10 @@ final class AppCoordinator: ObservableObject {
                         if waiting {
                             self.hideSettleToast()
                             DebugLog.shared.log(String(format: "colorsync settle: %@ proceeding after %.0fs (daemon %.0f%%)", label, waited, cpu))
+                        } else {
+                            // Log the no-wait case too, so "guard passed instantly" is
+                            // distinguishable from "guard never ran" when reading the log.
+                            DebugLog.shared.log(String(format: "colorsync settle: %@ clear (daemon %.0f%%)", label, cpu))
                         }
                         action()
                     } else {
