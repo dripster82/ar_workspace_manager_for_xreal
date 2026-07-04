@@ -3350,14 +3350,14 @@ final class AppCoordinator: ObservableObject {
             case .skipped:
                 DebugLog.shared.log(String(format: "colorsync settle: %@ — user skipped the wait after %.0fs (daemon %.0f%%)", label, waited, cpu))
                 if toast != nil {
-                    self.showSettleWarning("Started without waiting — if things stay sluggish, unplug the glasses for ~30 seconds.")
+                    self.showSettleWarning("Started without waiting — if things stay sluggish, unplug the glasses for a minute or two.")
                 } else {
                     self.hideSettleToast()
                 }
             case .timedOut:
                 DebugLog.shared.log(String(format: "colorsync settle: %@ did NOT settle after %.0fs (daemon %.0f%%) — proceeding", label, waited, cpu))
                 if toast != nil {
-                    self.showSettleWarning("Display service didn't settle — continuing anyway. If things stay sluggish, unplug the glasses for ~30 seconds.")
+                    self.showSettleWarning("Display service didn't settle — continuing anyway. If things stay sluggish, unplug the glasses for a minute or two.")
                 } else {
                     self.hideSettleToast()
                 }
@@ -3675,8 +3675,9 @@ final class AppCoordinator: ObservableObject {
             "macOS's colour service has been stuck at \(Int(cpu))% CPU for several minutes — a known "
             + "macOS quirk with the glasses connected (it happens under XREAL's own app too), and not "
             + "something this app can clear.\n\nNo rush, but if it stays stuck the Mac gets sluggish "
-            + "and the display session can eventually reset. When convenient, unplug the glasses, "
-            + "leave them unplugged for about 30 seconds, then plug them back in — that clears it."
+            + "and the display session can eventually reset. When convenient, unplug the glasses "
+            + "and leave them unplugged until it clears — usually under a minute, though deep "
+            + "episodes can take a few minutes to drain. Then plug them back in."
         alert.addButton(withTitle: "OK")
         alert.runModal()
     }
