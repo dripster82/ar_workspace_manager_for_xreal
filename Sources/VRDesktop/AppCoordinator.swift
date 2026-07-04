@@ -2085,7 +2085,8 @@ final class AppCoordinator: ObservableObject {
         // arrangement). (Re-reads the workspace below in case this adds entries.)
         syncPhysicalMonitors()
         guard let workspace = workspaceStore.activeWorkspace else { return }
-        DebugLog.shared.log("beginAR on '\(screen.localizedName)' id=\(outputDisplayID) frame=\(NSStringFromRect(screen.frame))")
+        let dsNow = SystemHealth.processCPU(matching: ["colorsync.displayservices"]).first?.cpu ?? 0
+        DebugLog.shared.log("beginAR on '\(screen.localizedName)' id=\(outputDisplayID) frame=\(NSStringFromRect(screen.frame)) colorsync=\(Int(dsNow))%")
 
         // 1. Create virtual displays for the workspace. Mirror screens get no display of their
         //    own — they reuse their source screen's capture (added after sources exist).
@@ -3290,13 +3291,19 @@ final class AppCoordinator: ObservableObject {
                                      then action: @escaping () -> Void) {
         let start = CACurrentMediaTime()
         var waiting = false
+        // ps's %cpu is a short-window decaying average and FLUTTERS hard mid-burst (observed
+        // 54% → 13% → 48% across 2 s samples while the daemon was continuously busy) — a single
+        // low reading proves nothing. Require two consecutive samples < 25% before proceeding;
+        // the idle case pays one extra 0.6 s confirm, invisible next to display creation.
+        var lowStreak = 0
         func attempt() {
             DispatchQueue.global(qos: .userInitiated).async {
                 let cpu = SystemHealth.processCPU(matching: ["colorsync.displayservices"]).first?.cpu ?? 0
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
                     let waited = CACurrentMediaTime() - start
-                    if cpu < 25 || waited >= maxWait {
+                    lowStreak = cpu < 25 ? lowStreak + 1 : 0
+                    if lowStreak >= 2 || waited >= maxWait {
                         if waiting {
                             self.hideSettleToast()
                             DebugLog.shared.log(String(format: "colorsync settle: %@ proceeding after %.0fs (daemon %.0f%%)", label, waited, cpu))
@@ -3307,13 +3314,14 @@ final class AppCoordinator: ObservableObject {
                         }
                         action()
                     } else {
-                        if !waiting {
+                        if cpu >= 25, !waiting {
                             waiting = true
                             onWait?()
                             if let toast { self.showSettleToast(toast) }
                             DebugLog.shared.log(String(format: "colorsync settle: daemon busy (%.0f%%) — delaying %@ up to %.0fs", cpu, label, maxWait))
                         }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { attempt() }
+                        // Fast confirm cadence until a high sample is seen; relaxed while waiting out a burst.
+                        DispatchQueue.main.asyncAfter(deadline: .now() + (waiting ? 2 : 0.6)) { attempt() }
                     }
                 }
             }
