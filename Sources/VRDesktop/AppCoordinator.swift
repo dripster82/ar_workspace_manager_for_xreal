@@ -842,7 +842,10 @@ final class AppCoordinator: ObservableObject {
         // (2026-06-30, 07-03 ×2). 30 s keeps real recovery (sleep/wake, reconfig) while cutting the
         // teardown churn ~10×; genuinely dead streams also surface via didStopWithError.
         if arActive {
-            for capture in captures.values where capture.secondsSinceLastSample > 30 {
+            // Skip captures with a restart already in flight: re-calling restartCapture() is a no-op
+            // that does NOT reset the stall clock, so polling it every tick produced a 0.5 s log
+            // storm (02:59 2026-07-04) while a slow stop/start Task was still awaiting SCK.
+            for capture in captures.values where capture.secondsSinceLastSample > 30 && !capture.isRestarting {
                 // Snapshot the duration NOW: DebugLog.log's message is an @autoclosure evaluated
                 // later on the log queue, by which time restartCapture() has reset the timer — so
                 // the log used to claim "stalled 0.0s" for every real stall.
@@ -851,17 +854,22 @@ final class AppCoordinator: ObservableObject {
                 DebugLog.shared.log(String(format: "capture %u stalled %.1fs — restarting", id, stalledFor))
                 capture.restartCapture()
             }
-            // Escalation: a glasses-only display sleep/wake doesn't fire didWakeNotification, so the
-            // only recovery is the per-stream restart above — and if that can't recover (e.g. a
-            // virtual display came back stale, or the output window is on a dead display), the
-            // screens stay frozen. If anything is still badly stalled past the point where restarts
-            // should've worked, rebuild the whole AR session once (recreates virtual displays +
-            // output). Debounced so it can't loop while displays settle.
-            if let worst = captures.values.map(\.secondsSinceLastSample).max(), worst > 45,
-               now - lastFullRecovery > 60 {
+            // Escalation: rebuild the whole AR session ONLY on real evidence of breakage — restarts
+            // that keep THROWING, or a captured display that no longer exists (stale after a
+            // glasses-only sleep/wake). Mere frame silence is not evidence: SCK legitimately stops
+            // delivering for static content on this macOS, so the old "stalled 45 s despite
+            // restarts" rule false-positived on an idle overnight machine and rebuilt every
+            // display — the exact reconfiguration that re-agitates colorsync.displayservices.
+            let broken = captures.values.first { c in
+                c.secondsSinceLastSample > 45 &&
+                (c.consecutiveRestartFailures >= 3 || CGDisplayIsActive(c.displayID) == 0)
+            }
+            if let broken, now - lastFullRecovery > 60 {
                 lastFullRecovery = now
-                DebugLog.shared.log(String(format: "capture stalled %.0fs despite restarts — full AR recovery", worst))
-                restartARIfActive(preserveLayout: true)
+                DebugLog.shared.log("capture \(broken.displayID) genuinely broken (restart failures=\(broken.consecutiveRestartFailures), displayActive=\(CGDisplayIsActive(broken.displayID))) — full AR recovery")
+                withColorSyncSettle("capture recovery", maxWait: 30) { [weak self] in
+                    self?.restartARIfActive(preserveLayout: true)
+                }
             }
         }
 
@@ -2052,8 +2060,16 @@ final class AppCoordinator: ObservableObject {
         beginAR(on: screen)
     }
 
-    private func beginAR(on screen: NSScreen) {
+    private func beginAR(on screen: NSScreen, settled: Bool = false) {
         guard let renderer, !arActive else { return }
+        // Display creation on a busy ColorSync daemon is the wedge trigger — wait for a valley
+        // first (bounded; instant when the daemon is idle, which is the common case).
+        if !settled {
+            withColorSyncSettle("AR start", onWait: { [weak self] in
+                self?.statusMessage = "Waiting for the display service to settle…"
+            }) { [weak self] in self?.beginAR(on: screen, settled: true) }
+            return
+        }
 
         let outputDisplayID = Self.screenDisplayID(screen)
         glassesDisplayID = outputDisplayID
@@ -3089,8 +3105,19 @@ final class AppCoordinator: ObservableObject {
     ///
     /// Known spike limitations: captures are stopped and rebuilt every switch (cheap, no ColorSync
     /// cost, but a brief reacquire); window-layout restore is best-effort.
-    private func switchWorkspaceIncremental(to workspace: Workspace) {
+    private func switchWorkspaceIncremental(to workspace: Workspace, settled: Bool = false) {
         guard arActive, let renderer else { return }
+        // Settle guard, but only when this switch will actually create/destroy displays — a pure
+        // same-mode reuse is zero reconfiguration and can proceed regardless of daemon state.
+        if !settled {
+            let targets = workspace.virtualScreens.filter { $0.showInAR && $0.mirrorOfVirtual == nil }
+            if virtualDisplays.wouldChurn(targets) {
+                withColorSyncSettle("workspace switch", onWait: { [weak self] in
+                    self?.statusMessage = "Waiting for the display service to settle…"
+                }) { [weak self] in self?.switchWorkspaceIncremental(to: workspace, settled: true) }
+                return
+            }
+        }
         let t0 = CACurrentMediaTime()
         snapshotWindowLayout()   // record current apps→screens before the displays move
 
@@ -3243,6 +3270,41 @@ final class AppCoordinator: ObservableObject {
         // Preserve the layout snapshot captured before sleep; the windows are currently scattered
         // onto whatever displays survived, so re-snapshotting now would record the wrong layout.
         restartARIfActive(preserveLayout: true)
+    }
+
+    /// ColorSync settle guard. Creating/destroying virtual displays while colorsync.displayservices
+    /// is mid-burst is what escalates it toward the pinned-CPU wedge (every observed wedge onset in
+    /// the July 2026 investigation followed a reconfiguration on a warm daemon; a quiet daemon
+    /// never wedged). The daemon's burst cycle has multi-minute idle valleys, so before any display
+    /// reconfiguration we sample its CPU and, if it's busy, wait for a valley — bounded by `maxWait`
+    /// so the UX can never hang: after that we proceed anyway and log it.
+    private func withColorSyncSettle(_ label: String, maxWait: TimeInterval = 12,
+                                     onWait: (() -> Void)? = nil,
+                                     then action: @escaping () -> Void) {
+        let start = CACurrentMediaTime()
+        var waiting = false
+        func attempt() {
+            DispatchQueue.global(qos: .userInitiated).async {
+                let cpu = SystemHealth.processCPU(matching: ["colorsync.displayservices"]).first?.cpu ?? 0
+                DispatchQueue.main.async {
+                    let waited = CACurrentMediaTime() - start
+                    if cpu < 25 || waited >= maxWait {
+                        if waiting {
+                            DebugLog.shared.log(String(format: "colorsync settle: %@ proceeding after %.0fs (daemon %.0f%%)", label, waited, cpu))
+                        }
+                        action()
+                    } else {
+                        if !waiting {
+                            waiting = true
+                            onWait?()
+                            DebugLog.shared.log(String(format: "colorsync settle: daemon busy (%.0f%%) — delaying %@ up to %.0fs", cpu, label, maxWait))
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { attempt() }
+                    }
+                }
+            }
+        }
+        attempt()
     }
 
     /// Restart AR on the same output so a workspace change rebuilds its virtual displays.

@@ -36,6 +36,7 @@ public final class CaptureSource: NSObject, @unchecked Sendable {
     private var wantCapture = false
     private var lastSampleAt: CFTimeInterval = CACurrentMediaTime()
     private var restarting = false
+    private var restartFailures = 0
 
     public init(displayID: CGDirectDisplayID, device: MTLDevice) {
         self.displayID = displayID
@@ -118,6 +119,22 @@ public final class CaptureSource: NSObject, @unchecked Sendable {
         return CACurrentMediaTime() - lastSampleAt
     }
 
+    /// True while a restart Task is mid tear-down/re-create. The stall watchdog must skip these:
+    /// calling restartCapture() again is a no-op that does NOT reset the stall clock, so re-polling
+    /// an in-flight restart every tick produced a log storm and a bogus "despite restarts" escalation.
+    public var isRestarting: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return restarting
+    }
+
+    /// How many restart attempts in a row have thrown (reset by any delivered frame). This — unlike
+    /// mere frame silence, which is normal for static content on this macOS — is real evidence the
+    /// stream is broken, and is what the watchdog's full-AR-recovery escalation keys on.
+    public var consecutiveRestartFailures: Int {
+        lock.lock(); defer { lock.unlock() }
+        return restartFailures
+    }
+
     /// Tear down and re-create the stream (recovery). No-op if we don't want capture or a restart
     /// is already in flight. Safe to call repeatedly from the stall watchdog.
     public func restartCapture() {
@@ -133,7 +150,7 @@ public final class CaptureSource: NSObject, @unchecked Sendable {
             do { try await self.start() }
             catch {
                 NSLog("CaptureSource(\(self.displayID)) restart failed: \(error.localizedDescription)")
-                self.lock.lock(); self.restarting = false; self.lock.unlock()
+                self.lock.lock(); self.restarting = false; self.restartFailures += 1; self.lock.unlock()
             }
         }
     }
@@ -146,7 +163,7 @@ public final class CaptureSource: NSObject, @unchecked Sendable {
 extension CaptureSource: SCStreamOutput, SCStreamDelegate {
     public func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         // Mark the stream alive on every callback (including idle frames) for the stall watchdog.
-        lock.lock(); lastSampleAt = CACurrentMediaTime(); lock.unlock()
+        lock.lock(); lastSampleAt = CACurrentMediaTime(); restartFailures = 0; lock.unlock()
         guard type == .screen,
               sampleBuffer.isValid,
               let pixelBuffer = sampleBuffer.imageBuffer else { return }

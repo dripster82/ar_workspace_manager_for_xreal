@@ -310,6 +310,23 @@ public final class VirtualDisplayService {
     /// id→displayID map plus counts (reused / created / destroyed) for instrumentation. The caller is
     /// responsible for any ColorSync-profile cleanup of destroyed displays (it must read their UUIDs
     /// before calling, since the displays are gone on return).
+    /// Whether reconciling to `configs` would create or destroy any display, or is a pure reuse
+    /// (every target has an exact-mode live match and nothing is left over). Lets callers apply
+    /// the ColorSync settle guard only when a switch will actually reconfigure displays.
+    public func wouldChurn(_ configs: [VirtualScreenConfig]) -> Bool {
+        guard Self.isAvailable else { return false }
+        var pool = active.keys.compactMap { modeForID[$0] }
+        for config in configs {
+            let w = config.width, h = config.height, hi = effectiveHiDPI(config)
+            if let i = pool.firstIndex(where: { $0.width == w && $0.height == h && $0.hiDPI == hi }) {
+                pool.remove(at: i)
+            } else {
+                return true   // needs a create
+            }
+        }
+        return !pool.isEmpty   // leftovers would be destroyed
+    }
+
     @discardableResult
     public func reconcile(_ configs: [VirtualScreenConfig]) -> (displayIDs: [UUID: CGDirectDisplayID], reused: Int, created: Int, destroyed: Int) {
         guard Self.isAvailable else { return ([:], 0, 0, 0) }
