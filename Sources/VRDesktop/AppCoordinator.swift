@@ -554,6 +554,7 @@ final class AppCoordinator: ObservableObject {
         // registry, then arm the watchdog that auto-clears the runaway if it recurs while running.
         let sweptAtLaunch = SystemHealth.sweepOrphanProfiles()
         if sweptAtLaunch > 0 { DebugLog.shared.log("Launch: swept \(sweptAtLaunch) orphaned ColorSync profile(s)") }
+        restoreSavedInputDevice()
         colorSyncWatchdog.onRunawayDetected = { [weak self] cpu in
             self?.presentColorSyncRunawayAlert(cpu: cpu)
         }
@@ -777,11 +778,38 @@ final class AppCoordinator: ObservableObject {
 
     /// Set the system default input device — voice (and the meter) follow it. Restarts listening.
     func setVoiceInputDevice(_ uid: String) {
+        // Remember the choice ("" = follow the system default): macOS reassigns the default input
+        // whenever devices come and go (glasses/headsets), so without persistence the pick was
+        // silently lost between app launches.
+        UserDefaults.standard.set(uid, forKey: "voice.inputDeviceUID")
         guard !uid.isEmpty else { return }
         _ = VoiceController.setDefaultInputDevice(uid: uid)
         objectWillChange.send()
         if micTesting { voice.stop(); voice.startMetering() }   // re-meter on the new device
         else { applyVoiceMode() }
+    }
+
+    /// Re-assert the remembered mic as the system input at launch (macOS or a reconnecting audio
+    /// device usually stole the default in between). Retries briefly — Bluetooth/USB inputs can
+    /// enumerate a few seconds after login/launch.
+    func restoreSavedInputDevice(attempt: Int = 0) {
+        let saved = UserDefaults.standard.string(forKey: "voice.inputDeviceUID") ?? ""
+        guard !saved.isEmpty else { return }
+        if VoiceController.defaultInputDeviceUID() == saved { return }   // already right
+        let present = availableMicrophones().contains { $0.id == saved }
+        if present {
+            if VoiceController.setDefaultInputDevice(uid: saved) {
+                DebugLog.shared.log("voice: restored saved input device as system default")
+                objectWillChange.send()
+            }
+        } else if attempt < 3 {
+            // Device not enumerated yet — retry at 3s/8s/15s, then give up quietly (it may
+            // simply not be connected today; don't fight the user's actual setup).
+            let delays: [TimeInterval] = [3, 5, 7]
+            DispatchQueue.main.asyncAfter(deadline: .now() + delays[attempt]) { [weak self] in
+                self?.restoreSavedInputDevice(attempt: attempt + 1)
+            }
+        }
     }
 
     /// Localized name for a display, cached (see `screenNameCache`) — only hits the expensive
