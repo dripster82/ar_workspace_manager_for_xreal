@@ -363,3 +363,40 @@ teardown churn → elevated daemon → next reconfiguration → wedge).
 Candidate mitigation to test: before creating/destroying virtual displays (AR start/stop,
 workspace switch, app relaunch), sample `colorsync.displayservices`; if it's hot (say >20%), wait
 for it to settle (a few seconds, bounded) before reconfiguring — deny the wedge its trigger window.
+
+### ARWM controlled runs (2026-07-03→04) — hypothesis confirmed, 6/6
+
+**Overnight idle (13.5 h, AR up, hands off, same boot as an earlier wedge):** 237 burst episodes,
+mean 1.1 min, longest 5.6 min, every one self-recovered — no wedge, no alert. For the first 9¼ h
+peaks stayed at 35–53% (milder than Nebula's 65–74% baseline). The single reconfiguration of the
+night was self-inflicted: the capture-stall watchdog false-positived on static screens at 02:59
+(SCK legitimately stops delivering for static content) and rebuilt all displays — after which peaks
+ran ~70% (26 pinned episodes) for the rest of the night. One reconfiguration, measurably hotter
+cycle; still no wedge (it landed near a burst valley).
+
+**Every escalation observed across the investigation — wedge or hot-cycle, including both fatal
+WindowServer kills — followed a display reconfiguration within seconds (6/6).** Left alone, the
+daemon cycles harmlessly forever.
+
+**Deep-wedge variant (2026-07-04):** after a heavy-churn morning including two deliberate AR starts
+onto a 71–73% daemon (settle-wait skipped, logged by the new guard), the pin persisted for minutes
+*after unplugging* — the first episode that outlived the Air 2's presence. It did drain on its own
+(same daemon PIDs throughout; no bounce, no reboot). Unplug remains the cure; drain time scales
+with how wound-up the daemon is (~25 s typical, minutes after heavy churn).
+
+### Mitigations shipped (2026-07-04, 48798cc..3026ca7)
+
+1. **Evidence-gated AR recovery** — full display rebuild now requires restarts that *throw*
+   repeatedly or a vanished display; frame silence (normal for static content) can never trigger
+   it. Also fixed the 0.5 s restart-storm when a restart Task was slow.
+2. **Settle-before-reconfigure guard** — before AR start / churning workspace switches / recovery,
+   sample the daemon and wait (bounded 12–30 s) for a burst valley (<25%, two consecutive samples —
+   ps %cpu flutters hard mid-burst). Toast with ⏎-skip; yellow unplug-advice warning on timeout or
+   skip. Same-mode workspace switches (pure reuse, zero reconfiguration) skip the guard.
+3. **Audit logging** — every `beginAR` records the daemon %; every guard decision (clear / busy /
+   proceeding / skipped / did-not-settle) is logged.
+
+**Validation (2026-07-04, 6.3 h looping-video session started via the guard at 4%):** 118 episodes,
+mean 0.6 min, longest 1.4 min, **zero ≥65%**, mean daemon CPU 11.6% — the cleanest session recorded
+on this machine, with active video decode throughout. Video playback is ColorSync-neutral (decode/
+render never touch display configuration).
