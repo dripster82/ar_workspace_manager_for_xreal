@@ -4,8 +4,8 @@ Turn your XREAL glasses into a head-tracked, multi-monitor spatial workspace on 
 many virtual displays as you like, arrange them in the space around you, and drag your Mac windows
 onto them — all rendered into the glasses with low-latency head tracking.
 
-> **Requirements:** a supported pair of XREAL glasses connected over USB-C DisplayPort, and an
-> **Apple Silicon** Mac running **macOS 14 (Sonoma) or later**.
+> **Requirements:** a supported pair of XREAL glasses connected over USB-C DisplayPort, and a Mac
+> (**Apple Silicon or Intel**) running **macOS 14 (Sonoma) or later**.
 
 ### Supported devices
 
@@ -35,12 +35,17 @@ onto them — all rendered into the glasses with low-latency head tracking.
 
 ## Install
 
-1. Download the latest **AR Workspace Manager for XREAL** release (`.dmg` or `.zip`) from the
-   [Releases](https://github.com/dripster82/ar_workspace_manager_for_xreal/releases) page.
+1. Download the latest **AR Workspace Manager for XREAL** release from the
+   [Releases](https://github.com/dripster82/ar_workspace_manager_for_xreal/releases) page — pick
+   the DMG for your Mac: **Apple-Silicon** or **Intel**.
 2. Drag **AR Workspace Manager** into your **Applications** folder.
 3. Launch it. Builds are signed with a Developer ID and notarized by Apple, so it opens normally —
    no right-click-to-open workaround needed.
 4. Plug your XREAL glasses into a USB-C port that carries DisplayPort video.
+
+Updates are offered in-app (the right build for your chip is picked automatically). By default you
+only see **stable** releases; Settings → About has an **Updates** channel picker if you'd like
+**release candidates** or **betas** early — switching back to Stable offers a clean downgrade.
 
 ## Permissions
 
@@ -121,10 +126,14 @@ between them from the top bar.
 **Media player** (head-locked video)
 - Play your own videos inside AR — **most formats, including MKV/AVI**, with subtitles rendered
   uniformly (playback by bundled **VLCKit/libVLC**); files can live on the Mac or a network drive
-- **Playlist** with drag-to-reorder and auto-advance; playback position and playlist survive restarts
+- **Playlist** with drag-to-reorder, auto-advance, per-item durations, and **Loop** / **Shuffle**
+  (shuffle plays everything once before any repeats); playlist and playback position survive
+  restarts, so you can stop mid-film and resume days later — a **scrub slider** jumps anywhere
 - Pin the video to any of **four corners or full view** (⌃⌥1–5); transport by hotkey —
-  play/pause **⌃⌥K**, ±10 s **⌃⌥←/→**, stop **⌃⌥0** — with a transient in-AR progress bar
-- Full-view watching automatically throttles the screen captures to save power
+  play/pause **⌃⌥K**, ±10 s **⌃⌥←/→**, next/previous **⌃⌥↑/↓** (previous retraces what actually
+  played, even shuffled), stop **⌃⌥0** — with a transient in-AR progress bar
+- **Full view keeps the film's aspect ratio** with black bars (opt-in stretch-to-fill toggle), and
+  automatically throttles the screen captures to save power
 
 **Glasses & capture**
 - Brightness and refresh-rate (60/72/90/120 Hz) control; quality settings (anti-aliasing,
