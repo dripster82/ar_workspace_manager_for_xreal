@@ -26,8 +26,11 @@ final class CursorConfiner {
         lastAllowed = toCG(NSEvent.mouseLocation)
         guard !wasActive else { return }
 
+        // Mouse-up events included so a correction deferred during a click/drag (we never warp
+        // while a button is down) is applied promptly on release even if the mouse doesn't move.
         let mask: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged,
-                                           .rightMouseDragged, .otherMouseDragged]
+                                           .rightMouseDragged, .otherMouseDragged,
+                                           .leftMouseUp, .rightMouseUp, .otherMouseUp]
         if let global = NSEvent.addGlobalMonitorForEvents(matching: mask, handler: { [weak self] _ in
             self?.enforce()
         }) {
@@ -60,7 +63,23 @@ final class CursorConfiner {
         case .offDisplay(let id):
             guard let frame = frame(of: id) else { return }
             if frame.contains(location) {
-                CGWarpMouseCursorPosition(lastAllowed)
+                // NEVER warp while a button is held: the AR output sits edge-to-edge with the
+                // physical screen, so a click that overshoots the shared edge lands here — and a
+                // warp between press and release reads to macOS as a huge fast mouse movement,
+                // reclassifying the click as a drag (files "sticking" to the cursor until Esc).
+                // Defer; the mouse-up event in the mask triggers the correction on release.
+                guard NSEvent.pressedMouseButtons == 0 else { return }
+                // Push to the nearest point just OUTSIDE the AR display that lies on a real
+                // screen — the shared edge acts as a wall (a ~1px correction) instead of
+                // teleporting back to a stale remembered position across the screen.
+                let exits = [NSPoint(x: frame.maxX + 1, y: location.y),
+                             NSPoint(x: frame.minX - 1, y: location.y),
+                             NSPoint(x: location.x, y: frame.maxY + 1),
+                             NSPoint(x: location.x, y: frame.minY - 1)]
+                    .filter { p in NSScreen.screens.contains { $0.frame.contains(p) } }
+                    .min { hypot($0.x - location.x, $0.y - location.y)
+                         < hypot($1.x - location.x, $1.y - location.y) }
+                CGWarpMouseCursorPosition(exits.map(toCG) ?? lastAllowed)
                 CGAssociateMouseAndMouseCursorPosition(1) // resync hardware delta after warp
             } else {
                 lastAllowed = toCG(location)
