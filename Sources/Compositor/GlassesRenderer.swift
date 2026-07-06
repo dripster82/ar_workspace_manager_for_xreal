@@ -74,6 +74,11 @@ public final class GlassesRenderer: NSObject {
     public var showPicker = false
     private var statusToastTexture: MTLTexture?
     public var showStatusToast = false
+    /// Serializes renderFrame across the dedicated link thread and QuartzCore's deferred
+    /// main-thread dispatch (see metalDisplayLink) — try-lock so a contended tick is dropped,
+    /// never queued behind the in-flight frame.
+    let renderFrameGate = NSLock()
+    static var droppedConcurrentTicks = 0
 
     // Head-locked HUD widgets: small alpha-blended quads drawn always-on-top in view space.
     private var widgetPipeline: MTLRenderPipelineState!
@@ -1394,6 +1399,22 @@ public final class GlassesRenderer: NSObject {
 extension GlassesRenderer: CAMetalDisplayLinkDelegate {
     public func metalDisplayLink(_ link: CAMetalDisplayLink,
                                  needsUpdate update: CAMetalDisplayLink.Update) {
+        // renderFrame is NOT reentrant (per-frame state, the sharpen-mip cache dictionary, encoder
+        // lifetimes). The display link normally fires on the dedicated GlassesRenderLink thread,
+        // but QuartzCore's deferred-dispatch path (dispatch_deferred_display_links, run during any
+        // CA transaction flush) can deliver a tick on the MAIN thread while the dedicated thread
+        // is mid-frame — two concurrent renderFrames corrupted the mip-cache dictionary (SIGSEGV
+        // in prepareSharpTextures, 2026-07-06; same signature as the earlier "heap corruption"
+        // crashes). If a frame is already in flight, drop this tick — at 120 Hz one skipped frame
+        // is invisible, a torn dictionary is not.
+        guard renderFrameGate.try() else {
+            Self.droppedConcurrentTicks += 1
+            if Self.droppedConcurrentTicks <= 3 || Self.droppedConcurrentTicks % 1000 == 0 {
+                NSLog("GlassesRenderer: dropped concurrent display-link tick (#\(Self.droppedConcurrentTicks), thread \(Thread.isMainThread ? "main" : "link"))")
+            }
+            return
+        }
+        defer { renderFrameGate.unlock() }
         renderFrame(drawable: update.drawable)
     }
 }
