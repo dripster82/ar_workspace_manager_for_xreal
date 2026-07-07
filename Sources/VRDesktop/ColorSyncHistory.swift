@@ -20,21 +20,32 @@ final class ColorSyncHistory: ObservableObject {
     static let interval: TimeInterval = 2
     static let displayBucket: TimeInterval = 30
 
-    /// Raw points bucketed to per-30s maxima for drawing (~360 marks over 3 h). Maxima, not
-    /// means: peaks are the diagnostic signal (bursts and wedges), and averaging would soften
-    /// exactly what the graph exists to show.
+    /// How much of the recent tail is drawn at raw 2 s resolution (so the visible chart moves
+    /// with every sample); everything older is bucketed.
+    static let rawTail: TimeInterval = 10 * 60
+
+    /// Drawing series: the last 10 min raw (~300 marks, live 2 s updates while you watch) +
+    /// older history as per-30s MAXIMA (~340 marks) — full detail where it matters, and Swift
+    /// Charts stays cheap. Maxima, not means: peaks are the diagnostic signal (bursts and
+    /// wedges), and averaging would soften exactly what the graph exists to show.
     var displayPoints: [Point] {
         guard !points.isEmpty else { return [] }
+        let tailStart = Date().addingTimeInterval(-Self.rawTail)
         var buckets: [Int: Point] = [:]
+        var tail: [Point] = []
         for p in points {
-            let key = Int(p.time.timeIntervalSinceReferenceDate / Self.displayBucket)
-            if let existing = buckets[key] {
-                if p.cpu > existing.cpu { buckets[key] = Point(time: existing.time, cpu: p.cpu) }
+            if p.time >= tailStart {
+                tail.append(p)
             } else {
-                buckets[key] = p
+                let key = Int(p.time.timeIntervalSinceReferenceDate / Self.displayBucket)
+                if let existing = buckets[key] {
+                    if p.cpu > existing.cpu { buckets[key] = Point(time: existing.time, cpu: p.cpu) }
+                } else {
+                    buckets[key] = p
+                }
             }
         }
-        return buckets.keys.sorted().compactMap { buckets[$0] }
+        return buckets.keys.sorted().compactMap { buckets[$0] } + tail
     }
 
     @Published private(set) var points: [Point] = []
