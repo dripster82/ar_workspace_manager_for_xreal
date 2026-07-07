@@ -4225,6 +4225,10 @@ private struct SettleToastView: View {
             }
             Text(text).font(.callout)
         }
+        // NSHostingView.fittingSize (used to size the desktop panel) returns the COMPRESSED
+        // minimum, which let the Text truncate long warnings with an ellipsis ("…or tw…").
+        // fixedSize makes the ideal single-line width non-negotiable.
+        .fixedSize(horizontal: true, vertical: false)
         .padding(.horizontal, 16).padding(.vertical, 10)
         .background(.regularMaterial, in: Capsule())
         .overlay(Capsule().strokeBorder(warning ? Color.yellow.opacity(0.5) : Color.white.opacity(0.15)))

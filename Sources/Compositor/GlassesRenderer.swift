@@ -1172,7 +1172,7 @@ public final class GlassesRenderer: NSObject {
     private func drawStatusToastOverlay(commandBuffer: MTLCommandBuffer, target: MTLTexture) {
         guard showStatusToast, let tex = statusToastTexture else { return }
         drawOverlay(tex, commandBuffer: commandBuffer, target: target,
-                    heightFraction: 0.06, maxWidthFraction: 0.7, anchor: .bottom(marginNDC: 0.18))
+                    heightFraction: 0.06, maxWidthFraction: 0.92, anchor: .bottom(marginNDC: 0.18))
     }
 
     /// Draw the find-cursor card, centred (same footprint as the help card it used to share).
