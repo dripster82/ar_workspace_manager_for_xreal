@@ -268,6 +268,12 @@ struct ControlPanelView: View {
                         HStack(spacing: 8) {
                             addDisplayMenu
                             Spacer()
+                            Toggle("Snap 5°", isOn: $coordinator.layoutSnapAngle)
+                                .toggleStyle(.checkbox).font(.caption)
+                                .help("Drag positions round to 5° steps (hold ⌘ to bypass).")
+                            Toggle("Snap edges", isOn: $coordinator.layoutSnapEdges)
+                                .toggleStyle(.checkbox).font(.caption)
+                                .help("Dragged screens align to other screens' edges and centers (hold ⌘ to bypass).")
                         }
                         .controlSize(.small)
                         PlacementMapView(coordinator: coordinator, selection: $selectedDisplayID)
@@ -2031,6 +2037,30 @@ struct ScreenRow: View {
 
 /// Drag-to-place layout: two zones (anchored "around you" and floating "in view"); each
 /// screen is a box you drag to set its yaw (horizontal) and pitch (vertical).
+/// Shared canvas geometry: the single implementation of the screen → angular-size math, used by
+/// the map tiles AND the edge snapper so they can never diverge. Must stay in sync with
+/// AppCoordinator.sceneScreen (same 1.6 m per 1920 px reference).
+enum LayoutGeometry {
+    static let metersPerScreen = 1.6
+    /// The screen's apparent angular extent (degrees of FOV) at its configured distance/scale.
+    static func angularSize(_ cfg: VirtualScreenConfig) -> (w: Double, h: Double) {
+        let widthMeters = Double(cfg.width) / 1920.0 * metersPerScreen * cfg.scale
+        let aspect = Double(cfg.width) / Double(max(1, cfg.height))
+        let heightMeters = widthMeters / aspect
+        let d = max(0.1, cfg.distanceMeters)
+        return (2 * atan((widthMeters / 2) / d) * 180 / .pi,
+                2 * atan((heightMeters / 2) / d) * 180 / .pi)
+    }
+}
+
+/// A same-zone neighbour's position + angular size, precomputed for the edge snapper.
+struct SiblingEdges {
+    let id: UUID
+    let yaw: Double
+    let pitch: Double
+    let ang: (w: Double, h: Double)
+}
+
 struct PlacementMapView: View {
     @ObservedObject var coordinator: AppCoordinator
     /// Optional click-to-select of a screen (used by the Workspace editor).
@@ -2109,7 +2139,12 @@ struct PlacementMapView: View {
                                           style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
                             .frame(width: CGFloat(Self.fovHDeg) * ppd, height: CGFloat(Self.fovVDeg) * ppd)
                             .position(x: contentW / 2, y: contentH / 2)
-                        ForEach(screens(placement)) { cfg in
+                        let zoneScreens = screens(placement)
+                        let siblingEdges = zoneScreens.map {
+                            SiblingEdges(id: $0.id, yaw: $0.yawDegrees, pitch: $0.pitchDegrees,
+                                         ang: LayoutGeometry.angularSize($0))
+                        }
+                        ForEach(zoneScreens) { cfg in
                             // Colour code: orange = real monitor mirrored into the glasses,
                             // green = real monitor shown for positioning only, accent = virtual.
                             let boxAccent: Color = coordinator.isPhysicalScreen(cfg.id)
@@ -2119,6 +2154,9 @@ struct PlacementMapView: View {
                                       yawRange: baseYaw, pitchRange: basePitch,
                                       lookedAt: coordinator.lookedAtScreenID == cfg.id,
                                       selected: selection?.wrappedValue == cfg.id,
+                                      snapAngle: coordinator.layoutSnapAngle,
+                                      snapEdges: coordinator.layoutSnapEdges,
+                                      siblings: siblingEdges,
                                       onSelect: { selection?.wrappedValue = cfg.id },
                                       onChange: { coordinator.updateScreen($0) },
                                       onDelete: coordinator.isPhysicalScreen(cfg.id) ? nil : {
@@ -2164,16 +2202,23 @@ private struct ScreenBox: View {
     let pitchRange: Double
     let lookedAt: Bool
     var selected: Bool = false
+    var snapAngle: Bool = false
+    var snapEdges: Bool = false
+    var siblings: [SiblingEdges] = []
     var onSelect: () -> Void = {}
     var onChange: (VirtualScreenConfig) -> Void
     /// Right-click delete; nil for physical monitors (which can't be removed).
     var onDelete: (() -> Void)? = nil
 
     @State private var cfg: VirtualScreenConfig
+    /// True while the current drag position is edge-snapped (either axis) — shown as a cyan border.
+    @State private var snappedEdge = false
 
     init(initial: VirtualScreenConfig, area: CGSize, coordinateSpace: String, accent: Color,
          pxPerDeg: CGFloat, yawRange: Double, pitchRange: Double,
-         lookedAt: Bool, selected: Bool = false, onSelect: @escaping () -> Void = {},
+         lookedAt: Bool, selected: Bool = false,
+         snapAngle: Bool = false, snapEdges: Bool = false, siblings: [SiblingEdges] = [],
+         onSelect: @escaping () -> Void = {},
          onChange: @escaping (VirtualScreenConfig) -> Void, onDelete: (() -> Void)? = nil) {
         self.initial = initial
         self.area = area
@@ -2184,6 +2229,9 @@ private struct ScreenBox: View {
         self.pitchRange = pitchRange
         self.lookedAt = lookedAt
         self.selected = selected
+        self.snapAngle = snapAngle
+        self.snapEdges = snapEdges
+        self.siblings = siblings
         self.onSelect = onSelect
         self.onChange = onChange
         self.onDelete = onDelete
@@ -2197,14 +2245,58 @@ private struct ScreenBox: View {
     }
 
     private func apply(location: CGPoint) {
-        let yaw = Double((area.width / 2 - location.x) / pxPerDeg)
-        let pitch = Double((area.height / 2 - location.y) / pxPerDeg)
+        var yaw = Double((area.width / 2 - location.x) / pxPerDeg)
+        var pitch = Double((area.height / 2 - location.y) / pxPerDeg)
+        // ⌘ held = temporarily bypass snapping (standard macOS convention). Read as live hardware
+        // state because DragGesture events don't carry modifier flags.
+        let bypass = NSEvent.modifierFlags.contains(.command)
+        var edgeSnapped = (x: false, y: false)
+        if !bypass {
+            if snapEdges {
+                let my = LayoutGeometry.angularSize(cfg)
+                // Constant ~6 *screen* px at any zoom, so the engagement feel never changes.
+                let threshold = Double(6 / pxPerDeg)
+                let others = siblings.filter { $0.id != cfg.id }
+                if let s = Self.snapCandidate(value: yaw, mySize: my.w, threshold: threshold,
+                                              siblings: others.map { ($0.yaw, $0.ang.w) }) {
+                    yaw = s; edgeSnapped.x = true
+                }
+                if let s = Self.snapCandidate(value: pitch, mySize: my.h, threshold: threshold,
+                                              siblings: others.map { ($0.pitch, $0.ang.h) }) {
+                    pitch = s; edgeSnapped.y = true
+                }
+            }
+            // 5° grid on any axis the edge snap didn't claim — aligning to a neighbour is the
+            // stronger intent; the grid is the fallback.
+            if snapAngle {
+                if !edgeSnapped.x { yaw = (yaw / 5).rounded() * 5 }
+                if !edgeSnapped.y { pitch = (pitch / 5).rounded() * 5 }
+            }
+        }
+        snappedEdge = edgeSnapped.x || edgeSnapped.y
         cfg.yawDegrees = min(yawRange, max(-yawRange, yaw))
         cfg.pitchDegrees = min(pitchRange, max(-pitchRange, pitch))
         onChange(cfg)
     }
 
+    /// Best edge-alignment for one axis: my {leading edge, trailing edge, centre} against each
+    /// sibling's {leading edge, trailing edge, centre}; nil when nothing is within the threshold.
+    private static func snapCandidate(value: Double, mySize: Double, threshold: Double,
+                                      siblings: [(center: Double, size: Double)]) -> Double? {
+        var best: (delta: Double, snapped: Double)?
+        for s in siblings {
+            for sEdge in [s.center - s.size / 2, s.center + s.size / 2, s.center] {
+                for candidate in [sEdge + mySize / 2, sEdge - mySize / 2, sEdge] {
+                    let d = abs(candidate - value)
+                    if d <= threshold, d < (best?.delta ?? .infinity) { best = (d, candidate) }
+                }
+            }
+        }
+        return best?.snapped
+    }
+
     private var borderColor: Color {
+        if snappedEdge { return .cyan }   // live edge-snap feedback while dragging
         if selected { return PanelTheme.accent }
         return lookedAt ? .yellow : .white.opacity(0.5)
     }
@@ -2221,8 +2313,11 @@ private struct ScreenBox: View {
         let dist = max(0.1, cfg.distanceMeters)
         let angW = 2 * atan((widthMeters / 2) / dist) * 180 / .pi
         let angH = 2 * atan((heightMeters / 2) / dist) * 180 / .pi
-        let w = max(14, CGFloat(angW) * pxPerDeg)
-        let h = max(10, CGFloat(angH) * pxPerDeg)
+        // Near-degenerate floor only (was 14×10, which drew small/distant screens far too big and
+        // broke the map's whole point — matching AR). Grabbability comes from the padded hit area
+        // below, not from lying about the size.
+        let w = max(4, CGFloat(angW) * pxPerDeg)
+        let h = max(4, CGFloat(angH) * pxPerDeg)
         return RoundedRectangle(cornerRadius: 4)
             .fill(accent.opacity(0.45))
             .overlay(
@@ -2231,11 +2326,14 @@ private struct ScreenBox: View {
             .overlay(RoundedRectangle(cornerRadius: 4)
                 .strokeBorder(borderColor, lineWidth: selected ? 2.5 : (lookedAt ? 2 : 1)))
             .frame(width: w, height: h)
+            // Pad the CLICKABLE area (not the visual) out to ~20px for tiny tiles.
+            .contentShape(Rectangle().inset(by: min(0, (min(w, h) - 20) / 2)))
             .position(point())
             .onTapGesture { onSelect() }
             .gesture(
                 DragGesture(coordinateSpace: .named(coordinateSpace))
                     .onChanged { onSelect(); apply(location: $0.location) }
+                    .onEnded { _ in snappedEdge = false }
             )
             .contextMenu {
                 if let onDelete {

@@ -2503,6 +2503,14 @@ final class AppCoordinator: ObservableObject {
         DebugLog.shared.log("media: restored capture frame rate after full-view video")
     }
 
+    /// Layout-editor snapping (both default off — opt-in). ⌘ held while dragging bypasses.
+    @Published var layoutSnapAngle: Bool = UserDefaults.standard.bool(forKey: "layoutSnapAngle") {
+        didSet { UserDefaults.standard.set(layoutSnapAngle, forKey: "layoutSnapAngle") }
+    }
+    @Published var layoutSnapEdges: Bool = UserDefaults.standard.bool(forKey: "layoutSnapEdges") {
+        didSet { UserDefaults.standard.set(layoutSnapEdges, forKey: "layoutSnapEdges") }
+    }
+
     /// Full-view scaling: false (default) = keep the video's aspect with black bars; true = stretch
     /// to fill the FOV. Applied live via the renderer's fullscreen pass.
     @Published var mediaStretchFullView: Bool = UserDefaults.standard.bool(forKey: "mediaStretchFullView") {
