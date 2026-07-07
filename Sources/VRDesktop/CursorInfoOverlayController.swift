@@ -26,6 +26,9 @@ final class CursorInfoOverlayController {
     private var lastTick: CFTimeInterval = 0
     private let refreshInterval: TimeInterval = 0.05
 
+    /// Fired after every show/hide so the app can re-evaluate the Esc-to-dismiss arming.
+    var onVisibilityChanged: (() -> Void)?
+
     init(coordinator: AppCoordinator) {
         self.coordinator = coordinator
     }
@@ -35,6 +38,7 @@ final class CursorInfoOverlayController {
     }
 
     func show() {
+        guard !visible else { return }   // re-entrancy: a second show() must not stack a 20 Hz timer
         visible = true
         pulsePhase = 0
         lastTick = CACurrentMediaTime()
@@ -51,16 +55,19 @@ final class CursorInfoOverlayController {
         }
         RunLoop.main.add(timer, forMode: .common)
         refreshTimer = timer
+        onVisibilityChanged?()
     }
 
     func hide() {
+        guard visible else { return }    // symmetric guard: never double-restore the cursor scale
         visible = false
         refreshTimer?.invalidate()
         refreshTimer = nil
         // Restore the cursor to the size it was before searching.
         if let saved = savedCursorScale { CursorScale.set(saved); savedCursorScale = nil }
-        coordinator.renderer?.clearHelp()
+        coordinator.renderer?.clearCursorInfo()
         panel?.orderOut(nil)
+        onVisibilityChanged?()
     }
 
     /// Re-sample the cursor + gaze + direction, advance the homing ping, and update whichever
@@ -98,11 +105,11 @@ final class CursorInfoOverlayController {
         if coordinator.arActive, let renderer = coordinator.renderer,
            let image = info.renderCGImage(gaze: gaze, direction: direction,
                                           pulse: pulsePhase, pulseActive: pulseActive),
-           renderer.setHelpImage(image) {
-            // In-AR overlay (shares the help overlay slot). Hide the panel if AR just came on.
+           renderer.setCursorInfoImage(image) {
+            // In-AR overlay (its own renderer slot). Hide the panel if AR just came on.
             panel?.orderOut(nil)
         } else {
-            coordinator.renderer?.clearHelp()
+            coordinator.renderer?.clearCursorInfo()
             showPanel(view)
         }
     }

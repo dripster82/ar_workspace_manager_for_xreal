@@ -25,6 +25,25 @@ final class CalibrationController: NSObject, ObservableObject {
     @Published private(set) var firstUse = false
     private var onSuccess: (() -> Void)?
 
+    /// Fired after every show/close/skip so the app can re-evaluate the Esc-to-dismiss arming.
+    var onVisibilityChanged: (() -> Void)?
+
+    /// Esc-dismissable only in resting states — never mid-countdown (aborting a running
+    /// measurement would leave a half-applied calibration).
+    var isEscDismissable: Bool {
+        guard panel?.isVisible ?? false else { return false }
+        if case .running = phase { return false }
+        return true
+    }
+
+    /// Esc-to-dismiss. First-use flow uses the skip escape hatch (AR must still start);
+    /// otherwise a plain close.
+    func escDismiss() {
+        guard isEscDismissable else { return }
+        if case .done(ok: true, _) = phase { close(); return }
+        firstUse ? skipAndContinue() : close()
+    }
+
     /// True for One-series glasses, which must be calibrated *worn and level* (the popup measures the
     /// per-device mount tilt). Air glasses are calibrated flat on a surface (drift only).
     var isOneSeries: Bool { IMUService.shared.usingNetworkIMU }
@@ -46,6 +65,7 @@ final class CalibrationController: NSObject, ObservableObject {
         self.onSuccess = onSuccess
         phase = .ready
         presentPanel()
+        onVisibilityChanged?()
     }
 
     /// Begin the countdown + the actual measurement (called by the Start button / Enter).
@@ -82,6 +102,7 @@ final class CalibrationController: NSObject, ObservableObject {
         let cont = onSuccess
         onSuccess = nil
         cont?()
+        onVisibilityChanged?()
     }
 
     func close() {
@@ -100,6 +121,7 @@ final class CalibrationController: NSObject, ObservableObject {
             onSuccess = nil
             cont?()
         }
+        onVisibilityChanged?()
     }
 
     private func finish(ok: Bool, message: String) {

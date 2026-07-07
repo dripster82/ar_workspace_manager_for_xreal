@@ -21,6 +21,8 @@ final class WindowPickerController {
     private var footerTimer: Timer?
     private var previousApp: NSRunningApplication?
     private(set) var visible = false
+    /// Fired after every show/hide so the app can re-evaluate the Esc-to-dismiss arming.
+    var onVisibilityChanged: (() -> Void)?
 
     private var items: [WinItem] = []
     private var selected = 0
@@ -52,6 +54,7 @@ final class WindowPickerController {
         panel.makeKeyAndOrderFront(nil)
         installKeyMonitor()
         render()
+        onVisibilityChanged?()
 
         // Light refresh so the "looking at" target tracks head movement while open.
         let timer = Timer(timeInterval: 0.2, repeats: true) { [weak self] _ in
@@ -87,6 +90,7 @@ final class WindowPickerController {
         panel?.orderOut(nil)
         previousApp?.activate()
         previousApp = nil
+        onVisibilityChanged?()
     }
 
     // MARK: Navigation

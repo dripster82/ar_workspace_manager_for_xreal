@@ -74,6 +74,8 @@ public final class GlassesRenderer: NSObject {
     public var showPicker = false
     private var statusToastTexture: MTLTexture?
     public var showStatusToast = false
+    private var cursorInfoTexture: MTLTexture?
+    public var showCursorInfo = false
     /// Serializes renderFrame across the dedicated link thread and QuartzCore's deferred
     /// main-thread dispatch (see metalDisplayLink) — try-lock so a contended tick is dropped,
     /// never queued behind the in-flight frame.
@@ -387,6 +389,19 @@ public final class GlassesRenderer: NSObject {
     }
 
     public func clearStatusToast() { showStatusToast = false }
+
+    /// Set the find-cursor (⌃⌥C) card. Its own slot: it refreshes at ~20 Hz, and when it shared
+    /// the help slot it fought HelpOverlay/Alarm for it — the controllers' independent `visible`
+    /// flags desynced from the slot and ⌃⌥C stopped toggling off.
+    @discardableResult
+    public func setCursorInfoImage(_ cgImage: CGImage) -> Bool {
+        guard let tex = makeOverlayTexture(cgImage) else { return false }
+        cursorInfoTexture = tex
+        showCursorInfo = true
+        return true
+    }
+
+    public func clearCursorInfo() { showCursorInfo = false }
 
     /// Set the centred window-picker overlay (⌃⌥W). Large, centred — same upload path as the help HUD.
     @discardableResult
@@ -1079,6 +1094,7 @@ public final class GlassesRenderer: NSObject {
         }
 
         drawHelpOverlay(commandBuffer: commandBuffer, target: drawable.texture)
+        drawCursorInfoOverlay(commandBuffer: commandBuffer, target: drawable.texture)
         drawPickerOverlay(commandBuffer: commandBuffer, target: drawable.texture)
         drawBrightnessOverlay(commandBuffer: commandBuffer, target: drawable.texture)
         drawMediaProgressOverlay(commandBuffer: commandBuffer, target: drawable.texture)
@@ -1089,6 +1105,7 @@ public final class GlassesRenderer: NSObject {
         // target so the captured image matches what's on screen (the drawable is unreadable).
         if dumpDir != nil || shotURL != nil || recording {
             drawHelpOverlay(commandBuffer: commandBuffer, target: sceneTarget)
+            drawCursorInfoOverlay(commandBuffer: commandBuffer, target: sceneTarget)
             drawPickerOverlay(commandBuffer: commandBuffer, target: sceneTarget)
             drawBrightnessOverlay(commandBuffer: commandBuffer, target: sceneTarget)
             // Note: recording indicator intentionally NOT composited into the recorded frame.
@@ -1156,6 +1173,13 @@ public final class GlassesRenderer: NSObject {
         guard showStatusToast, let tex = statusToastTexture else { return }
         drawOverlay(tex, commandBuffer: commandBuffer, target: target,
                     heightFraction: 0.06, maxWidthFraction: 0.7, anchor: .bottom(marginNDC: 0.18))
+    }
+
+    /// Draw the find-cursor card, centred (same footprint as the help card it used to share).
+    private func drawCursorInfoOverlay(commandBuffer: MTLCommandBuffer, target: MTLTexture) {
+        guard showCursorInfo, let tex = cursorInfoTexture else { return }
+        drawOverlay(tex, commandBuffer: commandBuffer, target: target,
+                    heightFraction: 0.6, maxWidthFraction: 0.8, anchor: .center)
     }
 
     /// Draw the centred help/cursor HUD as an alpha-blended quad on top of the given target.

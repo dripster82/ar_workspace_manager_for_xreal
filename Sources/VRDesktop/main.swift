@@ -78,6 +78,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         coordinator.onCalibrationRequested = { [weak self] firstUse, onSuccess in
             self?.calibrationController.show(firstUse: firstUse, onSuccess: onSuccess)
         }
+
+        // Esc-to-dismiss registry (order = priority; alarm is handled separately, first).
+        dismissables = [
+            DismissableOverlay(name: "window picker",
+                               isVisible: { [weak self] in self?.windowPicker.visible ?? false },
+                               dismiss: { [weak self] in self?.windowPicker.hide() }),
+            DismissableOverlay(name: "calibration",
+                               isVisible: { [weak self] in self?.calibrationController.isEscDismissable ?? false },
+                               dismiss: { [weak self] in self?.calibrationController.escDismiss() }),
+            DismissableOverlay(name: "settle warning",
+                               isVisible: { [weak self] in self?.coordinator.isSettleWarningVisible ?? false },
+                               dismiss: { [weak self] in self?.coordinator.dismissSettleWarning() }),
+            DismissableOverlay(name: "find cursor",
+                               isVisible: { [weak self] in self?.cursorInfoOverlay.visible ?? false },
+                               dismiss: { [weak self] in self?.cursorInfoOverlay.hide() }),
+            DismissableOverlay(name: "help",
+                               isVisible: { [weak self] in self?.helpOverlay.visible ?? false },
+                               dismiss: { [weak self] in self?.helpOverlay.hide() }),
+        ]
+        let rearm: () -> Void = { [weak self] in self?.updateEscArming() }
+        helpOverlay.onVisibilityChanged = rearm
+        cursorInfoOverlay.onVisibilityChanged = rearm
+        windowPicker.onVisibilityChanged = rearm
+        calibrationController.onVisibilityChanged = rearm
+        coordinator.onOverlayVisibilityChanged = rearm
+        // AR teardown: dismiss anything rendered into AR overlay slots so controllers' visible
+        // flags can't go stale across sessions (calibration is not AR-bound — leave it).
+        coordinator.onARStopped = { [weak self] in
+            guard let self else { return }
+            if self.helpOverlay.visible { self.helpOverlay.hide() }
+            if self.cursorInfoOverlay.visible { self.cursorInfoOverlay.hide() }
+            if self.windowPicker.visible { self.windowPicker.hide() }
+            if self.coordinator.isSettleWarningVisible { self.coordinator.dismissSettleWarning() }
+            self.updateEscArming()
+        }
         coordinator.onToggleHelp = { [weak self] in self?.helpOverlay.toggle() }
         coordinator.onToggleCursorInfo = { [weak self] in self?.cursorInfoOverlay.toggle() }
         coordinator.onToggleWindowPicker = { [weak self] in self?.windowPicker.toggle() }
@@ -301,17 +336,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     /// A plain Escape hotkey is registered only while it's actually wanted — when an alarm is
-    /// showing OR Focus mode is active — so it doesn't swallow Esc the rest of the time.
+    /// showing, Focus mode is active, OR a dismissable popup is visible — so it doesn't swallow
+    /// Esc the rest of the time. While armed, Esc is CONSUMED (never reaches the frontmost app):
+    /// every enrolled popup is user-invoked and transient, so Esc right after means "close it".
     private var escForAlarm = false
     private var escForFocus = false
 
+    /// The Esc-to-dismiss registry: array order = dismissal priority (first visible wins; exactly
+    /// one thing is dismissed per press). Built once in applicationDidFinishLaunching.
+    struct DismissableOverlay {
+        let name: String
+        let isVisible: () -> Bool
+        let dismiss: () -> Void
+    }
+    private var dismissables: [DismissableOverlay] = []
+
+    @MainActor private var anyDismissableVisible: Bool { dismissables.contains { $0.isVisible() } }
+
     @MainActor func updateEscArming() {
-        if escForAlarm || escForFocus { registerEscDismiss() } else { unregisterEscDismiss() }
+        if escForAlarm || escForFocus || anyDismissableVisible { registerEscDismiss() }
+        else { unregisterEscDismiss() }
     }
 
-    /// Route a plain-Esc press: dismiss an active alarm first, otherwise exit Focus mode.
+    /// Route a plain-Esc press, highest priority first: alarm → visible popups (registry order) →
+    /// Focus exit. One dismissal per press; re-evaluate arming after (self-healing if flags went
+    /// stale). Note: Focus `.doubleEsc` uses a listen-only tap that still sees consumed keyDowns,
+    /// so a double-tap with a popup up dismisses the popup AND exits Focus — intended.
     @MainActor func handleEscPressed() {
-        if escForAlarm { alarmController.dismiss() } else { coordinator.exitFocus() }
+        if escForAlarm {
+            alarmController.dismiss()
+        } else if let overlay = dismissables.first(where: { $0.isVisible() }) {
+            overlay.dismiss()
+        } else {
+            coordinator.exitFocus()
+        }
+        updateEscArming()
     }
 
     @MainActor func registerEscDismiss() {

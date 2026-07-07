@@ -8,6 +8,8 @@ final class HelpOverlayController {
     private let coordinator: AppCoordinator
     private var panel: NSPanel?
     private(set) var visible = false
+    /// Fired after every show/hide so the app can re-evaluate the Esc-to-dismiss arming.
+    var onVisibilityChanged: (() -> Void)?
 
     init(coordinator: AppCoordinator) {
         self.coordinator = coordinator
@@ -25,12 +27,14 @@ final class HelpOverlayController {
         } else {
             showPanel() // AR off, or overlay couldn't be built — use the macOS panel
         }
+        onVisibilityChanged?()
     }
 
     func hide() {
         visible = false
         coordinator.renderer?.clearHelp()
         panel?.orderOut(nil)
+        onVisibilityChanged?()
     }
 
     private func showPanel() {

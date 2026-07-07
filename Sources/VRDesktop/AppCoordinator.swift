@@ -2610,6 +2610,9 @@ final class AppCoordinator: ObservableObject {
 
     /// Called when entering/leaving Focus mode, so the app can arm/disarm the Esc escape hatch.
     var onFocusChanged: ((Bool) -> Void)?
+    /// Called at the very end of stopAR, so overlays rendered into AR slots can be dismissed and
+    /// their controllers' visible flags can't go stale across sessions.
+    var onARStopped: (() -> Void)?
 
     /// Public entry point for the Esc escape hatch (Focus confines the cursor; Esc must free it).
     func exitFocus() { dropFocus() }
@@ -3408,8 +3411,16 @@ final class AppCoordinator: ObservableObject {
     }
 
     /// Post-timeout warning: the guard gave up waiting and the action is going ahead on a hot
-    /// daemon. Shown for 10 s or until Esc; mirrored into AR (with retries, since an AR start's
-    /// renderer isn't live at the moment the timeout fires).
+    /// daemon. Shown for 10 s or until Esc (via the AppDelegate dismissable-overlay registry — no
+    /// ad-hoc key monitors here); mirrored into AR (with retries, since an AR start's renderer
+    /// isn't live at the moment the timeout fires).
+    private var settleWarningDismissAction: (() -> Void)?
+    var isSettleWarningVisible: Bool { settleWarningDismissAction != nil }
+    func dismissSettleWarning() { settleWarningDismissAction?() }
+    /// Fired when a coordinator-owned dismissable overlay (settle warning) shows/hides, so the
+    /// AppDelegate can re-evaluate Esc arming.
+    var onOverlayVisibilityChanged: (() -> Void)?
+
     private func showSettleWarning(_ text: String) {
         showSettleToast(text, warning: true)
         for delay: TimeInterval in [2, 4] {
@@ -3421,23 +3432,16 @@ final class AppCoordinator: ObservableObject {
                 if let cg = ir.cgImage { renderer.setStatusToastImage(cg) }
             }
         }
-        var monitors: [Any] = []
-        var dismissed = false
-        func dismiss() {
-            guard !dismissed else { return }
-            dismissed = true
-            monitors.forEach { NSEvent.removeMonitor($0) }
-            monitors = []
+        settleWarningDismissAction = { [weak self] in
+            guard let self else { return }
+            self.settleWarningDismissAction = nil
             self.hideSettleToast()
+            self.onOverlayVisibilityChanged?()
         }
-        if let m = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: { ev in
-            if ev.keyCode == 53 { dismiss(); return nil }
-            return ev
-        }) { monitors.append(m) }
-        if let m = NSEvent.addGlobalMonitorForEvents(matching: .keyDown, handler: { ev in
-            if ev.keyCode == 53 { dismiss() }
-        }) { monitors.append(m) }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { dismiss() }
+        onOverlayVisibilityChanged?()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
+            self?.settleWarningDismissAction?()   // idempotent: nil after the first call
+        }
     }
 
     /// Small floating "waiting…" toast shown while the settle guard delays a display action, so a
@@ -4068,6 +4072,7 @@ final class AppCoordinator: ObservableObject {
         lastArrangementSignature = []
         outputScreenName = nil
         statusMessage = "AR stopped"
+        onARStopped?()   // AppDelegate dismisses any AR-rendered overlays (help/find-cursor/…)
     }
 
     func saveWorkspaces() { workspaceStore.save() }
