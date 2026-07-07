@@ -2,6 +2,7 @@ import AppKit
 import DisplayManager
 import GlassesDriver
 import SwiftUI
+import Charts
 import UniformTypeIdentifiers
 
 struct ControlPanelView: View {
@@ -1328,17 +1329,12 @@ struct ControlPanelView: View {
 
     private var systemHealthSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // Live runaway metric — always shown (the others are accumulation indicators).
-            HStack {
-                Text("ColorSync daemon CPU").font(.caption)
-                Spacer()
-                let cds = coordinator.colorSyncDaemonCPU
-                Text(String(format: "%.0f%%", cds))
-                    .font(.caption.monospacedDigit().bold())
-                    .foregroundStyle(cds >= 65 ? .red : (cds > 25 ? .orange : .secondary))
-                if cds >= 65 { Text("pinned").font(.caption2).foregroundStyle(.red) }
-            }
-            Text("colorsync.displayservices — pins ~75% after rapid display changes; self-clears in ~1 min.")
+            // Live runaway metric — a 3h graph, because the burst-vs-wedge signature only reads
+            // over time: benign bursts are short ~7-min cycles, a wedge is a sustained plateau.
+            ColorSyncCPUChart(history: coordinator.colorSyncHistory)
+            Text("colorsync.displayservices over the last 3 hours — short bursts that release are "
+                 + "normal; a sustained plateau above the red line is the stuck state (unplug the "
+                 + "glasses for a minute or two).")
                 .font(.caption2).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Divider()
@@ -2920,5 +2916,55 @@ struct MediaPlaylist: View {
         let t = Int(seconds.rounded())
         let h = t / 3600, m = (t % 3600) / 60, s = t % 60
         return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
+    }
+}
+
+
+/// The Diagnostics ColorSync graph: last 3 h of daemon CPU with the 65% "pinned" threshold.
+/// Observes ColorSyncHistory directly so the 10 s samples only re-render this small chart.
+private struct ColorSyncCPUChart: View {
+    @ObservedObject var history: ColorSyncHistory
+
+    var body: some View {
+        let pts = history.points
+        let current = pts.last?.cpu ?? 0
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("ColorSync daemon CPU").font(.caption)
+                Spacer()
+                Text(String(format: "%.0f%%", current))
+                    .font(.caption.monospacedDigit().bold())
+                    .foregroundStyle(current >= 65 ? .red : (current > 25 ? .orange : .secondary))
+                if current >= 65 { Text("pinned").font(.caption2).foregroundStyle(.red) }
+            }
+            Chart {
+                ForEach(pts) { p in
+                    AreaMark(x: .value("Time", p.time), y: .value("CPU", p.cpu))
+                        .foregroundStyle(.cyan.opacity(0.15))
+                    LineMark(x: .value("Time", p.time), y: .value("CPU", p.cpu))
+                        .lineStyle(StrokeStyle(lineWidth: 1))
+                        .foregroundStyle(.cyan)
+                }
+                RuleMark(y: .value("Pinned", 65))
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                    .foregroundStyle(.red.opacity(0.5))
+            }
+            .chartYScale(domain: 0...100)
+            .chartXScale(domain: Date().addingTimeInterval(-ColorSyncHistory.window)...Date())
+            .chartYAxis {
+                AxisMarks(values: [0, 50, 100]) { v in
+                    AxisGridLine()
+                    AxisValueLabel { if let i = v.as(Int.self) { Text("\(i)%").font(.system(size: 8)) } }
+                }
+            }
+            .chartXAxis {
+                AxisMarks(values: .stride(by: .hour)) { _ in
+                    AxisGridLine()
+                    AxisValueLabel(format: .dateTime.hour().minute(), anchor: .top)
+                        .font(.system(size: 8))
+                }
+            }
+            .frame(height: 72)
+        }
     }
 }

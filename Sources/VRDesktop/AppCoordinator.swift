@@ -555,6 +555,7 @@ final class AppCoordinator: ObservableObject {
         let sweptAtLaunch = SystemHealth.sweepOrphanProfiles()
         if sweptAtLaunch > 0 { DebugLog.shared.log("Launch: swept \(sweptAtLaunch) orphaned ColorSync profile(s)") }
         restoreSavedInputDevice()
+        colorSyncHistory.start()   // 3h rolling CPU graph on the Diagnostics page
         colorSyncWatchdog.onRunawayDetected = { [weak self] cpu in
             self?.presentColorSyncRunawayAlert(cpu: cpu)
         }
@@ -2506,6 +2507,9 @@ final class AppCoordinator: ObservableObject {
         for c in captures.values { c.restoreFrameRate() }
         DebugLog.shared.log("media: restored capture frame rate after full-view video")
     }
+
+    /// 3-hour rolling colorsync.displayservices CPU history (Diagnostics graph).
+    let colorSyncHistory = ColorSyncHistory()
 
     /// Cursor size stepping (⌃⌥+ / ⌃⌥−): the accessibility cursor scale, 1.0 (normal) to 4.0,
     /// in 0.25 steps. The HUD shows the offset in steps from normal ("+3", "0").
