@@ -14,7 +14,28 @@ final class ColorSyncHistory: ObservableObject {
     }
 
     static let window: TimeInterval = 3 * 3600
-    static let interval: TimeInterval = 10
+    /// 2 s keeps even the shortest spikes visible; one off-main `ps` spawn per tick is <1% of a
+    /// core and never touches the main thread or the render loop. The chart draws 30 s MAXIMA
+    /// (not the raw 5,400 points) so Swift Charts stays cheap while the page is open.
+    static let interval: TimeInterval = 2
+    static let displayBucket: TimeInterval = 30
+
+    /// Raw points bucketed to per-30s maxima for drawing (~360 marks over 3 h). Maxima, not
+    /// means: peaks are the diagnostic signal (bursts and wedges), and averaging would soften
+    /// exactly what the graph exists to show.
+    var displayPoints: [Point] {
+        guard !points.isEmpty else { return [] }
+        var buckets: [Int: Point] = [:]
+        for p in points {
+            let key = Int(p.time.timeIntervalSinceReferenceDate / Self.displayBucket)
+            if let existing = buckets[key] {
+                if p.cpu > existing.cpu { buckets[key] = Point(time: existing.time, cpu: p.cpu) }
+            } else {
+                buckets[key] = p
+            }
+        }
+        return buckets.keys.sorted().compactMap { buckets[$0] }
+    }
 
     @Published private(set) var points: [Point] = []
     private var timer: Timer?

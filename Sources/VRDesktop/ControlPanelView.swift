@@ -2926,8 +2926,8 @@ private struct ColorSyncCPUChart: View {
     @ObservedObject var history: ColorSyncHistory
 
     var body: some View {
-        let pts = history.points
-        let current = pts.last?.cpu ?? 0
+        let pts = history.displayPoints
+        let current = history.points.last?.cpu ?? 0
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text("ColorSync daemon CPU").font(.caption)
