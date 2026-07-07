@@ -2368,12 +2368,16 @@ final class AppCoordinator: ObservableObject {
         let centreB = (bMin + bMax) / 2.0
         let distance = Float(wideCanvasDistanceMeters)
         let arcWRad = arcWDeg * .pi / 180.0
+        // Physical width is fixed at the 2 m reference the layout is authored at — NOT scaled by
+        // `distance`. (It used to be arc × distance, which cancels exactly: the canvas subtended
+        // the same angles at every distance, so the distance slider visibly did nothing in mono.)
+        // Held constant, farther = smaller, matching every screen's own distance slider.
         var canvas = SceneScreen(
             canvasID: Self.wideCanvasID,
             yaw: Float(-centreA * .pi / 180.0),
             pitch: Float(-centreB * .pi / 180.0),
             distance: distance,
-            widthMeters: Float(arcWRad) * distance * Float(wideCanvasScale),
+            widthMeters: Float(arcWRad) * 2.0 * Float(wideCanvasScale),
             aspect: Float(arcWDeg / arcHDeg),
             canvasPixelWidth: canvasW, canvasPixelHeight: canvasH,
             tiles: canvasTiles

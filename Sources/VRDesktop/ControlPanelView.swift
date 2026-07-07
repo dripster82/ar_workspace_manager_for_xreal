@@ -258,6 +258,42 @@ struct ControlPanelView: View {
 
     // MARK: Workspace — layout-centric (selectors, layout map, selected display detail)
 
+    /// Wide-curved-canvas controls — lives on the Workspace page since it changes how the
+    /// workspace's anchored screens are rendered (one merged curved surface vs individual quads).
+    private var wideCanvasControls: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle("Wide curved canvas", isOn: $coordinator.wideCanvas)
+                .font(.caption)
+                .disabled(coordinator.stereoEnabled)
+                .help("Wrap all anchored screens onto one continuous auto-curved surface with shared distance and canvas scale")
+            if coordinator.stereoEnabled {
+                Text("Not available in stereo (SBS) — screens render individually.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            if coordinator.wideCanvas && !coordinator.stereoEnabled {
+                HStack {
+                    Text("Canvas distance").frame(width: 110, alignment: .leading).font(.caption)
+                    Slider(value: $coordinator.wideCanvasDistanceMeters, in: 0.5...6)
+                    Text(String(format: "%.1fm", coordinator.wideCanvasDistanceMeters))
+                        .frame(width: 44).font(.caption).monospacedDigit()
+                }
+                HStack {
+                    Text("Canvas scale").frame(width: 110, alignment: .leading).font(.caption)
+                    Slider(value: $coordinator.wideCanvasScale, in: 0.3...3)
+                    Text(String(format: "%.2fx", coordinator.wideCanvasScale))
+                        .frame(width: 44).font(.caption).monospacedDigit()
+                }
+                Text("Screen scale still sets each screen's size before stitching. Canvas scale "
+                     + "then resizes the merged wide canvas.")
+                    .font(.caption2).foregroundStyle(.secondary)
+                Button("Capture debug stages") { coordinator.captureDebugStages() }
+                    .font(.caption)
+                    .disabled(!coordinator.arActive)
+                    .help("Write stage1_*.jpg (raw screens), stage2.jpg (merged flat canvas), stage3.jpg (final curved frame) to ~/Desktop/VRDesktop-debug")
+            }
+        }
+    }
+
     private var workspacePage: some View {
         VStack(alignment: .leading, spacing: 14) {
             workspaceBar
@@ -277,6 +313,8 @@ struct ControlPanelView: View {
                         }
                         .controlSize(.small)
                         PlacementMapView(coordinator: coordinator, selection: $selectedDisplayID)
+                        Divider()
+                        wideCanvasControls
                     }
                 }
                 .frame(width: 400)
@@ -968,36 +1006,6 @@ struct ControlPanelView: View {
                             Text("IPD").frame(width: 30, alignment: .leading).font(.caption)
                             Slider(value: $coordinator.ipdMillimeters, in: 50...75)
                             Text("\(Int(coordinator.ipdMillimeters)) mm").frame(width: 52).font(.caption).monospacedDigit()
-                        }
-                    }
-                    if !coordinator.stereoEnabled {
-                        Toggle("Wide curved canvas", isOn: $coordinator.wideCanvas)
-                            .font(.caption)
-                            .help("Wrap all anchored screens onto one continuous auto-curved surface with shared distance and canvas scale")
-                        if coordinator.wideCanvas {
-                            VStack(alignment: .leading, spacing: 6) {
-                                HStack {
-                                    Text("Canvas distance").frame(width: 110, alignment: .leading).font(.caption)
-                                    Slider(value: $coordinator.wideCanvasDistanceMeters, in: 0.5...6)
-                                    Text(String(format: "%.1fm", coordinator.wideCanvasDistanceMeters))
-                                        .frame(width: 44).font(.caption).monospacedDigit()
-                                }
-                                HStack {
-                                    Text("Canvas scale").frame(width: 110, alignment: .leading).font(.caption)
-                                    Slider(value: $coordinator.wideCanvasScale, in: 0.3...3)
-                                    Text(String(format: "%.2fx", coordinator.wideCanvasScale))
-                                        .frame(width: 44).font(.caption).monospacedDigit()
-                                }
-                                Text("Screen scale still sets each screen's size before stitching. Canvas scale then resizes the merged wide canvas.")
-                                    .font(.caption2).foregroundStyle(.secondary)
-                                Button("Capture debug stages") {
-                                    coordinator.captureDebugStages()
-                                }
-                                .font(.caption)
-                                .disabled(!coordinator.arActive)
-                                .help("Write stage1_*.jpg (raw screens), stage2.jpg (merged flat canvas), stage3.jpg (final curved frame) to ~/Desktop/VRDesktop-debug")
-                            }
-                            .padding(.top, 2)
                         }
                     }
                 }
