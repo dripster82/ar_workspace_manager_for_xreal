@@ -592,7 +592,9 @@ final class AppCoordinator: ObservableObject {
             self.renderer?.showDotGrid = dragging
             DebugLog.shared.log("window drag: \(dragging ? "started" : "ended")")
         }
-        windowDragMonitor.start()
+        // NOT started here: the dot grid only exists in AR, and the monitor's per-drag AX work
+        // shouldn't run while the app is just sitting in the background. start/stop live in the
+        // AR lifecycle below.
 
         // Voice control: wire the recognizer callbacks, then start it if it was left enabled.
         voice.wakeWord = wakeWord
@@ -2145,6 +2147,7 @@ final class AppCoordinator: ObservableObject {
         if let media = mediaPlayer?.sceneScreen() { initialScreens.append(media) }
         renderer.setScreens(initialScreens)
         arActive = true
+        windowDragMonitor.start()
         imuWatchdog.deferChecks(for: 5, now: CACurrentMediaTime()) // device may still be settling
         let hud = displayedHUDProfile
         widgetManager?.setLayout(widgets: hud?.widgets ?? [], stacks: hud?.stacks ?? [])
@@ -3999,6 +4002,7 @@ final class AppCoordinator: ObservableObject {
                                          refresh: glassesRefreshRate)
         }
         arActive = true
+        windowDragMonitor.start()
         imuWatchdog.deferChecks(for: 5, now: CACurrentMediaTime())
         lastWindowSnapshot = CACurrentMediaTime()
         if arActivity == nil {
@@ -4027,6 +4031,7 @@ final class AppCoordinator: ObservableObject {
         if let arActivity { ProcessInfo.processInfo.endActivity(arActivity); self.arActivity = nil }
         let wasStereo = stereoEnabled
         cursorConfiner.stop()
+        windowDragMonitor.stop()   // dot-grid drag detection is AR-only (and clears the grid)
         // Tear the display link down BEFORE reverting the SBS display mode (reconfiguring a
         // display under a live CAMetalDisplayLink crashes QuartzCore).
         renderer?.stopOutput()
