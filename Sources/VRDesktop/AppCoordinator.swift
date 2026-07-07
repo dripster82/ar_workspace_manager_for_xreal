@@ -1252,7 +1252,7 @@ final class AppCoordinator: ObservableObject {
     private var glassesDisplayID: CGDirectDisplayID = 0
     private var lastOutputScreenID: CGDirectDisplayID = 0
     /// Display id order from the last OS-arrangement sync, to skip re-applying when unchanged.
-    private var lastArrangementSignature: [CGDirectDisplayID] = []
+    private var lastArrangementSignature: [String] = []
     /// Atlas mapping from the last wide-canvas build, used to place debug marker crosshairs.
     private var lastCanvasMapping: (aMin: Double, bMin: Double, pxH: Double, pxV: Double, w: Int, h: Int)?
     /// The user's OS display origins captured at AR start, restored on Stop so arranging the
@@ -2767,20 +2767,28 @@ final class AppCoordinator: ObservableObject {
 
     private struct ArrangedDisplay { let id: CGDirectDisplayID; let w: Int; let h: Int }
 
-    /// Displays grouped into rows as they should tile in the OS arrangement: rows top→bottom by
-    /// pitch, left→right by yaw within a row (+yaw is to the left). Excludes the glasses output.
-    private func arrangementRows() -> [[ArrangedDisplay]] {
+    /// One display to arrange: pixel size plus its angular rectangle in "arrangement axes"
+    /// (a = −yaw so it grows rightward like pixels; b = −pitch so it grows downward).
+    private struct ArrangeEntry {
+        let id: CGDirectDisplayID
+        let w: Int, h: Int
+        let aLeft: Double, aRight: Double, bTop: Double, bBottom: Double
+        var pxPerDegH: Double { Double(w) / max(0.001, aRight - aLeft) }
+        var pxPerDegV: Double { Double(h) / max(0.001, bBottom - bTop) }
+    }
+
+    private func arrangementEntries() -> [ArrangeEntry] {
         guard let ws = workspaceStore.activeWorkspace else { return [] }
-        struct E { let pitch: Double; let yaw: Double; let top: Double; let bottom: Double
-                   let d: ArrangedDisplay }
-        var entries: [E] = []
+        var entries: [ArrangeEntry] = []
         func add(_ cfg: VirtualScreenConfig, _ id: CGDirectDisplayID) {
             guard id != glassesDisplayID else { return }
             let b = CGDisplayBounds(id)
             let ang = LayoutGeometry.angularSize(cfg)
-            entries.append(E(pitch: cfg.pitchDegrees, yaw: cfg.yawDegrees,
-                             top: cfg.pitchDegrees + ang.h / 2, bottom: cfg.pitchDegrees - ang.h / 2,
-                             d: ArrangedDisplay(id: id, w: Int(b.width), h: Int(b.height))))
+            let aLeft = -cfg.yawDegrees - ang.w / 2
+            let bTop = -cfg.pitchDegrees - ang.h / 2
+            entries.append(ArrangeEntry(id: id, w: Int(b.width), h: Int(b.height),
+                                        aLeft: aLeft, aRight: aLeft + ang.w,
+                                        bTop: bTop, bBottom: bTop + ang.h))
         }
         for cfg in ws.virtualScreens where cfg.showInAR && cfg.placement == .anchored {
             if let id = virtualDisplays.displayID(for: cfg.id) { add(cfg, id) }
@@ -2789,7 +2797,7 @@ final class AppCoordinator: ObservableObject {
         // positioning-only (green) monitors still define where the virtual screens sit relative
         // to the main display. Mirror targets are excluded (represented by their virtual screen),
         // and so are any stale physicalInAR entries that actually resolve to one of our virtual
-        // displays — otherwise those phantoms widen the row and throw off the centring.
+        // displays.
         let mirrorTargets = physicalMirrorTargetUUIDs()
         let virtualIDs = Set(virtualDisplays.active.values.map { $0.displayID })
         for (uuid, cfg) in ws.physicalInAR where !mirrorTargets.contains(uuid) {
@@ -2797,27 +2805,115 @@ final class AppCoordinator: ObservableObject {
                 add(cfg, id)
             }
         }
-        // Group into rows by VERTICAL OVERLAP of the screens' angular extents — NOT by equal
-        // centre pitch. Screens with aligned tops but different heights have different centres,
-        // and the old Int(pitch.rounded()) bucketing put each in its own "row", stacking a
-        // side-by-side layout vertically in the OS arrangement (2026-07-07). Requires ≥0.5° of
-        // real overlap so screens that merely touch edges (e.g. a monitor directly below) stay
-        // in their own row.
-        var rowGroups: [[E]] = []
-        var rowRanges: [(top: Double, bottom: Double)] = []
-        for e in entries.sorted(by: { $0.pitch > $1.pitch }) {
-            if let i = rowRanges.firstIndex(where: { min($0.top, e.top) - max($0.bottom, e.bottom) > 0.5 }) {
-                rowGroups[i].append(e)
-                rowRanges[i] = (max(rowRanges[i].top, e.top), min(rowRanges[i].bottom, e.bottom))
-            } else {
-                rowGroups.append([e])
-                rowRanges.append((e.top, e.bottom))
+        return entries
+    }
+
+    /// Compute OS pixel positions from the map's angular layout, adjacency-first:
+    ///
+    /// 1. **Touching edges trump degree positions.** Screens whose edges touch in the map (within
+    ///    ~0.75°, with ≥0.5° of perpendicular overlap) are placed exactly edge-to-edge in pixels,
+    ///    BFS-propagated from a root — so a stacked pair beside a tall screen keeps that exact
+    ///    topology (the old row model could only stack or tile, never both; 2026-07-07).
+    /// 2. **Along the touching edge, the map's relative offset carries over**: a side-by-side
+    ///    neighbour's vertical position (and a stacked neighbour's horizontal position) comes from
+    ///    the angular offset converted at the pair's average pixels-per-degree.
+    /// 3. Screens with no touching edges (and later components) fall back to pure degree-
+    ///    proportional placement; a nudge pass then resolves any pixel overlaps.
+    private func computeArrangement(_ entries: [ArrangeEntry])
+        -> (positions: [CGDirectDisplayID: (x: Int, y: Int)], signature: [String]) {
+        guard !entries.isEmpty else { return ([:], []) }
+        let tol = 0.75, minOverlap = 0.5
+
+        // Adjacency per pair, kinds from A's perspective: B is to A's Right/Left, or Down/Up.
+        var adj: [[(to: Int, kind: Character)]] = Array(repeating: [], count: entries.count)
+        for i in entries.indices {
+            for j in entries.indices where i != j {
+                let A = entries[i], B = entries[j]
+                let vOv = min(A.bBottom, B.bBottom) - max(A.bTop, B.bTop)
+                let hOv = min(A.aRight, B.aRight) - max(A.aLeft, B.aLeft)
+                if abs(A.aRight - B.aLeft) <= tol, vOv >= minOverlap { adj[i].append((j, "R")) }
+                if abs(A.aLeft - B.aRight) <= tol, vOv >= minOverlap { adj[i].append((j, "L")) }
+                if abs(A.bBottom - B.bTop) <= tol, hOv >= minOverlap { adj[i].append((j, "D")) }
+                if abs(A.bTop - B.bBottom) <= tol, hOv >= minOverlap { adj[i].append((j, "U")) }
             }
         }
-        // Rows top→bottom by their range's top; within a row, left→right (+yaw is to the left).
-        return zip(rowGroups, rowRanges)
-            .sorted { $0.1.top > $1.1.top }
-            .map { group, _ in group.sorted { $0.yaw > $1.yaw }.map(\.d) }
+        for i in adj.indices {   // deterministic propagation order
+            adj[i].sort { (entries[$0.to].bTop, entries[$0.to].aLeft, String($0.kind))
+                        < (entries[$1.to].bTop, entries[$1.to].aLeft, String($1.kind)) }
+        }
+
+        // Global mean densities, for roots of later components / disconnected screens.
+        let gH = entries.map(\.pxPerDegH).reduce(0, +) / Double(entries.count)
+        let gV = entries.map(\.pxPerDegV).reduce(0, +) / Double(entries.count)
+
+        var pos: [Int: (x: Int, y: Int)] = [:]
+        var placedOrder: [Int] = []
+        let roots = entries.indices.sorted { (entries[$0].bTop, entries[$0].aLeft)
+                                           < (entries[$1].bTop, entries[$1].aLeft) }
+        var firstRoot: Int?
+        for root in roots where pos[root] == nil {
+            if let f = firstRoot {
+                // Disconnected from everything placed so far: degree-proportional offset from the
+                // first root (the overlap nudge below cleans up density mismatches).
+                pos[root] = (pos[f]!.x + Int(((entries[root].aLeft - entries[f].aLeft) * gH).rounded()),
+                             pos[f]!.y + Int(((entries[root].bTop - entries[f].bTop) * gV).rounded()))
+            } else {
+                firstRoot = root
+                pos[root] = (0, 0)
+            }
+            placedOrder.append(root)
+            var queue = [root]
+            while !queue.isEmpty {
+                let i = queue.removeFirst()
+                let A = entries[i]
+                guard let at = pos[i] else { continue }
+                for (j, kind) in adj[i] where pos[j] == nil {
+                    let B = entries[j]
+                    let pxH = (A.pxPerDegH + B.pxPerDegH) / 2
+                    let pxV = (A.pxPerDegV + B.pxPerDegV) / 2
+                    switch kind {
+                    case "R": pos[j] = (at.x + A.w, at.y + Int(((B.bTop - A.bTop) * pxV).rounded()))
+                    case "L": pos[j] = (at.x - B.w, at.y + Int(((B.bTop - A.bTop) * pxV).rounded()))
+                    case "D": pos[j] = (at.x + Int(((B.aLeft - A.aLeft) * pxH).rounded()), at.y + A.h)
+                    default:  pos[j] = (at.x + Int(((B.aLeft - A.aLeft) * pxH).rounded()), at.y - B.h)
+                    }
+                    placedOrder.append(j)
+                    queue.append(j)
+                }
+            }
+        }
+
+        // Overlap nudge: adjacency placements are exact, but density mismatches can make
+        // non-adjacent pairs collide. Push the later-placed screen out along the axis of least
+        // penetration.
+        for _ in 0..<4 {
+            var moved = false
+            for (oi, i) in placedOrder.enumerated() {
+                for j in placedOrder.dropFirst(oi + 1) {
+                    let (a, b) = (entries[i], entries[j])
+                    guard var pj = pos[j], let pi = pos[i] else { continue }
+                    let ox = min(pi.x + a.w, pj.x + b.w) - max(pi.x, pj.x)
+                    let oy = min(pi.y + a.h, pj.y + b.h) - max(pi.y, pj.y)
+                    guard ox > 0, oy > 0 else { continue }
+                    if ox <= oy { pj.x += (pj.x + b.w / 2 >= pi.x + a.w / 2) ? ox : -ox }
+                    else        { pj.y += (pj.y + b.h / 2 >= pi.y + a.h / 2) ? oy : -oy }
+                    pos[j] = pj
+                    moved = true
+                }
+            }
+            if !moved { break }
+        }
+
+        var positions: [CGDirectDisplayID: (x: Int, y: Int)] = [:]
+        for (i, p) in pos { positions[entries[i].id] = p }
+        // Signature: topology + coarse (256px-quantized) offsets, so live drags only trigger the
+        // (heavy, flicker-prone, ColorSync-churning) OS reconfigure on meaningful layout changes.
+        let signature = entries.indices.sorted { entries[$0].id < entries[$1].id }.map { i -> String in
+            let p = pos[i] ?? (0, 0)
+            let edges = adj[i].map { "\(entries[$0.to].id)\($0.kind)" }.sorted().joined(separator: ",")
+            return "\(entries[i].id):\(p.x >> 8),\(p.y >> 8):[\(edges)]"
+        }
+        return (positions, signature)
     }
 
     /// Lay the OS displays out edge-to-edge to match the GUI order, anchored so the Mac's main
@@ -2826,24 +2922,11 @@ final class AppCoordinator: ObservableObject {
     /// left→right / row order actually changed since the last sync.
     private func arrangeDisplaysToMatchGUI(force: Bool) {
         guard arActive else { return }
-        let rows = arrangementRows()
-        let all = rows.flatMap { $0 }
-        guard !all.isEmpty else { return }
-        let signature = all.map(\.id)
+        let entries = arrangementEntries()
+        guard !entries.isEmpty else { return }
+        let (positions, signature) = computeArrangement(entries)
+        let all = entries.map { ArrangedDisplay(id: $0.id, w: $0.w, h: $0.h) }
         if !force && signature == lastArrangementSignature { return }
-
-        // Pack edge-to-edge within each row, advancing y between rows. Each row is centred on a
-        // shared centre line (x = 0) rather than packed from the left, so rows of different widths
-        // stay aligned by their middle — e.g. a centred laptop display sits directly below the
-        // middle of a wider AR strip, matching the GUI, instead of flush-left under it.
-        var positions: [CGDirectDisplayID: (x: Int, y: Int)] = [:]
-        var y = 0
-        for row in rows {
-            let rowW = row.reduce(0) { $0 + $1.w }
-            var x = -rowW / 2, rowH = 0
-            for d in row { positions[d.id] = (x, y); x += d.w; rowH = max(rowH, d.h) }
-            y += rowH
-        }
 
         // Anchor the arrangement on the main display (kept at the origin by macOS). HEADLESS
         // (glasses are the only physical display, e.g. Mac mini / closed lid): anchor on a virtual
@@ -2869,15 +2952,14 @@ final class AppCoordinator: ObservableObject {
         if CGCompleteDisplayConfiguration(ref, .forSession) == .success {
             lastArrangementSignature = signature
             DebugLog.shared.log("arrange: applied OS layout for \(all.count) display(s); "
-                + "main=\(CGMainDisplayID()) rows=\(rows.count) anchor=(\(origin.x),\(origin.y))")
-            for (ri, row) in rows.enumerated() {
-                for d in row {
-                    let p = positions[d.id] ?? (0, 0)
-                    let x = p.x - origin.x, y = p.y - origin.y
-                    let name = cachedScreenName(displayID: d.id, screen: nil)
-                    DebugLog.shared.log(String(format: "  row%d '%@' id=%u x=%d..%d y=%d w=%d h=%d",
-                        ri, name, d.id, x, x + d.w, y, d.w, d.h))
-                }
+                + "main=\(CGMainDisplayID()) anchor=(\(origin.x),\(origin.y))")
+            for d in all.sorted(by: { (positions[$0.id]?.y ?? 0, positions[$0.id]?.x ?? 0)
+                                    < (positions[$1.id]?.y ?? 0, positions[$1.id]?.x ?? 0) }) {
+                let p = positions[d.id] ?? (0, 0)
+                let x = p.x - origin.x, y = p.y - origin.y
+                let name = cachedScreenName(displayID: d.id, screen: nil)
+                DebugLog.shared.log(String(format: "  '%@' id=%u x=%d..%d y=%d..%d w=%d h=%d",
+                    name, d.id, x, x + d.w, y, y + d.h, d.w, d.h))
             }
         } else {
             CGCancelDisplayConfiguration(ref)
