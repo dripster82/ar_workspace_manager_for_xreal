@@ -2503,6 +2503,17 @@ final class AppCoordinator: ObservableObject {
         DebugLog.shared.log("media: restored capture frame rate after full-view video")
     }
 
+    /// Cursor size stepping (⌃⌥+ / ⌃⌥−): the accessibility cursor scale, 1.0 (normal) to 4.0,
+    /// in 0.25 steps. The HUD shows the offset in steps from normal ("+3", "0").
+    var onCursorSizeChanged: ((Int) -> Void)?
+    func adjustCursorSize(by steps: Int) {
+        let stepSize: Float = 0.25
+        let target = min(4, max(1, CursorScale.current + Float(steps) * stepSize))
+        CursorScale.set(target)
+        let offset = Int(((target - 1) / stepSize).rounded())
+        onCursorSizeChanged?(offset)
+    }
+
     /// Layout-editor snapping (both default off — opt-in). ⌘ held while dragging bypasses.
     @Published var layoutSnapAngle: Bool = UserDefaults.standard.bool(forKey: "layoutSnapAngle") {
         didSet { UserDefaults.standard.set(layoutSnapAngle, forKey: "layoutSnapAngle") }
@@ -2760,12 +2771,15 @@ final class AppCoordinator: ObservableObject {
     /// pitch, left→right by yaw within a row (+yaw is to the left). Excludes the glasses output.
     private func arrangementRows() -> [[ArrangedDisplay]] {
         guard let ws = workspaceStore.activeWorkspace else { return [] }
-        struct E { let pitch: Double; let yaw: Double; let d: ArrangedDisplay }
+        struct E { let pitch: Double; let yaw: Double; let top: Double; let bottom: Double
+                   let d: ArrangedDisplay }
         var entries: [E] = []
         func add(_ cfg: VirtualScreenConfig, _ id: CGDirectDisplayID) {
             guard id != glassesDisplayID else { return }
             let b = CGDisplayBounds(id)
+            let ang = LayoutGeometry.angularSize(cfg)
             entries.append(E(pitch: cfg.pitchDegrees, yaw: cfg.yawDegrees,
+                             top: cfg.pitchDegrees + ang.h / 2, bottom: cfg.pitchDegrees - ang.h / 2,
                              d: ArrangedDisplay(id: id, w: Int(b.width), h: Int(b.height))))
         }
         for cfg in ws.virtualScreens where cfg.showInAR && cfg.placement == .anchored {
@@ -2783,10 +2797,27 @@ final class AppCoordinator: ObservableObject {
                 add(cfg, id)
             }
         }
-        let rows = Dictionary(grouping: entries) { Int($0.pitch.rounded()) }
-        return rows.keys.sorted(by: >).map { key in
-            rows[key]!.sorted { $0.yaw > $1.yaw }.map(\.d)
+        // Group into rows by VERTICAL OVERLAP of the screens' angular extents — NOT by equal
+        // centre pitch. Screens with aligned tops but different heights have different centres,
+        // and the old Int(pitch.rounded()) bucketing put each in its own "row", stacking a
+        // side-by-side layout vertically in the OS arrangement (2026-07-07). Requires ≥0.5° of
+        // real overlap so screens that merely touch edges (e.g. a monitor directly below) stay
+        // in their own row.
+        var rowGroups: [[E]] = []
+        var rowRanges: [(top: Double, bottom: Double)] = []
+        for e in entries.sorted(by: { $0.pitch > $1.pitch }) {
+            if let i = rowRanges.firstIndex(where: { min($0.top, e.top) - max($0.bottom, e.bottom) > 0.5 }) {
+                rowGroups[i].append(e)
+                rowRanges[i] = (max(rowRanges[i].top, e.top), min(rowRanges[i].bottom, e.bottom))
+            } else {
+                rowGroups.append([e])
+                rowRanges.append((e.top, e.bottom))
+            }
         }
+        // Rows top→bottom by their range's top; within a row, left→right (+yaw is to the left).
+        return zip(rowGroups, rowRanges)
+            .sorted { $0.1.top > $1.1.top }
+            .map { group, _ in group.sorted { $0.yaw > $1.yaw }.map(\.d) }
     }
 
     /// Lay the OS displays out edge-to-edge to match the GUI order, anchored so the Mac's main

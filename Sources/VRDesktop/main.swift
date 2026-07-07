@@ -31,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var cursorInfoOverlay: CursorInfoOverlayController!
     var windowPicker: WindowPickerController!
     var brightnessHUD: BrightnessHUDController!
+    var cursorSizeHUD: CursorSizeHUDController!
     var alarmController: AlarmController!
     var calibrationController: CalibrationController!
 
@@ -51,6 +52,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         windowPicker = WindowPickerController(coordinator: coordinator)
         brightnessHUD = BrightnessHUDController(coordinator: coordinator)
         coordinator.onBrightnessChanged = { [weak self] in self?.brightnessHUD.flash() }
+        cursorSizeHUD = CursorSizeHUDController(coordinator: coordinator)
+        coordinator.onCursorSizeChanged = { [weak self] steps in self?.cursorSizeHUD.flash(steps: steps) }
         alarmController = AlarmController(coordinator: coordinator)
         alarmController.escArmer = { [weak self] on in
             self?.escForAlarm = on
@@ -202,6 +205,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var mediaPos1Ref, mediaPos2Ref, mediaPos3Ref, mediaPos4Ref, mediaPos5Ref: EventHotKeyRef?
     private var mediaStopRef, mediaPlayPauseRef, mediaRewindRef, mediaSkipRef: EventHotKeyRef?
     private var mediaNextRef, mediaPrevRef: EventHotKeyRef?
+    private var cursorBiggerRef, cursorSmallerRef: EventHotKeyRef?
     private static let recenterHotKeyID: UInt32 = 1
     private static let stopARHotKeyID: UInt32 = 2
     private static let helpHotKeyID: UInt32 = 3
@@ -234,6 +238,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private static let mediaSkipID: UInt32 = 28
     private static let mediaNextID: UInt32 = 29
     private static let mediaPrevID: UInt32 = 30
+    private static let cursorBiggerID: UInt32 = 31
+    private static let cursorSmallerID: UInt32 = 32
 
     private func registerGlobalRecenterHotKey() {
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
@@ -288,6 +294,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 case AppDelegate.mediaSkipID: delegate.coordinator.mediaSkip(10)
                 case AppDelegate.mediaNextID: delegate.coordinator.mediaNext()
                 case AppDelegate.mediaPrevID: delegate.coordinator.mediaPrevious()
+                case AppDelegate.cursorBiggerID: delegate.coordinator.adjustCursorSize(by: 1)
+                case AppDelegate.cursorSmallerID: delegate.coordinator.adjustCursorSize(by: -1)
                 case AppDelegate.quitHotKeyID: NSApp.terminate(nil)
                 default: break
                 }
@@ -333,6 +341,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         register(kVK_RightArrow, AppDelegate.mediaSkipID, &mediaSkipRef)
         register(kVK_UpArrow, AppDelegate.mediaNextID, &mediaNextRef)
         register(kVK_DownArrow, AppDelegate.mediaPrevID, &mediaPrevRef)
+        register(kVK_ANSI_Equal, AppDelegate.cursorBiggerID, &cursorBiggerRef)
+        register(kVK_ANSI_Minus, AppDelegate.cursorSmallerID, &cursorSmallerRef)
     }
 
     /// A plain Escape hotkey is registered only while it's actually wanted — when an alarm is

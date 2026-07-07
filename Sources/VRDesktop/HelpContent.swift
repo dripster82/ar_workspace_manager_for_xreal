@@ -32,6 +32,7 @@ enum HelpContent {
             shortcuts: [
                 Shortcut(keys: "⌃⌥C", action: "Find the cursor (screen + arrow)"),
                 Shortcut(keys: "⌃⌥X", action: "Move cursor to where you're looking"),
+                Shortcut(keys: "⌃⌥+ ⌃⌥−", action: "Cursor size bigger / smaller"),
             ]),
         Section(
             title: "Capture", column: 1,
