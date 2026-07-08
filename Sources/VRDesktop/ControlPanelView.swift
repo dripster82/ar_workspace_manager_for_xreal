@@ -1009,9 +1009,18 @@ struct ControlPanelView: View {
                             Text("\(Int(coordinator.ipdMillimeters)) mm").frame(width: 52).font(.caption).monospacedDigit()
                         }
                     }
+                    Divider()
                     if coordinator.isOneSeriesConnected {
-                        Divider()
                         MountCalibrationEditor(coordinator: coordinator)
+                    } else {
+                        // Discoverable even when it doesn't apply (Air-series needs no mount
+                        // correction — its IMU sits level in the frame).
+                        Text("Mount calibration").font(.caption).foregroundStyle(.secondary)
+                        Text("Available when One-series glasses are connected — their IMU is "
+                             + "mounted tilted, and the measured pitch/roll correction can be "
+                             + "fine-tuned here in 0.1° steps. Air glasses need no mount correction.")
+                            .font(.caption2).foregroundStyle(.tertiary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
