@@ -2561,6 +2561,10 @@ final class AppCoordinator: ObservableObject {
     func setMountCalibration(pitchDeg: Double, rollDeg: Double) {
         IMUService.shared.setMountCalibration(pitchDeg: pitchDeg, rollDeg: rollDeg)
     }
+    var driftCompensationDegPerMin: Double { IMUService.shared.driftCompensationDegPerMin }
+    func setDriftCompensation(degPerMin: Double) {
+        IMUService.shared.setDriftCompensation(degPerMin: degPerMin)
+    }
 
     /// Layout-map geometry for widgets/stacks — TRUE natural sizes + anchor offsets, straight
     /// from the same rasterization the AR path uses, so the map matches what you see.

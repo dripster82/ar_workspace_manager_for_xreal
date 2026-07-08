@@ -100,6 +100,7 @@ public final class IMUService: @unchecked Sendable {
     /// handed off via a lock-guarded pending slot that handleUpdate applies on its next sample.
     private let mountSetLock = NSLock()
     private var pendingMountSet: (pitch: Float, roll: Float)?
+    private var pendingDriftSet: Float?          // rad/s
     private var hasPendingMountSet = false
     public func setMountCalibration(pitchDeg: Double, rollDeg: Double) {
         guard connectedProductID != 0 else { return }
@@ -109,6 +110,19 @@ public final class IMUService: @unchecked Sendable {
         hasPendingMountSet = true
         mountSetLock.unlock()
         hasMountCalibration = true
+    }
+
+    /// The yaw-drift compensation currently in effect, in °/min (what ⌃⌥B measures; 0 until a
+    /// calibration has run this session — it is not persisted, drift varies day to day).
+    public var driftCompensationDegPerMin: Double { Double(gyroYawBiasRate) * 180 / .pi * 60 }
+
+    /// Manually set the yaw-drift compensation (Settings editor). Same IMU-thread handoff as the
+    /// mount set — the bias is read every sample on the IMU thread.
+    public func setDriftCompensation(degPerMin: Double) {
+        mountSetLock.lock()
+        pendingDriftSet = Float(degPerMin * .pi / 180 / 60)
+        hasPendingMountSet = true
+        mountSetLock.unlock()
     }
 
     /// Load and apply the saved per-device mount tilt, if any. Returns whether one was found.
@@ -270,7 +284,9 @@ public final class IMUService: @unchecked Sendable {
             if let p = pendingMountSet {
                 oneMountCorrection = Self.mountCorrection(pitchDeg: p.pitch, rollDeg: p.roll)
             }
+            if let d = pendingDriftSet { gyroYawBiasRate = d }
             pendingMountSet = nil
+            pendingDriftSet = nil
             hasPendingMountSet = false
             mountSetLock.unlock()
         }

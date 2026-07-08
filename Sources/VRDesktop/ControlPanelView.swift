@@ -1010,18 +1010,7 @@ struct ControlPanelView: View {
                         }
                     }
                     Divider()
-                    if coordinator.isOneSeriesConnected {
-                        MountCalibrationEditor(coordinator: coordinator)
-                    } else {
-                        // Discoverable even when it doesn't apply (Air-series needs no mount
-                        // correction — its IMU sits level in the frame).
-                        Text("Mount calibration").font(.caption).foregroundStyle(.secondary)
-                        Text("Available when One-series glasses are connected — their IMU is "
-                             + "mounted tilted, and the measured pitch/roll correction can be "
-                             + "fine-tuned here in 0.1° steps. Air glasses need no mount correction.")
-                            .font(.caption2).foregroundStyle(.tertiary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                    MountCalibrationEditor(coordinator: coordinator)
                 }
             }
 
@@ -3155,25 +3144,39 @@ private struct ColorSyncCPUChart: View {
 }
 
 
-/// Manual editor for the One-series mount-tilt calibration (Settings → Glasses): the values the
-/// worn-and-level calibration measures, exposed as ±0.1° steppers so a slightly-off horizon can
-/// be dialled out by hand. Applies live (persisted per device) — the change is visible in AR
-/// immediately while you nudge.
+/// Manual calibration editor (Settings → Glasses): the values ⌃⌥B measures, exposed as ±0.1
+/// steppers so they can be fine-tuned (or rescued) by hand. Drift applies to every model; the
+/// mount pitch/roll rows appear for One-series glasses only (Air IMUs sit level — nothing to
+/// correct). All edits apply live.
 private struct MountCalibrationEditor: View {
     let coordinator: AppCoordinator
     @State private var pitch: Double = 0
     @State private var roll: Double = 0
+    @State private var drift: Double = 0
     @State private var seeded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Mount calibration").font(.caption).foregroundStyle(.secondary)
-            row("Pitch", value: $pitch)
-            row("Roll", value: $roll)
-            Text("Measured by Recalibrate (⌃⌥B); nudge in 0.1° steps if the view sits tilted "
-                 + "when your head is level. Applies live.")
-                .font(.caption2).foregroundStyle(.secondary)
+            Text("Calibration").font(.caption).foregroundStyle(.secondary)
+            row("Drift", value: $drift, unit: "°/min", range: -60...60)
+            Text("Yaw drift compensation, measured by Recalibrate (⌃⌥B) each session — positive "
+                 + "if the view creeps right. Nudge if the world still slowly rotates after "
+                 + "calibrating.")
+                .font(.caption2).foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
+            if coordinator.isOneSeriesConnected {
+                row("Pitch", value: $pitch, unit: "°", range: -90...90)
+                row("Roll", value: $roll, unit: "°", range: -90...90)
+                Text("One-series mount tilt (worn-and-level measurement); nudge in 0.1° steps if "
+                     + "the view sits tilted when your head is level. Persisted per device.")
+                    .font(.caption2).foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("Mount pitch/roll appear here for One-series glasses (their IMU is mounted "
+                     + "tilted). Air glasses need no mount correction.")
+                    .font(.caption2).foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .onAppear {
             guard !seeded else { return }
@@ -3181,25 +3184,31 @@ private struct MountCalibrationEditor: View {
             let m = coordinator.mountCalibrationDegrees
             pitch = m.pitch
             roll = m.roll
+            drift = coordinator.driftCompensationDegPerMin
         }
-        .onChange(of: pitch) { _ in apply() }
-        .onChange(of: roll) { _ in apply() }
+        .onChange(of: pitch) { _ in applyMount() }
+        .onChange(of: roll) { _ in applyMount() }
+        .onChange(of: drift) { _ in
+            guard seeded else { return }
+            coordinator.setDriftCompensation(degPerMin: drift)
+        }
     }
 
-    private func apply() {
+    private func applyMount() {
         guard seeded else { return }
         coordinator.setMountCalibration(pitchDeg: pitch, rollDeg: roll)
     }
 
-    private func row(_ label: String, value: Binding<Double>) -> some View {
+    private func row(_ label: String, value: Binding<Double>, unit: String,
+                     range: ClosedRange<Double>) -> some View {
         HStack(spacing: 8) {
             Text(label).font(.caption).frame(width: 40, alignment: .leading)
-            Text(String(format: "%+.1f°", value.wrappedValue))
+            Text(String(format: "%+.1f%@", value.wrappedValue, unit))
                 .font(.caption.monospacedDigit())
-                .frame(width: 54, alignment: .trailing)
+                .frame(width: 66, alignment: .trailing)
                 .padding(.horizontal, 6).padding(.vertical, 2)
                 .background(.black.opacity(0.25), in: RoundedRectangle(cornerRadius: 5))
-            Stepper("", value: value, in: -90...90, step: 0.1)
+            Stepper("", value: value, in: range, step: 0.1)
                 .labelsHidden()
             Spacer()
         }
