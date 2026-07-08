@@ -4,10 +4,24 @@ import ApplicationServices
 /// Intercepts the Mac brightness keys while ⌃⌥ is held and routes them to the glasses,
 /// consuming the event so macOS doesn't also act (Option+brightness opens Displays prefs).
 /// Requires Accessibility permission (CGEventTap).
+///
+/// Two hard rules, learned from a long stuck-drag hunt (2026-07-08): NX_SYSDEFINED is not just
+/// media keys — subtype-7 events carry auxiliary MOUSE BUTTON state for every click system-wide,
+/// and a consuming head-insert tap sits synchronously in that delivery path. So:
+///  - **The tap is enabled ONLY while ⌃⌥ is held** (flags-changed monitors toggle it). During
+///    normal mousing it is disabled and macOS delivers events without consulting us at all.
+///  - **The tap's callback runs on a dedicated thread**, never the main run loop — a busy main
+///    thread must not delay (or reorder) system-wide input events; delayed button-state around a
+///    drag release is exactly how drags get stuck to the cursor until Esc.
 final class BrightnessHotKey {
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
+    private var tapThread: Thread?
+    private var tapRunLoop: CFRunLoop?
     private var handler: ((Bool) -> Void)?
+    private var flagsMonitors: [Any] = []
+    /// Whether ⌃⌥ is currently held (i.e. the tap should be live). Written on main.
+    private var wantEnabled = false
 
     // From IOKit/hidsystem/ev_keymap.h
     private static let brightnessUp = 2
@@ -16,7 +30,7 @@ final class BrightnessHotKey {
 
     var isRunning: Bool { tap != nil }
 
-    /// Starts the tap. Returns false if Accessibility permission is missing.
+    /// Starts the tap (disabled until ⌃⌥ is held). Returns false if Accessibility is missing.
     @discardableResult
     func start(handler: @escaping (Bool) -> Void) -> Bool {
         guard tap == nil else { return true }
@@ -31,22 +45,60 @@ final class BrightnessHotKey {
             return false // no Accessibility permission
         }
         self.tap = tap
-        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        runLoopSource = source
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-        CGEvent.tapEnable(tap: tap, enable: true)
+        CGEvent.tapEnable(tap: tap, enable: false)   // inert until ⌃⌥ is held
+
+        // Dedicated run-loop thread for the tap source: system-wide event delivery must never
+        // queue behind the app's main thread.
+        let thread = Thread { [weak self] in
+            guard let self, let tap = self.tap else { return }
+            let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+            self.runLoopSource = source
+            self.tapRunLoop = CFRunLoopGetCurrent()
+            CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
+            CFRunLoopRun()
+        }
+        thread.name = "BrightnessHotKeyTap"
+        thread.qualityOfService = .userInteractive
+        thread.start()
+        tapThread = thread
+
+        // Enable the tap only while both ⌃ and ⌥ are down. Flags monitors are observe-only and
+        // cheap; tapEnable is a mach-port op, safe from main while the tap lives on its thread.
+        let update: (NSEvent) -> Void = { [weak self] ev in
+            guard let self, let tap = self.tap else { return }
+            let want = ev.modifierFlags.contains(.control) && ev.modifierFlags.contains(.option)
+            if want != self.wantEnabled {
+                self.wantEnabled = want
+                CGEvent.tapEnable(tap: tap, enable: want)
+            }
+        }
+        if let g = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged, handler: { update($0) }) {
+            flagsMonitors.append(g)
+        }
+        if let l = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged, handler: { update($0); return $0 }) {
+            flagsMonitors.append(l)
+        }
         return true
     }
 
     func stop() {
+        flagsMonitors.forEach { NSEvent.removeMonitor($0) }
+        flagsMonitors.removeAll()
+        wantEnabled = false
         if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
-        if let source = runLoopSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
+        if let source = runLoopSource, let rl = tapRunLoop {
+            CFRunLoopRemoveSource(rl, source, .commonModes)
+            CFRunLoopStop(rl)
+        }
         runLoopSource = nil
+        tapRunLoop = nil
+        tapThread = nil
         tap = nil
     }
 
+    /// Re-enable after a timeout disable — but only if ⌃⌥ is still held (otherwise stay inert).
     func reEnable() {
-        if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+        if let tap, wantEnabled { CGEvent.tapEnable(tap: tap, enable: true) }
     }
 
     /// True if Accessibility is granted; pass prompt=true to show the system request.
