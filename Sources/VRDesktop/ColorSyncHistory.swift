@@ -20,32 +20,30 @@ final class ColorSyncHistory: ObservableObject {
     static let interval: TimeInterval = 2
     static let displayBucket: TimeInterval = 30
 
-    /// How much of the recent tail is drawn at raw 2 s resolution (so the visible chart moves
-    /// with every sample); everything older is bucketed.
+    /// The live pane's window: the most recent 10 min at raw 2 s resolution.
     static let rawTail: TimeInterval = 10 * 60
 
-    /// Drawing series: the last 10 min raw (~300 marks, live 2 s updates while you watch) +
-    /// older history as per-30s MAXIMA (~340 marks) — full detail where it matters, and Swift
-    /// Charts stays cheap. Maxima, not means: peaks are the diagnostic signal (bursts and
-    /// wedges), and averaging would soften exactly what the graph exists to show.
-    var displayPoints: [Point] {
+    /// History pane series: the full 3 h as per-30s MAXIMA (~360 marks — Swift Charts stays
+    /// cheap). Maxima, not means: peaks are the diagnostic signal (bursts and wedges), and
+    /// averaging would soften exactly what the graph exists to show.
+    var bucketedPoints: [Point] {
         guard !points.isEmpty else { return [] }
-        let tailStart = Date().addingTimeInterval(-Self.rawTail)
         var buckets: [Int: Point] = [:]
-        var tail: [Point] = []
         for p in points {
-            if p.time >= tailStart {
-                tail.append(p)
+            let key = Int(p.time.timeIntervalSinceReferenceDate / Self.displayBucket)
+            if let existing = buckets[key] {
+                if p.cpu > existing.cpu { buckets[key] = Point(time: existing.time, cpu: p.cpu) }
             } else {
-                let key = Int(p.time.timeIntervalSinceReferenceDate / Self.displayBucket)
-                if let existing = buckets[key] {
-                    if p.cpu > existing.cpu { buckets[key] = Point(time: existing.time, cpu: p.cpu) }
-                } else {
-                    buckets[key] = p
-                }
+                buckets[key] = p
             }
         }
-        return buckets.keys.sorted().compactMap { buckets[$0] } + tail
+        return buckets.keys.sorted().compactMap { buckets[$0] }
+    }
+
+    /// Live pane series: the last 10 min raw (~300 marks, visible movement on every sample).
+    var livePoints: [Point] {
+        let tailStart = Date().addingTimeInterval(-Self.rawTail)
+        return points.filter { $0.time >= tailStart }
     }
 
     @Published private(set) var points: [Point] = []

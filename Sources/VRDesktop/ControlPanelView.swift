@@ -2920,13 +2920,13 @@ struct MediaPlaylist: View {
 }
 
 
-/// The Diagnostics ColorSync graph: last 3 h of daemon CPU with the 65% "pinned" threshold.
-/// Observes ColorSyncHistory directly so the 10 s samples only re-render this small chart.
+/// The Diagnostics ColorSync graphs: 3 h of history (30 s maxima, left 2/3) + a live 10-min pane
+/// at raw 2 s resolution (right 1/3), sharing the y-scale and the 65% "pinned" threshold.
+/// Observes ColorSyncHistory directly so the 2 s samples only re-render these small charts.
 private struct ColorSyncCPUChart: View {
     @ObservedObject var history: ColorSyncHistory
 
     var body: some View {
-        let pts = history.displayPoints
         let current = history.points.last?.cpu ?? 0
         VStack(alignment: .leading, spacing: 4) {
             HStack {
@@ -2937,8 +2937,29 @@ private struct ColorSyncCPUChart: View {
                     .foregroundStyle(current >= 65 ? .red : (current > 25 ? .orange : .secondary))
                 if current >= 65 { Text("pinned").font(.caption2).foregroundStyle(.red) }
             }
+            GeometryReader { geo in
+                HStack(alignment: .top, spacing: 8) {
+                    pane(points: history.bucketedPoints, title: "Last 3 hours",
+                         domain: Date().addingTimeInterval(-ColorSyncHistory.window)...Date(),
+                         axisStride: .hour, showYLabels: true)
+                        .frame(width: (geo.size.width - 8) * 2 / 3)
+                    pane(points: history.livePoints, title: "Live — 10 min",
+                         domain: Date().addingTimeInterval(-ColorSyncHistory.rawTail)...Date(),
+                         axisStride: .minute, axisStrideCount: 5, showYLabels: false)
+                        .frame(width: (geo.size.width - 8) / 3)
+                }
+            }
+            .frame(height: 86)
+        }
+    }
+
+    private func pane(points: [ColorSyncHistory.Point], title: String,
+                      domain: ClosedRange<Date>, axisStride: Calendar.Component,
+                      axisStrideCount: Int = 1, showYLabels: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.system(size: 8)).foregroundStyle(.secondary)
             Chart {
-                ForEach(pts) { p in
+                ForEach(points) { p in
                     AreaMark(x: .value("Time", p.time), y: .value("CPU", p.cpu))
                         .foregroundStyle(.cyan.opacity(0.15))
                     LineMark(x: .value("Time", p.time), y: .value("CPU", p.cpu))
@@ -2950,21 +2971,22 @@ private struct ColorSyncCPUChart: View {
                     .foregroundStyle(.red.opacity(0.5))
             }
             .chartYScale(domain: 0...100)
-            .chartXScale(domain: Date().addingTimeInterval(-ColorSyncHistory.window)...Date())
+            .chartXScale(domain: domain)
             .chartYAxis {
                 AxisMarks(values: [0, 50, 100]) { v in
                     AxisGridLine()
-                    AxisValueLabel { if let i = v.as(Int.self) { Text("\(i)%").font(.system(size: 8)) } }
+                    if showYLabels {
+                        AxisValueLabel { if let i = v.as(Int.self) { Text("\(i)%").font(.system(size: 8)) } }
+                    }
                 }
             }
             .chartXAxis {
-                AxisMarks(values: .stride(by: .hour)) { _ in
+                AxisMarks(values: .stride(by: axisStride, count: axisStrideCount)) { _ in
                     AxisGridLine()
                     AxisValueLabel(format: .dateTime.hour().minute(), anchor: .top)
                         .font(.system(size: 8))
                 }
             }
-            .frame(height: 72)
         }
     }
 }
