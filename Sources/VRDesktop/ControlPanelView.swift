@@ -2087,7 +2087,7 @@ struct PlacementMapView: View {
                  baseYaw: Self.anchoredYaw, basePitch: Self.anchoredPitch, zoom: $zoomAnchored)
             zone(title: "In view (floating)", placement: .floating, accent: .accentColor,
                  baseYaw: Self.floatYaw, basePitch: Self.floatPitch, zoom: $zoomFloating)
-            Text("Drag a screen to position it. Two-finger scroll to pan, +/− to zoom. "
+            Text("Drag to position · scroll to pan · pinch or +/− to zoom · ⌘-drag bypasses snapping. "
                  + "Green = real monitor (positioning only), orange = real monitor shown in the glasses.")
                 .font(.caption2).foregroundStyle(.secondary)
         }
@@ -2105,9 +2105,18 @@ struct PlacementMapView: View {
                       baseYaw: Double, basePitch: Double, zoom: Binding<Double>) -> some View {
         let spaceName = "zone-\(placement.rawValue)"
         return VStack(alignment: .leading, spacing: 3) {
-            HStack {
+            HStack(spacing: 6) {
+                Image(systemName: placement == .anchored ? "rotate.3d" : "person.crop.rectangle")
+                    .font(.caption2).foregroundStyle(.secondary)
                 Text(title).font(.caption).foregroundStyle(.secondary)
                 Spacer()
+                if zoom.wrappedValue > 1.0001 {
+                    Button { zoom.wrappedValue = 1 } label: {
+                        Text("\(Int((zoom.wrappedValue * 100).rounded()))%")
+                            .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                    }
+                    .help("Reset zoom")
+                }
                 Button { zoom.wrappedValue = max(1, zoom.wrappedValue / 1.25) } label: {
                     Image(systemName: "minus.magnifyingglass")
                 }.disabled(zoom.wrappedValue <= 1.0001)
@@ -2130,19 +2139,62 @@ struct PlacementMapView: View {
                     }
                 ) {
                     ZStack(alignment: .topLeading) {
-                        Rectangle().fill(Color.gray.opacity(0.12))
+                        Rectangle().fill(Color.black.opacity(0.22))
+                        // Degree grid: light lines every 15°, stronger every 45°, so positions read
+                        // spatially instead of floating in a blank void. Canvas = one cheap draw.
+                        Canvas { ctx, size in
+                            let stepPx = 15 * ppd
+                            guard stepPx >= 8 else { return }
+                            var n = 0
+                            var x = size.width / 2
+                            while x <= size.width {
+                                let strong = n % 3 == 0 && n != 0
+                                let op = n == 0 ? 0.16 : (strong ? 0.10 : 0.05)
+                                for xx in [x, size.width - x] {
+                                    var line = Path(); line.move(to: CGPoint(x: xx, y: 0))
+                                    line.addLine(to: CGPoint(x: xx, y: size.height))
+                                    ctx.stroke(line, with: .color(.white.opacity(op)), lineWidth: 1)
+                                }
+                                n += 1; x += stepPx
+                            }
+                            n = 0
+                            var y = size.height / 2
+                            while y <= size.height {
+                                let strong = n % 3 == 0 && n != 0
+                                let op = n == 0 ? 0.16 : (strong ? 0.10 : 0.05)
+                                for yy in [y, size.height - y] {
+                                    var line = Path(); line.move(to: CGPoint(x: 0, y: yy))
+                                    line.addLine(to: CGPoint(x: size.width, y: yy))
+                                    ctx.stroke(line, with: .color(.white.opacity(op)), lineWidth: 1)
+                                }
+                                n += 1; y += stepPx
+                            }
+                            // Yaw labels along the top on the strong (45°) lines.
+                            if placement == .anchored {
+                                var deg = 45.0
+                                while deg < baseYaw {
+                                    for (sign, px) in [(1.0, size.width / 2 - deg * ppd),
+                                                       (-1.0, size.width / 2 + deg * ppd)] {
+                                        ctx.draw(Text("\(Int(deg * sign))°")
+                                                    .font(.system(size: 7)).foregroundStyle(.white.opacity(0.35)),
+                                                 at: CGPoint(x: px, y: 6))
+                                    }
+                                    deg += 45
+                                }
+                            }
+                        }
                         Rectangle().strokeBorder(.white.opacity(0.35), lineWidth: 1.5) // limit boundary
-                        Rectangle().fill(.white.opacity(0.08)).frame(width: 1)
-                            .position(x: contentW / 2, y: contentH / 2)
-                        Rectangle().fill(.white.opacity(0.08)).frame(height: 1)
-                            .position(x: contentW / 2, y: contentH / 2)
                         // FOV outline (where the glasses' view sits when centred) — shown in
                         // both zones to help size and position screens against the visible area.
                         RoundedRectangle(cornerRadius: 4)
-                            .strokeBorder(.green.opacity(0.6),
+                            .strokeBorder(.green.opacity(0.55),
                                           style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
                             .frame(width: CGFloat(Self.fovHDeg) * ppd, height: CGFloat(Self.fovVDeg) * ppd)
                             .position(x: contentW / 2, y: contentH / 2)
+                        Text("FOV")
+                            .font(.system(size: 7, weight: .semibold)).foregroundStyle(.green.opacity(0.55))
+                            .position(x: contentW / 2 - CGFloat(Self.fovHDeg) * ppd / 2 + 14,
+                                      y: contentH / 2 - CGFloat(Self.fovVDeg) * ppd / 2 + 8)
                         let zoneScreens = screens(placement)
                         let siblingEdges = zoneScreens.map {
                             SiblingEdges(id: $0.id, yaw: $0.yawDegrees, pitch: $0.pitchDegrees,
@@ -2167,6 +2219,11 @@ struct PlacementMapView: View {
                                           if selection?.wrappedValue == cfg.id { selection?.wrappedValue = nil }
                                           coordinator.removeScreen(id: cfg.id)
                                       })
+                        }
+                        if zoneScreens.isEmpty && placement == .anchored {
+                            Text("No anchored screens — add one with “Add display”.")
+                                .font(.caption2).foregroundStyle(.secondary)
+                                .position(x: contentW / 2, y: contentH / 2 - CGFloat(Self.fovVDeg) * ppd / 2 - 14)
                         }
                         // Head-locked HUD widgets/stacks live in the field of view → floating only.
                         if placement == .floating {
@@ -2217,6 +2274,9 @@ private struct ScreenBox: View {
     @State private var cfg: VirtualScreenConfig
     /// True while the current drag position is edge-snapped (either axis) — shown as a cyan border.
     @State private var snappedEdge = false
+    @State private var hovering = false
+    /// True mid-drag — shows the live yaw/pitch readout above the tile.
+    @State private var dragging = false
 
     init(initial: VirtualScreenConfig, area: CGSize, coordinateSpace: String, accent: Color,
          pxPerDeg: CGFloat, yawRange: Double, pitchRange: Double,
@@ -2302,7 +2362,14 @@ private struct ScreenBox: View {
     private var borderColor: Color {
         if snappedEdge { return .cyan }   // live edge-snap feedback while dragging
         if selected { return PanelTheme.accent }
-        return lookedAt ? .yellow : .white.opacity(0.5)
+        if lookedAt { return .yellow }
+        return .white.opacity(hovering ? 0.9 : 0.5)
+    }
+
+    private var tooltip: String {
+        String(format: "%@ — %d×%d · %.2f× · %.1fm · yaw %+.0f° · pitch %+.0f°",
+               cfg.name, cfg.width, cfg.height, cfg.scale, cfg.distanceMeters,
+               cfg.yawDegrees, cfg.pitchDegrees)
     }
 
     // Apparent width in metres — must match AppCoordinator.sceneScreen.
@@ -2323,21 +2390,43 @@ private struct ScreenBox: View {
         let w = max(4, CGFloat(angW) * pxPerDeg)
         let h = max(4, CGFloat(angH) * pxPerDeg)
         return RoundedRectangle(cornerRadius: 4)
-            .fill(accent.opacity(0.45))
+            .fill(LinearGradient(colors: [accent.opacity(0.55), accent.opacity(0.32)],
+                                 startPoint: .top, endPoint: .bottom))
             .overlay(
-                Text(cfg.name).font(.system(size: 9)).lineLimit(1)
-                    .padding(.horizontal, 3).foregroundStyle(.white))
+                // Name only when it can actually fit — a squashed 2-letter fragment on a tiny
+                // distant screen was noise. The tooltip and detail pane carry the name instead.
+                (w >= 36 && h >= 14
+                    ? Text(cfg.name).font(.system(size: 9)).lineLimit(1)
+                        .padding(.horizontal, 3).foregroundStyle(.white)
+                    : nil))
             .overlay(RoundedRectangle(cornerRadius: 4)
-                .strokeBorder(borderColor, lineWidth: selected ? 2.5 : (lookedAt ? 2 : 1)))
+                .strokeBorder(borderColor, lineWidth: selected ? 2.5 : ((lookedAt || hovering) ? 2 : 1)))
+            .shadow(color: selected ? PanelTheme.accent.opacity(0.55) : .black.opacity(dragging ? 0.5 : 0.25),
+                    radius: selected ? 5 : (dragging ? 6 : 2))
+            .overlay(alignment: .top) {
+                if dragging {
+                    // Live position readout while dragging — the numbers land in the detail pane
+                    // anyway, but eyes are on the tile.
+                    Text(String(format: "%+.0f°, %+.0f°", cfg.yawDegrees, cfg.pitchDegrees))
+                        .font(.system(size: 8).monospacedDigit())
+                        .padding(.horizontal, 4).padding(.vertical, 1)
+                        .background(.black.opacity(0.75), in: Capsule())
+                        .foregroundStyle(.white)
+                        .fixedSize()
+                        .offset(y: -14)
+                }
+            }
             .frame(width: w, height: h)
             // Pad the CLICKABLE area (not the visual) out to ~20px for tiny tiles.
             .contentShape(Rectangle().inset(by: min(0, (min(w, h) - 20) / 2)))
             .position(point())
+            .onHover { hovering = $0 }
+            .help(tooltip)
             .onTapGesture { onSelect() }
             .gesture(
                 DragGesture(coordinateSpace: .named(coordinateSpace))
-                    .onChanged { onSelect(); apply(location: $0.location) }
-                    .onEnded { _ in snappedEdge = false }
+                    .onChanged { dragging = true; onSelect(); apply(location: $0.location) }
+                    .onEnded { _ in snappedEdge = false; dragging = false }
             )
             .contextMenu {
                 if let onDelete {
