@@ -555,6 +555,7 @@ final class AppCoordinator: ObservableObject {
         let sweptAtLaunch = SystemHealth.sweepOrphanProfiles()
         if sweptAtLaunch > 0 { DebugLog.shared.log("Launch: swept \(sweptAtLaunch) orphaned ColorSync profile(s)") }
         restoreSavedInputDevice()
+        startInputDeviceGuard()
         colorSyncHistory.start()   // 3h rolling CPU graph on the Diagnostics page
         colorSyncWatchdog.onRunawayDetected = { [weak self] cpu in
             self?.presentColorSyncRunawayAlert(cpu: cpu)
@@ -790,6 +791,38 @@ final class AppCoordinator: ObservableObject {
         objectWillChange.send()
         if micTesting { voice.stop(); voice.startMetering() }   // re-meter on the new device
         else { applyVoiceMode() }
+    }
+
+    /// While a specific mic is chosen in the app, it OWNS the system input: macOS reassigns the
+    /// default whenever audio devices come and go (connecting Bluetooth earbuds steals it), so we
+    /// listen for default-input changes and re-assert the saved pick. Choosing "System default"
+    /// in the picker hands control back to macOS.
+    private var inputDeviceGuardInstalled = false
+    private func startInputDeviceGuard() {
+        guard !inputDeviceGuardInstalled else { return }
+        inputDeviceGuardInstalled = true
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &addr, .main) { [weak self] _, _ in
+            // Let the routing settle (BT connects fire several changes in a burst), then restore.
+            // No loop: re-asserting fires this listener once more, finds default == saved, stops.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+                MainActor.assumeIsolated { self?.reassertSavedInputDevice() }
+            }
+        }
+    }
+
+    private func reassertSavedInputDevice() {
+        let saved = UserDefaults.standard.string(forKey: "voice.inputDeviceUID") ?? ""
+        guard !saved.isEmpty,
+              VoiceController.defaultInputDeviceUID() != saved,
+              availableMicrophones().contains(where: { $0.id == saved }) else { return }
+        if VoiceController.setDefaultInputDevice(uid: saved) {
+            DebugLog.shared.log("voice: macOS switched the system input — restored the saved mic")
+            objectWillChange.send()
+        }
     }
 
     /// Re-assert the remembered mic as the system input at launch (macOS or a reconnecting audio
