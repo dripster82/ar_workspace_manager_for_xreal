@@ -2555,6 +2555,20 @@ final class AppCoordinator: ObservableObject {
         onCursorSizeChanged?(offset)
     }
 
+    /// Layout-map geometry for widgets/stacks — TRUE natural sizes + anchor offsets, straight
+    /// from the same rasterization the AR path uses, so the map matches what you see.
+    func widgetNaturalSize(_ w: HUDWidget) -> CGSize {
+        widgetManager?.naturalSize(for: w) ?? CGSize(width: 240, height: 92)
+    }
+    func stackMapGeometry(_ s: HUDStack) -> (natural: CGSize, offsetMeters: (x: Double, y: Double)) {
+        let members = widgets.filter { $0.stackID == s.id }
+        let natural = widgetManager?.naturalSize(for: s, members: members) ?? CGSize(width: 120, height: 160)
+        let wm = Float(natural.width) * WidgetManager.metersPerPoint * Float(s.scale)
+        let hm = natural.height > 0 ? wm * Float(natural.height / natural.width) : wm
+        let off = widgetManager?.stackAnchorOffset(s, widthMeters: wm, heightMeters: hm) ?? (0, 0)
+        return (natural, (Double(off.0), Double(off.1)))
+    }
+
     /// Layout-editor snapping (both default off — opt-in). ⌘ held while dragging bypasses.
     @Published var layoutSnapAngle: Bool = UserDefaults.standard.bool(forKey: "layoutSnapAngle") {
         didSet { UserDefaults.standard.set(layoutSnapAngle, forKey: "layoutSnapAngle") }

@@ -52,9 +52,13 @@ final class WidgetManager {
     /// When true the HUD is hidden: nothing is pushed to the renderer (toggled by ⌃⌥I).
     private(set) var hidden = false
     /// Apparent width (metres) of a standalone widget card at scale 1; height follows the aspect.
-    private let baseWidthMeters: Float = 0.225
+    static let baseWidthMeters: Float = 0.225
     /// Metres per logical point for content-sized stacks (so a stack grows with its contents).
-    private let metersPerPoint: Float = 0.225 / 240
+    static let metersPerPoint: Float = 0.225 / 240
+    /// Natural (logical point) sizes by widget/stack id — refreshed on every push, measured
+    /// lazily otherwise. The layout map uses these so its boxes have the TRUE aspect/size of
+    /// what renders in AR (a calendar card is tall, a clock is wide — one guess fit neither).
+    private var mapSizes: [UUID: CGSize] = [:]
 
     init(renderer: GlassesRenderer?) { self.renderer = renderer }
 
@@ -98,12 +102,13 @@ final class WidgetManager {
 
         // Standalone widgets (not in any stack): one quad each, fixed apparent width.
         for w in widgets where w.stackID == nil {
-            guard let image = render(view(for: w, date: date, power: power)) else { continue }
+            guard let (image, pt) = renderSized(view(for: w, date: date, power: power)) else { continue }
+            mapSizes[w.id] = pt
             placements.append(.init(id: w.id,
                                     yaw: Float(w.yawDegrees * .pi / 180),
                                     pitch: Float(w.pitchDegrees * .pi / 180),
                                     distance: Float(w.distanceMeters),
-                                    widthMeters: baseWidthMeters * Float(w.scale),
+                                    widthMeters: Self.baseWidthMeters * Float(w.scale),
                                     image: image))
         }
 
@@ -120,7 +125,8 @@ final class WidgetManager {
             }
             guard !sized.isEmpty else { continue }
             guard let (image, pt) = renderSized(stackBody(stack, sized: sized, date: date, power: power)) else { continue }
-            let widthMeters = Float(pt.width) * metersPerPoint * Float(stack.scale)
+            mapSizes[stack.id] = pt
+            let widthMeters = Float(pt.width) * Self.metersPerPoint * Float(stack.scale)
             let heightMeters = pt.height > 0 ? widthMeters * Float(pt.height / pt.width) : widthMeters
             let (ox, oy) = anchorOffset(stack, widthMeters: widthMeters, heightMeters: heightMeters)
             placements.append(.init(id: stack.id,
@@ -214,6 +220,36 @@ final class WidgetManager {
                 .sorted { $0.start < $1.start }
             return (merged, (calendar?.isConnected ?? false) || (appleCalendar?.isConnected ?? false))
         }
+    }
+
+    /// Natural point size of a standalone widget card (cached; refreshed by every push).
+    func naturalSize(for widget: HUDWidget) -> CGSize {
+        if let s = mapSizes[widget.id] { return s }
+        let s = renderSized(view(for: widget, date: Date(), power: PowerMonitor.current()))?.1
+            ?? CGSize(width: 240, height: 92)
+        mapSizes[widget.id] = s
+        return s
+    }
+
+    /// Natural point size of a composed stack (cached; refreshed by every push).
+    func naturalSize(for stack: HUDStack, members: [HUDWidget]) -> CGSize {
+        if let s = mapSizes[stack.id] { return s }
+        let date = Date(), power = PowerMonitor.current()
+        let sized: [(HUDWidget, CGSize)] = members.compactMap { m in
+            guard let (_, sz) = renderSized(view(for: m, date: date, power: power)) else { return nil }
+            return (m, sz)
+        }
+        guard !sized.isEmpty,
+              let (_, pt) = renderSized(stackBody(stack, sized: sized, date: date, power: power)) else {
+            return CGSize(width: 120, height: 160)
+        }
+        mapSizes[stack.id] = pt
+        return pt
+    }
+
+    /// The anchor offset the renderer applies (public wrapper so the map can mirror it).
+    func stackAnchorOffset(_ stack: HUDStack, widthMeters: Float, heightMeters: Float) -> (Float, Float) {
+        anchorOffset(stack, widthMeters: widthMeters, heightMeters: heightMeters)
     }
 
     private func render<V: View>(_ content: V) -> CGImage? {

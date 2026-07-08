@@ -2113,7 +2113,7 @@ struct PlacementMapView: View {
                 if zoom.wrappedValue > 1.0001 {
                     Button { zoom.wrappedValue = 1 } label: {
                         Text("\(Int((zoom.wrappedValue * 100).rounded()))%")
-                            .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                            .font(.caption2.monospacedDigit()).foregroundStyle(.primary.opacity(0.85))
                     }
                     .help("Reset zoom")
                 }
@@ -2227,15 +2227,35 @@ struct PlacementMapView: View {
                         }
                         // Head-locked HUD widgets/stacks live in the field of view → floating only.
                         if placement == .floating {
+                            // Media corner slots (⌃⌥1–4) as dashed reference outlines, so widgets
+                            // can be placed around where a pinned video will sit. Geometry mirrors
+                            // MediaPlayerManager.slot: yaw ±14.3°, pitch ±7.4°, max 0.26×0.17 m
+                            // at 1.4 m → 10.6°×7.0°.
+                            let slotW = 10.61 * ppd, slotH = 6.95 * ppd
+                            ForEach(0..<4, id: \.self) { n in
+                                let sy = [14.30, -14.30, 14.30, -14.30][n]
+                                let sp = [7.40, 7.40, -7.40, -7.40][n]
+                                RoundedRectangle(cornerRadius: 3)
+                                    .strokeBorder(.white.opacity(0.22),
+                                                  style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                                    .frame(width: slotW, height: slotH)
+                                    .overlay(Text("media ⌃⌥\(n + 1)")
+                                        .font(.system(size: 7)).foregroundStyle(.white.opacity(0.35)))
+                                    .position(x: contentW / 2 - sy * ppd, y: contentH / 2 - sp * ppd)
+                                    .allowsHitTesting(false)
+                            }
                             ForEach(coordinator.widgets.filter { $0.stackID == nil }) { widget in
                                 WidgetBox(initial: widget,
+                                          natural: coordinator.widgetNaturalSize(widget),
                                           area: CGSize(width: contentW, height: contentH),
                                           coordinateSpace: spaceName, pxPerDeg: ppd,
                                           yawRange: baseYaw, pitchRange: basePitch,
                                           onChange: { coordinator.updateWidget($0) })
                             }
                             ForEach(coordinator.stacks) { stack in
+                                let geo = coordinator.stackMapGeometry(stack)
                                 StackBox(initial: stack,
+                                         natural: geo.natural, offsetMeters: geo.offsetMeters,
                                          area: CGSize(width: contentW, height: contentH),
                                          coordinateSpace: spaceName, pxPerDeg: ppd,
                                          yawRange: baseYaw, pitchRange: basePitch,
@@ -2440,6 +2460,8 @@ private struct ScreenBox: View {
 /// A draggable HUD-widget box in the floating zone of the layout map — drag to set its yaw/pitch.
 private struct WidgetBox: View {
     let initial: HUDWidget
+    /// Natural (point) size of the rasterized card — the map box uses its TRUE aspect.
+    let natural: CGSize
     let area: CGSize
     let coordinateSpace: String
     let pxPerDeg: CGFloat
@@ -2449,9 +2471,10 @@ private struct WidgetBox: View {
 
     @State private var cfg: HUDWidget
 
-    init(initial: HUDWidget, area: CGSize, coordinateSpace: String, pxPerDeg: CGFloat,
+    init(initial: HUDWidget, natural: CGSize, area: CGSize, coordinateSpace: String, pxPerDeg: CGFloat,
          yawRange: Double, pitchRange: Double, onChange: @escaping (HUDWidget) -> Void) {
         self.initial = initial
+        self.natural = natural
         self.area = area
         self.coordinateSpace = coordinateSpace
         self.pxPerDeg = pxPerDeg
@@ -2460,10 +2483,6 @@ private struct WidgetBox: View {
         self.onChange = onChange
         _cfg = State(initialValue: initial)
     }
-
-    // Must match WidgetManager.baseWidthMeters; aspect is approximate per kind for the map box.
-    private static let baseWidthMeters = 0.225
-    private var displayAspect: Double { cfg.kind == .clock ? 3.0 : 2.6 }
 
     private func point() -> CGPoint {
         CGPoint(x: area.width / 2 - CGFloat(cfg.yawDegrees) * pxPerDeg,
@@ -2477,19 +2496,29 @@ private struct WidgetBox: View {
     }
 
     var body: some View {
-        let widthMeters = Self.baseWidthMeters * cfg.scale
-        let heightMeters = widthMeters / displayAspect
+        // Same size pipeline as WidgetManager.push: fixed apparent width × scale, height from
+        // the card's true rasterized aspect, angular size at the widget's distance.
+        let widthMeters = Double(WidgetManager.baseWidthMeters) * cfg.scale
+        let aspect = natural.height > 0 ? Double(natural.width / natural.height) : 2.6
+        let heightMeters = widthMeters / aspect
         let dist = max(0.1, cfg.distanceMeters)
         let angW = 2 * atan((widthMeters / 2) / dist) * 180 / .pi
         let angH = 2 * atan((heightMeters / 2) / dist) * 180 / .pi
-        let w = max(20, CGFloat(angW) * pxPerDeg)
-        let h = max(12, CGFloat(angH) * pxPerDeg)
-        return RoundedRectangle(cornerRadius: 5)
-            .fill(Color.purple.opacity(0.5))
-            .overlay(Image(systemName: cfg.kind.symbol).font(.system(size: 9)).foregroundStyle(.white))
-            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(.white.opacity(0.6), lineWidth: 1))
+        let w = max(6, CGFloat(angW) * pxPerDeg)
+        let h = max(4, CGFloat(angH) * pxPerDeg)
+        return RoundedRectangle(cornerRadius: 4)
+            .fill(LinearGradient(colors: [Color.purple.opacity(0.55), Color.purple.opacity(0.35)],
+                                 startPoint: .top, endPoint: .bottom))
+            .overlay(w >= 16 && h >= 10
+                ? Image(systemName: cfg.kind.symbol).font(.system(size: min(9, h * 0.6))).foregroundStyle(.white)
+                : nil)
+            .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(.white.opacity(0.6), lineWidth: 1))
             .frame(width: w, height: h)
+            .contentShape(Rectangle().inset(by: min(0, (min(w, h) - 18) / 2)))
             .position(point())
+            .help(String(format: "%@ — %.2f× · %.1fm · yaw %+.0f° · pitch %+.0f°",
+                         cfg.kind.displayName, cfg.scale, cfg.distanceMeters,
+                         cfg.yawDegrees, cfg.pitchDegrees))
             .gesture(
                 DragGesture(coordinateSpace: .named(coordinateSpace))
                     .onChanged { apply(location: $0.location) }
@@ -2501,6 +2530,11 @@ private struct WidgetBox: View {
 /// A draggable stack-container box in the floating zone — drag to set the stack's yaw/pitch.
 private struct StackBox: View {
     let initial: HUDStack
+    /// Natural (point) size of the composed stack image + the renderer's anchor offset (metres),
+    /// so the map box has the stack's TRUE size and sits exactly where AR draws it (a top-anchored
+    /// vertical stack's box hangs DOWN from its anchor, matching the glasses).
+    let natural: CGSize
+    let offsetMeters: (x: Double, y: Double)
     let area: CGSize
     let coordinateSpace: String
     let pxPerDeg: CGFloat
@@ -2510,34 +2544,61 @@ private struct StackBox: View {
 
     @State private var cfg: HUDStack
 
-    init(initial: HUDStack, area: CGSize, coordinateSpace: String, pxPerDeg: CGFloat,
+    init(initial: HUDStack, natural: CGSize, offsetMeters: (x: Double, y: Double), area: CGSize,
+         coordinateSpace: String, pxPerDeg: CGFloat,
          yawRange: Double, pitchRange: Double, onChange: @escaping (HUDStack) -> Void) {
-        self.initial = initial; self.area = area; self.coordinateSpace = coordinateSpace
+        self.initial = initial; self.natural = natural; self.offsetMeters = offsetMeters
+        self.area = area; self.coordinateSpace = coordinateSpace
         self.pxPerDeg = pxPerDeg; self.yawRange = yawRange; self.pitchRange = pitchRange
         self.onChange = onChange
         _cfg = State(initialValue: initial)
     }
 
+    /// The renderer's local-plane anchor offset, as yaw/pitch degrees at this stack's distance.
+    /// Local +x is to the viewer's right = NEGATIVE yaw in config space; +y is up = positive pitch.
+    private var offsetDegrees: (yaw: Double, pitch: Double) {
+        let d = max(0.1, cfg.distanceMeters)
+        return (-atan(offsetMeters.x / d) * 180 / .pi, atan(offsetMeters.y / d) * 180 / .pi)
+    }
+
     private func point() -> CGPoint {
-        CGPoint(x: area.width / 2 - CGFloat(cfg.yawDegrees) * pxPerDeg,
-                y: area.height / 2 - CGFloat(cfg.pitchDegrees) * pxPerDeg)
+        let off = offsetDegrees
+        return CGPoint(x: area.width / 2 - CGFloat(cfg.yawDegrees + off.yaw) * pxPerDeg,
+                       y: area.height / 2 - CGFloat(cfg.pitchDegrees + off.pitch) * pxPerDeg)
     }
 
     private func apply(location: CGPoint) {
-        cfg.yawDegrees = min(yawRange, max(-yawRange, Double((area.width / 2 - location.x) / pxPerDeg)))
-        cfg.pitchDegrees = min(pitchRange, max(-pitchRange, Double((area.height / 2 - location.y) / pxPerDeg)))
+        // The user drags the box (the stack's visual centre); the config stores the ANCHOR.
+        let off = offsetDegrees
+        let yaw = Double((area.width / 2 - location.x) / pxPerDeg) - off.yaw
+        let pitch = Double((area.height / 2 - location.y) / pxPerDeg) - off.pitch
+        cfg.yawDegrees = min(yawRange, max(-yawRange, yaw))
+        cfg.pitchDegrees = min(pitchRange, max(-pitchRange, pitch))
         onChange(cfg)
     }
 
     var body: some View {
-        let w: CGFloat = cfg.axis == .vertical ? 26 : 40
-        let h: CGFloat = cfg.axis == .vertical ? 40 : 26
-        return RoundedRectangle(cornerRadius: 5)
-            .fill(Color.teal.opacity(0.5))
-            .overlay(Image(systemName: "rectangle.stack").font(.system(size: 10)).foregroundStyle(.white))
-            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(.white.opacity(0.7), lineWidth: 1))
-            .frame(width: w * CGFloat(cfg.scale), height: h * CGFloat(cfg.scale))
+        // Same size pipeline as WidgetManager.push: content width × metres-per-point × scale,
+        // height from the composed image's aspect, angular size at the stack's distance.
+        let widthMeters = Double(natural.width) * Double(WidgetManager.metersPerPoint) * cfg.scale
+        let heightMeters = natural.width > 0 ? widthMeters * Double(natural.height / natural.width) : widthMeters
+        let dist = max(0.1, cfg.distanceMeters)
+        let angW = 2 * atan((widthMeters / 2) / dist) * 180 / .pi
+        let angH = 2 * atan((heightMeters / 2) / dist) * 180 / .pi
+        let w = max(8, CGFloat(angW) * pxPerDeg)
+        let h = max(8, CGFloat(angH) * pxPerDeg)
+        return RoundedRectangle(cornerRadius: 4)
+            .fill(LinearGradient(colors: [Color.teal.opacity(0.5), Color.teal.opacity(0.3)],
+                                 startPoint: .top, endPoint: .bottom))
+            .overlay(w >= 16 && h >= 12
+                ? Image(systemName: "rectangle.stack").font(.system(size: min(10, h * 0.4))).foregroundStyle(.white)
+                : nil)
+            .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(.white.opacity(0.7), lineWidth: 1))
+            .frame(width: w, height: h)
+            .contentShape(Rectangle().inset(by: min(0, (min(w, h) - 18) / 2)))
             .position(point())
+            .help(String(format: "Stack — %.2f× · %.1fm · yaw %+.0f° · pitch %+.0f°",
+                         cfg.scale, cfg.distanceMeters, cfg.yawDegrees, cfg.pitchDegrees))
             .gesture(DragGesture(coordinateSpace: .named(coordinateSpace)).onChanged { apply(location: $0.location) })
             .onChange(of: initial) { newValue in if newValue != cfg { cfg = newValue } }
     }
