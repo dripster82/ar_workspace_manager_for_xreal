@@ -2555,6 +2555,13 @@ final class AppCoordinator: ObservableObject {
         onCursorSizeChanged?(offset)
     }
 
+    /// Mount-tilt calibration passthroughs for the Settings → Glasses manual editor.
+    var mountCalibrationDegrees: (pitch: Double, roll: Double) { IMUService.shared.mountCalibrationDegrees }
+    var isOneSeriesConnected: Bool { IMUService.shared.usingNetworkIMU }
+    func setMountCalibration(pitchDeg: Double, rollDeg: Double) {
+        IMUService.shared.setMountCalibration(pitchDeg: pitchDeg, rollDeg: rollDeg)
+    }
+
     /// Layout-map geometry for widgets/stacks — TRUE natural sizes + anchor offsets, straight
     /// from the same rasterization the AR path uses, so the map matches what you see.
     func widgetNaturalSize(_ w: HUDWidget) -> CGSize {

@@ -82,6 +82,35 @@ public final class IMUService: @unchecked Sendable {
 
     private func mountTiltKey(_ productID: UInt16) -> String { "oneMountTilt.\(productID)" }
 
+    /// The mount-tilt correction currently in effect for the connected device, in degrees:
+    /// the saved per-device calibration, else the One Pro defaults. For the Settings editor.
+    public var mountCalibrationDegrees: (pitch: Double, roll: Double) {
+        if connectedProductID != 0,
+           let arr = UserDefaults.standard.array(forKey: mountTiltKey(connectedProductID)) as? [Double],
+           arr.count == 2 {
+            return (arr[0], arr[1])
+        }
+        let env = ProcessInfo.processInfo.environment
+        return (Double(env["ARWM_ONE_TILT_PITCH"].flatMap { Float($0) } ?? -39),
+                Double(env["ARWM_ONE_TILT_ROLL"].flatMap { Float($0) } ?? -2))
+    }
+
+    /// Manually set + persist the mount-tilt correction (Settings editor, 0.1° nudges).
+    /// `oneMountCorrection` itself is only touched on the IMU read thread, so the new value is
+    /// handed off via a lock-guarded pending slot that handleUpdate applies on its next sample.
+    private let mountSetLock = NSLock()
+    private var pendingMountSet: (pitch: Float, roll: Float)?
+    private var hasPendingMountSet = false
+    public func setMountCalibration(pitchDeg: Double, rollDeg: Double) {
+        guard connectedProductID != 0 else { return }
+        UserDefaults.standard.set([pitchDeg, rollDeg], forKey: mountTiltKey(connectedProductID))
+        mountSetLock.lock()
+        pendingMountSet = (Float(pitchDeg), Float(rollDeg))
+        hasPendingMountSet = true
+        mountSetLock.unlock()
+        hasMountCalibration = true
+    }
+
     /// Load and apply the saved per-device mount tilt, if any. Returns whether one was found.
     @discardableResult
     private func loadMountCalibration(productID: UInt16) -> Bool {
@@ -236,6 +265,15 @@ public final class IMUService: @unchecked Sendable {
             ? { let e = Self.eulerDeg(raw); return (e.p, e.r) }() : nil
         // One-series IMU is mounted tilted in the frame; bring "level head" to level so the screen
         // sits straight ahead and head-turns don't couple into roll. (No-op for the Air path.)
+        if hasPendingMountSet {   // manual Settings edit — apply on the IMU thread (owner)
+            mountSetLock.lock()
+            if let p = pendingMountSet {
+                oneMountCorrection = Self.mountCorrection(pitchDeg: p.pitch, rollDeg: p.roll)
+            }
+            pendingMountSet = nil
+            hasPendingMountSet = false
+            mountSetLock.unlock()
+        }
         if usingNetworkIMU { raw = simd_normalize(raw * oneMountCorrection) }
         let now = CACurrentMediaTime()
 

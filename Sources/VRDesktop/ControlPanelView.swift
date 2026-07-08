@@ -1009,6 +1009,10 @@ struct ControlPanelView: View {
                             Text("\(Int(coordinator.ipdMillimeters)) mm").frame(width: 52).font(.caption).monospacedDigit()
                         }
                     }
+                    if coordinator.isOneSeriesConnected {
+                        Divider()
+                        MountCalibrationEditor(coordinator: coordinator)
+                    }
                 }
             }
 
@@ -3137,6 +3141,58 @@ private struct ColorSyncCPUChart: View {
                         .font(.system(size: 8))
                 }
             }
+        }
+    }
+}
+
+
+/// Manual editor for the One-series mount-tilt calibration (Settings → Glasses): the values the
+/// worn-and-level calibration measures, exposed as ±0.1° steppers so a slightly-off horizon can
+/// be dialled out by hand. Applies live (persisted per device) — the change is visible in AR
+/// immediately while you nudge.
+private struct MountCalibrationEditor: View {
+    let coordinator: AppCoordinator
+    @State private var pitch: Double = 0
+    @State private var roll: Double = 0
+    @State private var seeded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Mount calibration").font(.caption).foregroundStyle(.secondary)
+            row("Pitch", value: $pitch)
+            row("Roll", value: $roll)
+            Text("Measured by Recalibrate (⌃⌥B); nudge in 0.1° steps if the view sits tilted "
+                 + "when your head is level. Applies live.")
+                .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .onAppear {
+            guard !seeded else { return }
+            seeded = true
+            let m = coordinator.mountCalibrationDegrees
+            pitch = m.pitch
+            roll = m.roll
+        }
+        .onChange(of: pitch) { _ in apply() }
+        .onChange(of: roll) { _ in apply() }
+    }
+
+    private func apply() {
+        guard seeded else { return }
+        coordinator.setMountCalibration(pitchDeg: pitch, rollDeg: roll)
+    }
+
+    private func row(_ label: String, value: Binding<Double>) -> some View {
+        HStack(spacing: 8) {
+            Text(label).font(.caption).frame(width: 40, alignment: .leading)
+            Text(String(format: "%+.1f°", value.wrappedValue))
+                .font(.caption.monospacedDigit())
+                .frame(width: 54, alignment: .trailing)
+                .padding(.horizontal, 6).padding(.vertical, 2)
+                .background(.black.opacity(0.25), in: RoundedRectangle(cornerRadius: 5))
+            Stepper("", value: value, in: -90...90, step: 0.1)
+                .labelsHidden()
+            Spacer()
         }
     }
 }
