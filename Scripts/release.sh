@@ -77,7 +77,10 @@ PRERELEASE_FLAG=()
 # Architectures to ship as separate DMGs, with user-friendly names (non-techies pick "Apple-Silicon"
 # or "Intel", not arm64/x86_64). The vendored libjson-c.a is universal so both cross-compile from
 # this machine. NB the in-app updater matches these labels (AppCoordinator.pickDMGAsset) — keep in sync.
-ARCHES=(arm64 x86_64)
+# Intel LAST used to leave build/ holding the x86_64 slice after a release — the author's habitual
+# `open build/...app` then ran under Rosetta on Apple Silicon (SIGILL in Apple's audio stack after
+# wake, 2026-07-10). Build Intel first so the native arm64 build is what remains in build/.
+ARCHES=(x86_64 arm64)
 arch_label() { [[ "$1" == "arm64" ]] && echo "Apple-Silicon" || echo "Intel"; }
 
 # --- Changelog (generated from commits since the previous tag; you review/edit before publishing) ---

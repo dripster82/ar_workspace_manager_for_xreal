@@ -40,6 +40,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         coordinator = AppCoordinator()
         coordinator.checkForUpdates()   // silent on launch; surfaces in the menu + About page
 
+        // Running the Intel build under Rosetta on Apple Silicon: works, but slower and prone to
+        // translation-only quirks (seen: SIGILL in Apple's audio stack after wake). Users who
+        // downloaded the wrong DMG deserve to know — once per launch, non-blocking.
+        var translated: Int32 = 0
+        var size = MemoryLayout<Int32>.size
+        if sysctlbyname("sysctl.proc_translated", &translated, &size, nil, 0) == 0, translated == 1 {
+            DebugLog.shared.log("WARNING: running x86_64 build under Rosetta on Apple Silicon")
+            let alert = NSAlert()
+            alert.messageText = "You're running the Intel version"
+            alert.informativeText = "This Mac has an Apple Silicon chip, but this copy of the app "
+                + "is the Intel build running through Rosetta — it works, but it's slower and less "
+                + "stable. Please download the Apple-Silicon DMG from the Releases page (or use "
+                + "Check for Updates, which picks the right one)."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+        }
+
         // After a self-update the bundle (incl. the privileged helper) changed — refresh the daemon.
         let versionKey = "lastLaunchedVersion"
         let previous = UserDefaults.standard.string(forKey: versionKey)
