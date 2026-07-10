@@ -39,6 +39,14 @@ final class VoiceController {
     private var audioEngine = AVAudioEngine()
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
+    /// When the current recognition task started, and how many tasks in a row have died almost
+    /// immediately. A task that dies within ~1.5s of starting is not a normal end-of-buffer
+    /// recycle — it's the recogniser refusing to run (e.g. macOS "Siri and Dictation are
+    /// disabled"). Without this, the wake-word recycler restarted the doomed task on the next
+    /// tick, thousands of times per second (observed: generation counter at 11.5 MILLION,
+    /// load average 8.5, 2026-07-10).
+    private var taskStartTime: CFTimeInterval = 0
+    private var fastFailCount = 0
     private var silenceTimer: Timer?
     private var capTimer: Timer?
     private var finalTimer: Timer?
@@ -220,6 +228,7 @@ final class VoiceController {
 
         recognitionGeneration &+= 1
         let gen = recognitionGeneration
+        taskStartTime = CACurrentMediaTime()
         task = recognizer.recognitionTask(with: req) { [weak self] result, error in
             DispatchQueue.main.async {
                 guard let self, gen == self.recognitionGeneration else { return }   // drop stale task
@@ -327,6 +336,7 @@ final class VoiceController {
 
     private func handleResult(_ result: SFSpeechRecognitionResult?, error: Error?) {
         if let result {
+            fastFailCount = 0            // transcripts flowing = the recogniser is healthy
             let text = result.bestTranscription.formattedString
             lastPartial = text
             if mode == .pushToTalk {
@@ -341,14 +351,45 @@ final class VoiceController {
             }
         }
         if let error {
+            let lived = CACurrentMediaTime() - taskStartTime
+            let diedFast = lived < 1.5
             switch mode {
-            case .pushToTalk: finishPushToTalk(lastPartial)
+            case .pushToTalk:
+                if diedFast, lastPartial.isEmpty {
+                    // The task refused to run at all — a silent instant-vanish popup told the
+                    // user nothing. Surface the real reason.
+                    fastFailCount += 1
+                    finishPushToTalk("")   // tear the session down cleanly (empty = no command)
+                    onError?(Self.actionableVoiceError(error))
+                } else {
+                    finishPushToTalk(lastPartial)
+                }
             case .wakeWord:
-                DebugLog.shared.log("voice: wake task ended (\(error.localizedDescription)) — recycling")
-                recycleWakeWord()
+                fastFailCount = diedFast ? fastFailCount + 1 : 0
+                if fastFailCount >= 5 {
+                    // The recogniser is refusing to run (e.g. macOS 'Siri and Dictation are
+                    // disabled') — restarting is a hot loop, not a fix. Go idle and say why.
+                    DebugLog.shared.log("voice: wake task dying instantly ×\(self.fastFailCount) (\(error.localizedDescription)) — voice off")
+                    stop()
+                    onError?(Self.actionableVoiceError(error))
+                    return
+                }
+                let backoff = diedFast ? min(5.0, 0.5 * pow(2.0, Double(fastFailCount - 1))) : 0
+                DebugLog.shared.log("voice: wake task ended (\(error.localizedDescription)) — recycling"
+                                    + (backoff > 0 ? String(format: " in %.1fs", backoff) : ""))
+                recycleWakeWord(after: backoff)
             case .idle, .metering: break
             }
         }
+    }
+
+    /// Turn a speech-framework error into something the user can act on.
+    static func actionableVoiceError(_ error: Error) -> String {
+        let msg = error.localizedDescription
+        if msg.localizedCaseInsensitiveContains("siri") || msg.localizedCaseInsensitiveContains("dictation") {
+            return "Voice control needs Dictation: enable it in System Settings → Keyboard → Dictation (or enable Siri), then toggle voice off and on."
+        }
+        return "Voice recognition failed: \(msg)"
     }
 
     // MARK: Push-to-talk timers
@@ -442,7 +483,7 @@ final class VoiceController {
     /// Recycle the recognition request/task so the transcript buffer resets (SFSpeech degrades over
     /// long sessions) — WITHOUT stopping the audio engine/tap, so listening continues seamlessly.
     /// Keeps `mode == .wakeWord`. Deferred to the next tick so the current callback fully unwinds.
-    private func recycleWakeWord() {
+    private func recycleWakeWord(after delay: TimeInterval = 0) {
         guard mode == .wakeWord else { return }
         silenceTimer?.invalidate(); silenceTimer = nil
         wakeCaptureTimer?.invalidate(); wakeCaptureTimer = nil
@@ -452,8 +493,10 @@ final class VoiceController {
         task?.cancel(); task = nil
         request?.endAudio(); request = nil
         DebugLog.shared.log("voice: recycle wake-word (gen \(self.recognitionGeneration))")
-        // Restart on the next tick so the cancelled task fully unwinds before the new one starts.
-        DispatchQueue.main.async { [weak self] in self?.restartWakeRecognition(attempt: 0) }
+        // Restart after the backoff (min: next tick, so the cancelled task fully unwinds first).
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0.0, delay)) { [weak self] in
+            self?.restartWakeRecognition(attempt: 0)
+        }
     }
 
     /// Bring up a fresh recogniser for wake-word mode over the still-running tap. The recogniser can be
