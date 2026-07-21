@@ -123,15 +123,22 @@ between them from the top bar.
 
 ![HUD widgets](assets/hud-widgets.png?v=3)
 
-**Media player** (head-locked video)
+**Media player** (head-locked video & audio)
 - Play your own videos inside AR — **most formats, including MKV/AVI**, with subtitles rendered
   uniformly (playback by bundled **VLCKit/libVLC**); files can live on the Mac or a network drive
+- **Audio too — MP3s and M4B audiobooks**: audio files show their **embedded cover art** in AR
+  (or a name card when there's none), and the resume position survives restarts, so an audiobook
+  picks up where you left off
+- **Chapters**: on chaptered files (M4B audiobooks, chaptered MKV/MP4), next/previous navigate
+  **chapters** like a CD player — previous restarts the chapter, or jumps back one if it just
+  started
 - **Playlist** with drag-to-reorder, auto-advance, per-item durations, and **Loop** / **Shuffle**
   (shuffle plays everything once before any repeats); playlist and playback position survive
   restarts, so you can stop mid-film and resume days later — a **scrub slider** jumps anywhere
 - Pin the video to any of **four corners or full view** (⌃⌥1–5); transport by hotkey —
-  play/pause **⌃⌥K**, ±10 s **⌃⌥←/→**, next/previous **⌃⌥↑/↓** (previous retraces what actually
-  played, even shuffled), stop **⌃⌥0** — with a transient in-AR progress bar
+  play/pause **⌃⌥K**, ±10 s **⌃⌥←/→**, next/previous **⌃⌥↑/↓** (chapters first on chaptered
+  files; previous retraces what actually played, even shuffled), stop **⌃⌥0** — with a transient
+  in-AR progress bar
 - **Full view keeps the film's aspect ratio** with black bars (opt-in stretch-to-fill toggle), and
   automatically throttles the screen captures to save power
 
@@ -169,7 +176,7 @@ between them from the top bar.
 | ⌃⌥5 | Media: full view |
 | ⌃⌥K | Media: play / pause |
 | ⌃⌥← / ⌃⌥→ | Media: rewind / skip 10 s |
-| ⌃⌥↑ / ⌃⌥↓ | Media: next / previous in the playlist |
+| ⌃⌥↑ / ⌃⌥↓ | Media: next / previous — chapters on chaptered files, else playlist items |
 | ⌃⌥0 | Media: stop (keeps the playlist) |
 | ⌃⌥H | Show / hide help |
 | ⌃⌥Q | Quit AR Workspace Manager |
@@ -196,6 +203,10 @@ between them from the top bar.
   main display so the menu bar, Dock and cursor render inside AR.
 - **Microphone prompt never appeared?** Recording only requests the mic the first time you record;
   if it was previously denied, re-enable it in System Settings → Privacy & Security → Microphone.
+- **A media file won't play?** The player logs every state transition with a `[media]` prefix —
+  filter on it in Console.app (or run the app from a terminal). For deeper detail,
+  `defaults write uk.co.ketelle.ar.workspace.manager media.vlcVerbose -bool YES` enables
+  libVLC's own (very chatty) demux/decoder debug stream.
 - **High CPU from `colorsync.displayservices`?** This is a macOS-side issue triggered by the glasses
   as a display, not the app (XREAL's own Nebula app provokes it too). The fix: unplug the glasses,
   wait ~30 seconds, plug them back in. The **Diagnostics** page shows the daemon's live CPU and can
