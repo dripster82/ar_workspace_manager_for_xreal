@@ -87,14 +87,24 @@ final class MediaPlayerManager: ObservableObject {
     var onError: ((String) -> Void)?
 
     private var saveTimer: Timer?
+    private let device: MTLDevice
+
+    /// What audio-only items show instead of video frames: the file's embedded cover art when it
+    /// has any (M4B/MP3 tags, loaded async), else a rendered card with the file name.
+    private var audioCardTexture: MTLTexture?
+    private var audioCardAspect: Float = 16.0 / 9.0
+    /// Guards the async artwork load against the current item changing underneath it.
+    private var audioCardItemID: Item.ID?
 
     init(device: MTLDevice) {
+        self.device = device
         source = VLCPlayerSource(device: device)
         source.onEnded = { [weak self] in self?.handleEnded() }  // advance, or stop cleanly at the end
         source.onReady = { [weak self] in                        // rebuild scene once frames exist
             guard let self else { return }
             self.loading = false
             self.onLoading?(nil)
+            self.updateAudioCard()
             self.onChange?()
         }
         source.onError = { [weak self] msg in
@@ -103,6 +113,7 @@ final class MediaPlayerManager: ObservableObject {
             self.loading = false
             self.onLoading?(nil)
             self.wantsPlay = false; self.playing = false
+            self.audioCardTexture = nil; self.audioCardItemID = nil
             self.onChange?()   // drop the (blank) screen → black
             self.onError?(msg)
         }
@@ -158,11 +169,25 @@ final class MediaPlayerManager: ObservableObject {
     }
 
     var hasMedia: Bool { source.hasMedia }
+    /// The current item has no video track (MP3/M4B/…) — nothing to render, audio still plays.
+    var isAudioOnly: Bool { source.isAudioOnly }
     var currentName: String? { currentIndex.flatMap { playlist.indices.contains($0) ? playlist[$0].name : nil } }
     /// The resume position restored at launch. libvlc reports position 0 until playback actually
     /// runs (the :start-time seek applies at play), so the UI would read 0:00 before the first
     /// Play — this fills the gap. Cleared once real playback reports a position.
     private var restoredResumeTime: Double = 0
+    /// The target of an in-flight absolute seek. libvlc's get_time lags a set_time by a beat, so
+    /// transport decisions made right after a seek (rapid Next/Next chapter presses, Prev/Prev)
+    /// would read the stale pre-seek position — this stands in until libvlc catches up.
+    private var pendingSeek: Double?
+    /// Position to base transport decisions on: the in-flight seek target if libvlc hasn't caught
+    /// up to it yet, else the live position.
+    private var transportTime: Double {
+        if let p = pendingSeek {
+            if abs(source.currentTime - p) < 2 { pendingSeek = nil } else { return p }
+        }
+        return progress.current
+    }
     /// Playback position for the scrubber / progress bar.
     var progress: (current: Double, duration: Double) {
         let c = source.currentTime
@@ -211,6 +236,7 @@ final class MediaPlayerManager: ObservableObject {
         errorMessage = nil
         loading = true
         restoredResumeTime = 0   // a newly chosen item starts fresh
+        pendingSeek = nil
         onLoading?(playlist[index].name)
         source.load(url: playlist[index].url, autoplay: false)   // applyPlayback decides
         wantsPlay = true
@@ -226,6 +252,8 @@ final class MediaPlayerManager: ObservableObject {
     /// inverted (pause icon while playing, play icon while paused) until the next transport action.
     private func applyPlayback() {
         let shouldPlay = arActive && wantsPlay && position != .off && source.hasMedia
+        NSLog("[media] applyPlayback shouldPlay=%d (ar=%d wants=%d pos=%@ hasMedia=%d)",
+              shouldPlay, arActive, wantsPlay, position.label, source.hasMedia)
         if shouldPlay { source.play() } else { source.pause() }
         playing = shouldPlay
     }
@@ -279,12 +307,45 @@ final class MediaPlayerManager: ObservableObject {
         return loopPlaylist ? 0 : nil
     }
 
+    // MARK: Chapter-aware transport
+
+    /// With a chaptered item (M4B audiobooks, chaptered MKVs), Next/Previous navigate chapters
+    /// first — the CD-player convention: Previous restarts the current chapter unless it just
+    /// started, in which case it jumps to the one before. Past either end of the chapter list,
+    /// they fall through to the playlist as before.
+    private let chapterRestartThreshold = 3.0
+    /// Small slop when matching the position against chapter starts, so a jump that landed
+    /// fractionally short of (or libvlc reporting fractionally past) a boundary still counts as
+    /// being in that chapter.
+    private let chapterEpsilon = 0.25
+
     func next() {
+        let chapters = source.chapterStarts
+        if !chapters.isEmpty, errorMessage == nil,
+           let start = chapters.first(where: { $0 > transportTime + chapterEpsilon }) {
+            seek(to: start)
+            return
+        }
         guard let i = nextIndex() else { return }
         play(at: i)
     }
 
     func previous() {
+        let chapters = source.chapterStarts
+        if !chapters.isEmpty, errorMessage == nil {
+            let t = transportTime
+            if let idx = chapters.lastIndex(where: { $0 <= t + chapterEpsilon }) {
+                if t - chapters[idx] >= chapterRestartThreshold {
+                    seek(to: chapters[idx])   // well into the chapter → back to its start
+                    return
+                }
+                if idx > 0 {
+                    seek(to: chapters[idx - 1])   // chapter just started → the one before
+                    return
+                }
+            }
+            // Start of the first chapter → fall through to the playlist.
+        }
         // Walk back through what actually played (works under shuffle and after manual jumps);
         // fall back to index−1 when there's no usable history.
         while let id = playHistory.popLast() {
@@ -315,7 +376,12 @@ final class MediaPlayerManager: ObservableObject {
         }
     }
     func skip(_ seconds: Double) { source.seek(by: seconds) }
-    func seek(to seconds: Double) { restoredResumeTime = seconds; source.seek(to: seconds); saveTime() }
+    func seek(to seconds: Double) {
+        restoredResumeTime = seconds
+        pendingSeek = seconds
+        source.seek(to: seconds)
+        saveTime()
+    }
     func clearError() { errorMessage = nil }
 
     /// Stop playing and hide the media screen, but KEEP the playlist. The current video stays loaded
@@ -338,6 +404,8 @@ final class MediaPlayerManager: ObservableObject {
         playHistory = []
         wantsPlay = false
         playing = false
+        audioCardTexture = nil
+        audioCardItemID = nil
         clearLoading()    // a clear mid-load left the spinner running forever
         UserDefaults.standard.set(0.0, forKey: Key.time)
         persist()
@@ -357,20 +425,121 @@ final class MediaPlayerManager: ObservableObject {
         onChange?()
     }
 
+    // MARK: Audio-only card (cover art / name placeholder)
+
+    /// Called on ready: audio-only items get a placeholder texture immediately (name card), then
+    /// the embedded cover art replaces it when the async tag read lands. Video items clear it.
+    private func updateAudioCard() {
+        guard source.isAudioOnly, let idx = currentIndex, playlist.indices.contains(idx) else {
+            audioCardTexture = nil
+            audioCardItemID = nil
+            return
+        }
+        let item = playlist[idx]
+        audioCardItemID = item.id
+        audioCardTexture = Self.makeTexture(device: device, image: Self.renderNameCard(name: item.name))
+        audioCardAspect = 16.0 / 9.0
+        Task { [weak self] in
+            guard let image = await Self.loadEmbeddedArtwork(url: item.url) else { return }
+            guard let self, self.audioCardItemID == item.id, self.source.isAudioOnly else { return }
+            if let tex = Self.makeTexture(device: self.device, image: image) {
+                self.audioCardTexture = tex
+                self.audioCardAspect = Float(max(1, image.width)) / Float(max(1, image.height))
+                self.onChange?()
+            }
+        }
+    }
+
+    /// Embedded cover art via AVFoundation's tag readers (ID3 APIC for MP3, iTunes `covr` for
+    /// M4B/M4A) — more reliable than libvlc's artwork cache, and the URL is a local file.
+    private static func loadEmbeddedArtwork(url: URL) async -> CGImage? {
+        let asset = AVURLAsset(url: url)
+        guard let meta = try? await asset.load(.metadata) else { return nil }
+        var candidates = AVMetadataItem.metadataItems(from: meta, filteredByIdentifier: .commonIdentifierArtwork)
+        candidates += AVMetadataItem.metadataItems(from: meta, filteredByIdentifier: .iTunesMetadataCoverArt)
+        candidates += AVMetadataItem.metadataItems(from: meta, filteredByIdentifier: .id3MetadataAttachedPicture)
+        for item in candidates {
+            if let data = try? await item.load(.dataValue),
+               let image = NSImage(data: data)?.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+                return image
+            }
+        }
+        return nil
+    }
+
+    /// A dark 16:9 card with a note glyph and the (word-wrapped) file name — what plays when the
+    /// file has no embedded artwork.
+    private static func renderNameCard(name: String) -> CGImage? {
+        let w = 960, h = 540
+        guard let ctx = CGContext(
+            data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+        else { return nil }
+        ctx.setFillColor(CGColor(red: 0.10, green: 0.10, blue: 0.13, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        let previous = NSGraphicsContext.current
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: false)
+        let centered = NSMutableParagraphStyle()
+        centered.alignment = .center
+        centered.lineBreakMode = .byWordWrapping
+        NSAttributedString(string: "♪", attributes: [
+            .font: NSFont.systemFont(ofSize: 110),
+            .foregroundColor: NSColor(white: 0.5, alpha: 1),
+            .paragraphStyle: centered,
+        ]).draw(in: CGRect(x: 0, y: 290, width: 960, height: 160))
+        NSAttributedString(string: name, attributes: [
+            .font: NSFont.systemFont(ofSize: 44, weight: .semibold),
+            .foregroundColor: NSColor.white,
+            .paragraphStyle: centered,
+        ]).draw(in: CGRect(x: 60, y: 70, width: 840, height: 190))
+        NSGraphicsContext.current = previous
+        return ctx.makeImage()
+    }
+
+    /// Upload a CGImage as a BGRA Metal texture (the compositor's expected format).
+    private static func makeTexture(device: MTLDevice, image: CGImage?) -> MTLTexture? {
+        guard let image else { return nil }
+        let w = image.width, h = image.height
+        guard w > 0, h > 0, let ctx = CGContext(
+            data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+        else { return nil }
+        ctx.interpolationQuality = .high
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        guard let data = ctx.data else { return nil }
+        let desc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm, width: w, height: h, mipmapped: false)
+        desc.usage = [.shaderRead]
+        guard let tex = device.makeTexture(descriptor: desc) else { return nil }
+        tex.replace(region: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0,
+                    withBytes: data, bytesPerRow: ctx.bytesPerRow)
+        return tex
+    }
+
     // MARK: Rendering
 
     /// Full-FOV stretches over the whole display via the renderer's fullscreen blit; returns that
     /// texture provider when Full view is active.
     func fullscreenProvider() -> (() -> MTLTexture?)? {
         guard position == .fullFOV, source.isReady else { return nil }   // isReady → no blank box
+        if source.isAudioOnly {
+            // Static texture captured by value — rebuilt via onChange when the art loads.
+            guard let tex = audioCardTexture else { return nil }
+            return { tex }
+        }
         return { [weak source] in source?.latestTexture }
     }
 
     /// The head-locked corner `SceneScreen` for positions 1–4, or nil (off / not-ready / full-FOV).
     func sceneScreen() -> SceneScreen? {
         guard position != .off, position != .fullFOV, source.isReady else { return nil }
+        // Audio-only shows the static cover/name card; captured by value (rebuilt via onChange).
+        let audioTex = source.isAudioOnly ? audioCardTexture : nil
+        if source.isAudioOnly && audioTex == nil { return nil }
         let slot = Self.slot(for: position)
-        let aspect = max(0.1, source.aspect)
+        let aspect = audioTex != nil ? audioCardAspect : max(0.1, source.aspect)
         let width = (aspect >= slot.maxW / slot.maxH) ? slot.maxW : slot.maxH * aspect
         return SceneScreen(
             id: sceneID,
@@ -378,7 +547,7 @@ final class MediaPlayerManager: ObservableObject {
             widthMeters: width, aspect: aspect,
             curveH: 0, autoCurveH: false,
             headLocked: true,
-            textureProvider: { [weak source] in source?.latestTexture })
+            textureProvider: audioTex.map { tex in { tex } } ?? { [weak source] in source?.latestTexture })
     }
 
     private static func slot(for p: Position) -> Slot {

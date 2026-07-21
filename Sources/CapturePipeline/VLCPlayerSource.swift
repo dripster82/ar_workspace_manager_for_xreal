@@ -50,10 +50,29 @@ public final class VLCPlayerSource: @unchecked Sendable {
     private var current: MTLTexture?
     private var _aspect: Float = 16.0 / 9.0
     private var loaded = false
+    /// The current item has no video track (MP3/M4B/…). Readiness normally waits on the first
+    /// decoded video frame, which never comes for these — see `resolveAudioOnly`.
+    private var _audioOnly = false
+    /// Bumped per load; delayed audio-only checks compare it so a stale check can't touch a
+    /// newer item.
+    private var generation = 0
+
+    /// State-transition log for the media pipeline (low-frequency events only — never per-frame).
+    /// Filter Console.app / stderr on "[media]".
+    private func dlog(_ message: String) { NSLog("[media] %@", message) }
 
     public init(device: MTLDevice) {
         self.device = device
-        instance = libvlc_new(0, nil)
+        // `defaults write uk.co.ketelle.ar.workspace.manager media.vlcVerbose -bool YES` turns on
+        // libvlc's own debug stream (demux/decoder/vout internals, very chatty) on stderr — for
+        // diagnosing files that won't play. The strdup'd arg intentionally lives forever.
+        if UserDefaults.standard.bool(forKey: "media.vlcVerbose") {
+            var argv: [UnsafePointer<CChar>?] = [UnsafePointer(strdup("-vv"))]
+            instance = libvlc_new(1, &argv)
+            NSLog("[media] libvlc verbose logging ON (media.vlcVerbose)")
+        } else {
+            instance = libvlc_new(0, nil)
+        }
         if instance == nil { NSLog("VLCPlayerSource: libvlc_new failed") }
     }
 
@@ -65,6 +84,7 @@ public final class VLCPlayerSource: @unchecked Sendable {
 
     public var hasMedia: Bool { lock.lock(); defer { lock.unlock() }; return loaded }
     public var isReady: Bool { lock.lock(); defer { lock.unlock() }; return gotFirstFrame }
+    public var isAudioOnly: Bool { lock.lock(); defer { lock.unlock() }; return _audioOnly }
     public var aspect: Float { lock.lock(); defer { lock.unlock() }; return _aspect }
 
     public var currentTime: Double {
@@ -89,10 +109,12 @@ public final class VLCPlayerSource: @unchecked Sendable {
     /// `autoplay: false` still has to run the pipeline briefly to decode the first frame (vmem gets
     /// frames only while playing), so it starts MUTED and pauses on the first frame.
     public func load(url: URL, startAt: Double = 0, autoplay: Bool = true) {
+        dlog("load \(url.lastPathComponent) startAt=\(startAt) autoplay=\(autoplay)")
         guard let instance else { onError?("VLC engine unavailable"); return }
         stopLocked()
 
         guard let m = libvlc_media_new_path(instance, url.path) else {
+            dlog("load FAILED: libvlc_media_new_path returned nil for \(url.path)")
             DispatchQueue.main.async { self.onError?("Couldn't open \(url.lastPathComponent)") }
             return
         }
@@ -100,6 +122,7 @@ public final class VLCPlayerSource: @unchecked Sendable {
         media = m
 
         guard let p = libvlc_media_player_new_from_media(m) else {
+            dlog("load FAILED: libvlc_media_player_new_from_media returned nil")
             DispatchQueue.main.async { self.onError?("Couldn't create a player for this file") }
             return
         }
@@ -112,6 +135,9 @@ public final class VLCPlayerSource: @unchecked Sendable {
         if let em = libvlc_media_player_event_manager(p) {
             libvlc_event_attach(em, libvlc_event_type_t(libvlc_MediaPlayerEndReached.rawValue), vlcEventCB, opaque)
             libvlc_event_attach(em, libvlc_event_type_t(libvlc_MediaPlayerEncounteredError.rawValue), vlcEventCB, opaque)
+            // Playing fires once decode starts — the hook for detecting audio-only files, whose
+            // readiness can't come from a video frame (there are none).
+            libvlc_event_attach(em, libvlc_event_type_t(libvlc_MediaPlayerPlaying.rawValue), vlcEventCB, opaque)
         }
 
         lock.lock()
@@ -120,6 +146,8 @@ public final class VLCPlayerSource: @unchecked Sendable {
         frameDirty = false
         priming = true
         intentPlay = autoplay
+        _audioOnly = false
+        generation += 1
         lock.unlock()
 
         libvlc_audio_set_mute(p, 1)   // muted while priming; unmuted when the first frame applies intent
@@ -132,7 +160,8 @@ public final class VLCPlayerSource: @unchecked Sendable {
         intentPlay = true
         let deferToPrime = priming
         lock.unlock()
-        if deferToPrime { return }    // applied on first frame — poking libvlc mid-open wedges it
+        if deferToPrime { dlog("play() deferred (still priming)"); return }   // poking libvlc mid-open wedges it
+        dlog("play()")
         libvlc_audio_set_mute(player, 0)
         libvlc_media_player_play(player)
     }
@@ -143,7 +172,8 @@ public final class VLCPlayerSource: @unchecked Sendable {
         intentPlay = false
         let deferToPrime = priming
         lock.unlock()
-        if deferToPrime { return }    // applied on first frame — pausing mid-open aborts the decode
+        if deferToPrime { dlog("pause() deferred (still priming)"); return }   // pausing mid-open aborts the decode
+        dlog("pause()")
         libvlc_media_player_set_pause(player, 1)
     }
 
@@ -153,7 +183,7 @@ public final class VLCPlayerSource: @unchecked Sendable {
         stopLocked()
         lock.lock()
         loaded = false; gotFirstFrame = false; frameDirty = false
-        priming = false; intentPlay = false
+        priming = false; intentPlay = false; _audioOnly = false
         lock.unlock()
     }
 
@@ -173,6 +203,20 @@ public final class VLCPlayerSource: @unchecked Sendable {
         var target = currentTime + seconds
         if dur > 0 { target = min(target, dur - 0.5) }
         libvlc_media_player_set_time(player, libvlc_time_t(max(0, target) * 1000))
+    }
+
+    /// Chapter start offsets (seconds, ascending) for the loaded item; empty when the file has no
+    /// chapters or nothing is loaded. Queried fresh per call — a cheap synchronous libvlc lookup,
+    /// only hit on transport presses.
+    public var chapterStarts: [Double] {
+        guard let player else { return [] }
+        var descs: UnsafeMutablePointer<UnsafeMutablePointer<libvlc_chapter_description_t>?>?
+        let count = libvlc_media_player_get_full_chapter_descriptions(player, -1, &descs)
+        guard count > 0, let descs else { return [] }
+        defer { libvlc_chapter_descriptions_release(descs, UInt32(count)) }
+        return (0..<Int(count))
+            .compactMap { descs[$0].map { Double($0.pointee.i_time_offset) / 1000 } }
+            .sorted()
     }
 
     // MARK: Metadata probe
@@ -242,6 +286,7 @@ public final class VLCPlayerSource: @unchecked Sendable {
     fileprivate func setup(width: inout UInt32, height: inout UInt32,
                            pitch: inout UInt32, lines: inout UInt32) -> UInt32 {
         let w = Int(width), h = Int(height)
+        dlog("vout setup \(w)x\(h)")
         let p = (w * 4 + 63) & ~63          // 64-byte-aligned pitch keeps libvlc's blitters happy
         let l = (h + 31) & ~31
         lock.lock()
@@ -279,6 +324,7 @@ public final class VLCPlayerSource: @unchecked Sendable {
         lock.lock()
         swap(&front, &back)
         frameDirty = true
+        _audioOnly = false   // a real frame proves there's video, whatever the earlier probe said
         if !gotFirstFrame {
             gotFirstFrame = true
             fireReady = true
@@ -288,6 +334,7 @@ public final class VLCPlayerSource: @unchecked Sendable {
         }
         lock.unlock()
         if fireReady {
+            dlog("first video frame -> ready (video), applyIntent=\(applyIntent) wantPlay=\(wantPlay)")
             // Priming done: apply the (possibly updated) play/pause intent and restore audio.
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
@@ -305,12 +352,79 @@ public final class VLCPlayerSource: @unchecked Sendable {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             switch Int(type) {
-            case Int(libvlc_MediaPlayerEndReached.rawValue): self.onEnded?()
+            case Int(libvlc_MediaPlayerEndReached.rawValue):
+                self.dlog("event: EndReached")
+                self.onEnded?()
             case Int(libvlc_MediaPlayerEncounteredError.rawValue):
+                self.dlog("event: EncounteredError")
                 self.onError?("VLC couldn't play this file (corrupt or unsupported stream).")
+            case Int(libvlc_MediaPlayerPlaying.rawValue):
+                self.dlog("event: Playing -> probing for audio-only")
+                self.resolveAudioOnly(attempt: 0)
             default: break
             }
         }
+    }
+
+    /// Readiness normally comes from the first decoded video frame (`displayFrame`), but an
+    /// audio-only file (MP3/M4B/…) never produces one — priming used to hang forever: muted audio,
+    /// a spinner that never cleared. Called (on main) once decode starts: if the demuxed track list
+    /// has no video ES, declare the item ready without a frame. The track list can lag the Playing
+    /// event slightly, so an empty list retries briefly, then falls back to a has-vout check.
+    private func resolveAudioOnly(attempt: Int) {
+        lock.lock()
+        let stillWaiting = loaded && !gotFirstFrame
+        let gen = generation
+        lock.unlock()
+        guard stillWaiting, let media else {
+            dlog("audio-only probe: skipped (stillWaiting=\(stillWaiting), media=\(self.media != nil))")
+            return
+        }
+
+        var tracks: UnsafeMutablePointer<UnsafeMutablePointer<libvlc_media_track_t>?>?
+        let count = libvlc_media_tracks_get(media, &tracks)
+        if count > 0, let tracks {
+            defer { libvlc_media_tracks_release(tracks, count) }
+            let types = (0..<Int(count)).compactMap { tracks[$0]?.pointee.i_type.rawValue }
+            dlog("audio-only probe: \(count) track(s), types=\(types) (0=audio 1=video 2=text)")
+            for i in 0..<Int(count) where tracks[i]?.pointee.i_type == libvlc_track_video {
+                dlog("audio-only probe: video track present -> waiting for first frame")
+                return   // there IS video — the frame path will complete readiness as usual
+            }
+            markReadyAudioOnly()
+        } else if attempt < 4 {
+            dlog("audio-only probe: track list empty (attempt \(attempt)) -> retrying in 0.3s")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                guard let self else { return }
+                self.lock.lock(); let current = self.generation == gen; self.lock.unlock()
+                if current { self.resolveAudioOnly(attempt: attempt + 1) }
+            }
+        } else if let player {
+            let vouts = libvlc_media_player_has_vout(player)
+            dlog("audio-only probe: no track list after retries, has_vout=\(vouts)")
+            if vouts == 0 { markReadyAudioOnly() }
+        }
+    }
+
+    /// Audio-only counterpart of `displayFrame`'s first-frame path: end priming, apply the deferred
+    /// play/pause intent, unmute, and fire `onReady`. Runs on main.
+    private func markReadyAudioOnly() {
+        var applyIntent = false
+        var wantPlay = false
+        lock.lock()
+        guard loaded, !gotFirstFrame else { lock.unlock(); return }
+        gotFirstFrame = true
+        _audioOnly = true
+        applyIntent = priming
+        priming = false
+        wantPlay = intentPlay
+        lock.unlock()
+        dlog("ready (audio-only), applyIntent=\(applyIntent) wantPlay=\(wantPlay)")
+        if applyIntent, let p = player {
+            if !wantPlay { libvlc_media_player_set_pause(p, 1) }
+            libvlc_audio_set_mute(p, 0)
+        }
+        onReady?()
     }
 
     /// Current frame as a Metal texture, pulled on the render thread. A new frame uploads into the
