@@ -2856,10 +2856,13 @@ struct MediaPlayerControls: View {
     let coordinator: AppCoordinator
 
     /// Scrubber state: while dragging we show the drag position (not the live one), and seek on
-    /// release. `tick` just forces a redraw so the live position/labels advance while playing.
+    /// release. `livePosition` is the ticker-sampled playback position the slider/labels DISPLAY —
+    /// body must actually read the state the ticker writes, or SwiftUI never re-renders (writing
+    /// an unread @State doesn't invalidate; the old "tick = now" redraw hack silently did nothing
+    /// and the scrubber sat frozen during playback).
     @State private var scrubPosition: Double = 0
     @State private var scrubbing = false
-    @State private var tick = Date()
+    @State private var livePosition: Double = 0
     private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -2899,21 +2902,26 @@ struct MediaPlayerControls: View {
             if media.hasMedia, !media.loading {
                 let duration = max(media.progress.duration, 1)
                 HStack(spacing: 8) {
-                    Text(timeLabel(scrubbing ? scrubPosition : media.progress.current))
+                    Text(timeLabel(scrubbing ? scrubPosition : livePosition))
                         .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
                         .frame(width: 52, alignment: .trailing)
                     Slider(value: Binding(
-                        get: { scrubbing ? scrubPosition : min(media.progress.current, duration) },
+                        get: { scrubbing ? scrubPosition : min(livePosition, duration) },
                         set: { scrubPosition = $0 }
                     ), in: 0...duration) { editing in
                         scrubbing = editing
-                        if !editing { coordinator.mediaSeek(to: scrubPosition) }
+                        if !editing {
+                            coordinator.mediaSeek(to: scrubPosition)
+                            livePosition = scrubPosition   // show the target until the next tick
+                        }
                     }
                     Text(timeLabel(duration))
                         .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
                         .frame(width: 52, alignment: .leading)
                 }
-                .onReceive(ticker) { now in if !scrubbing { tick = now } }  // redraw for live position
+                .onAppear { livePosition = media.progress.current }
+                .onChange(of: media.currentIndex) { _ in livePosition = media.progress.current }
+                .onReceive(ticker) { _ in if !scrubbing { livePosition = media.progress.current } }
             }
 
             HStack(spacing: 8) {
