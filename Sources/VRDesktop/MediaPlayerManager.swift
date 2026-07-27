@@ -541,9 +541,17 @@ final class MediaPlayerManager: ObservableObject {
         let slot = Self.slot(for: position)
         let aspect = audioTex != nil ? audioCardAspect : max(0.1, source.aspect)
         let width = (aspect >= slot.maxW / slot.maxH) ? slot.maxW : slot.maxH * aspect
+        // Corner audio cards (usually square covers, narrower than the 16:9 slot box) align to the
+        // slot's OUTER edge — left corners left-aligned, right corners right-aligned — instead of
+        // floating centred. +yaw = left, so shift away from centre by the leftover half-width.
+        var yaw = slot.yaw
+        if audioTex != nil, width < slot.maxW - 0.001 {
+            let delta = atan(((slot.maxW - width) / 2) / slot.distance)
+            yaw += slot.yaw >= 0 ? delta : -delta
+        }
         return SceneScreen(
             id: sceneID,
-            yaw: slot.yaw, pitch: slot.pitch, distance: slot.distance,
+            yaw: yaw, pitch: slot.pitch, distance: slot.distance,
             widthMeters: width, aspect: aspect,
             curveH: 0, autoCurveH: false,
             headLocked: true,
