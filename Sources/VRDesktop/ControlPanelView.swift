@@ -1282,6 +1282,11 @@ struct ControlPanelView: View {
                         .help("Logs load average, thermal state, and top CPU processes (incl. Sophos / "
                             + "WindowServer / colorsync) every ~3s, so we can correlate render stalls with "
                             + "machine load. Sampled off the render thread.")
+                    Button("Dump IMU stream (hex)") { coordinator.dumpIMUStream() }
+                        .controlSize(.small)
+                        .help("Writes the next 1 KB of the One-series glasses' raw IMU network stream "
+                            + "into the debug log as hex — for reporting glasses whose head tracking "
+                            + "doesn't parse (e.g. a different frame header). Air glasses: no effect.")
                     if coordinator.debugLogging || coordinator.rawIMULogging || coordinator.systemLoadLogging {
                         HStack {
                             Button("Reveal log") { coordinator.revealDebugLog() }

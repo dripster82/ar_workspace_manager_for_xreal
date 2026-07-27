@@ -72,6 +72,14 @@ extern "C"
 
 	device_imu_error_type device_imu_net_close(device_imu_net_type *device);
 
+	// One-shot raw hex dump for field diagnostics of unknown frame layouts (e.g. a unit whose
+	// header byte differs). Arm with a byte budget; the next `bytes` bytes received off the TCP
+	// stream are emitted through the callback as hex lines (16 bytes each, with offsets), BEFORE
+	// any header matching — so a stream whose frames never parse still gets captured. The callback
+	// fires on the IMU read thread. Arming persists until spent, surviving reconnects.
+	void device_imu_net_set_dump_callback(void (*cb)(const char *line));
+	void device_imu_net_request_dump(size_t bytes);
+
 #ifdef __cplusplus
 } // extern "C"
 #endif

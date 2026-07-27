@@ -458,6 +458,16 @@ public final class IMUService: @unchecked Sendable {
     public var rawLog: ((String) -> Void)?
     private var lastRawLog: TimeInterval = 0
 
+    /// One-shot hex dump of the One-series network IMU stream, for diagnosing unknown frame
+    /// layouts in the field (e.g. a unit with a different header byte). Lines arrive on the IMU
+    /// read thread via `netDumpSink`. Arming persists until the byte budget is spent, so it's
+    /// safe to press before the glasses connect. No-op for Air (HID) glasses.
+    public var netDumpSink: ((String) -> Void)?
+    public func requestNetworkDump(bytes: Int = 1024) {
+        device_imu_net_set_dump_callback(imuNetDumpCallback)
+        device_imu_net_request_dump(bytes)
+    }
+
     private static func eulerDeg(_ q: simd_quatf) -> (y: Float, p: Float, r: Float) {
         let toDeg: Float = 180 / .pi
         let yaw = atan2f(2 * (q.real * q.imag.y + q.imag.x * q.imag.z),
@@ -481,6 +491,11 @@ public final class IMUService: @unchecked Sendable {
         atan2f(2 * (q.real * q.imag.y + q.imag.x * q.imag.z),
                1 - 2 * (q.imag.y * q.imag.y + q.imag.x * q.imag.x))
     }
+}
+
+private func imuNetDumpCallback(_ line: UnsafePointer<CChar>?) {
+    guard let line else { return }
+    IMUService.shared.netDumpSink?(String(cString: line))
 }
 
 private func imuEventCallback(

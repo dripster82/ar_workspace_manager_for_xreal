@@ -397,6 +397,17 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
+    /// One-shot hex dump of the One-series IMU network stream into the debug log — for users whose
+    /// glasses' frame layout differs from what the driver expects (a screenshotless bug report).
+    func dumpIMUStream() {
+        DebugLog.shared.setEnabled(true)
+        IMUService.shared.netDumpSink = { DebugLog.shared.log($0) }
+        IMUService.shared.requestNetworkDump()
+        let note = IMUService.shared.usingNetworkIMU
+            ? "" : " (waiting for a One-series stream — Air/HID glasses have no network stream)"
+        DebugLog.shared.log("=== imu raw dump armed: next 1024 bytes ===\(note)")
+    }
+
     var debugLogURL: URL { DebugLog.shared.fileURL }
     func revealDebugLog() { NSWorkspace.shared.activateFileViewerSelecting([DebugLog.shared.fileURL]) }
     func revealChurnLog() { NSWorkspace.shared.activateFileViewerSelecting([ChurnLog.fileURL]) }

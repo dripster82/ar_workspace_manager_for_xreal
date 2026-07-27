@@ -38,7 +38,7 @@
 // Fixed-size frames, header-delimited, ~1 kHz. Confirmed by live capture from XREAL One Pro and by
 // two independent community drivers (SamiMitwalli/One-Pro-IMU-Retriever-Demo, rohitsangwan01/
 // xreal_one_driver). Layout (offsets from the start of the header):
-//   [0]  6-byte header           28 36 00 00 00 80
+//   [0]  6-byte header           27|28 36 00 00 00 80 (first byte varies per unit/firmware)
 //   [14] uint64 timestamp (ns, little-endian)
 //   [34] float32[3] gyroscope    (little-endian)
 //   [46] float32[3] accelerometer in m/s^2 (little-endian; |a| ~= 9.81 at rest)
@@ -50,7 +50,56 @@
 #define ONE_ACCEL_OFFSET 46
 #define ONE_TEMP_OFFSET 70
 
-static const uint8_t ONE_HEADER[6] = {0x28, 0x36, 0x00, 0x00, 0x00, 0x80};
+// The first header byte differs between units: 0x28 on the One Pro captured during bring-up, 0x27
+// reported from another One Pro in the field. Only the trailing five bytes are treated as the
+// stable magic; process_frame's accel/gyro sanity checks reject any coincidental match.
+#define ONE_HEADER_LEN 6
+static const uint8_t ONE_MAGIC[5] = {0x36, 0x00, 0x00, 0x00, 0x80};
+
+static bool one_header_at(const uint8_t *p)
+{
+	return (p[0] == 0x27 || p[0] == 0x28) && memcmp(p + 1, ONE_MAGIC, sizeof(ONE_MAGIC)) == 0;
+}
+
+// --- Raw stream dump (field diagnostics) -------------------------------------------------------
+// Armed from the UI thread, drained on the IMU read thread; _Atomic keeps the byte budget sane
+// across the two. The callback is installed once at startup, before any dump can be armed.
+static void (*g_dump_cb)(const char *line);
+static _Atomic size_t g_dump_remaining;
+static size_t g_dump_offset; // running offset across the whole dump, for the line labels
+
+void device_imu_net_set_dump_callback(void (*cb)(const char *line))
+{
+	g_dump_cb = cb;
+}
+
+void device_imu_net_request_dump(size_t bytes)
+{
+	g_dump_offset = 0;
+	g_dump_remaining = bytes;
+}
+
+static void dump_chunk(const uint8_t *data, size_t len)
+{
+	size_t budget = g_dump_remaining;
+	if (budget == 0 || !g_dump_cb)
+		return;
+	if (len > budget)
+		len = budget;
+	char line[16 + 3 * 16 + 1];
+	for (size_t i = 0; i < len; i += 16)
+	{
+		size_t n = len - i < 16 ? len - i : 16;
+		int w = snprintf(line, sizeof(line), "%06zx:", g_dump_offset + i);
+		for (size_t k = 0; k < n; k++)
+			w += snprintf(line + w, sizeof(line) - (size_t)w, " %02x", data[i + k]);
+		g_dump_cb(line);
+	}
+	g_dump_offset += len;
+	g_dump_remaining = budget - len;
+	if (g_dump_remaining == 0)
+		g_dump_cb("=== imu raw dump complete ===");
+}
 
 #define GRAVITY_MS2 9.806f
 #define SAMPLE_RATE 1000
@@ -454,13 +503,14 @@ device_imu_error_type device_imu_net_read(device_imu_net_type *device, int timeo
 		return (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
 				   ? DEVICE_IMU_ERROR_NO_ERROR
 				   : DEVICE_IMU_ERROR_UNPLUGGED;
+	dump_chunk(device->buf + device->buf_len, (size_t)got); // no-op unless a dump is armed
 	device->buf_len += (size_t)got;
 
 	// Decode every complete, header-aligned frame currently buffered.
 	size_t pos = 0;
 	while (device->buf_len - pos >= ONE_FRAME_LEN)
 	{
-		if (memcmp(device->buf + pos, ONE_HEADER, sizeof(ONE_HEADER)) != 0)
+		if (!one_header_at(device->buf + pos))
 		{
 			pos++; // not a header here — slide forward to resync
 			continue;
