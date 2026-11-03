@@ -287,13 +287,27 @@ struct CalendarWidgetView: View {
 
     @ViewBuilder
     private func eventRow(_ e: CalEvent, isNext: Bool) -> some View {
-        HStack(alignment: .top, spacing: 6) {
-            Text(e.allDay ? "all-day" : Self.timeFmt.string(from: e.start))
-                .font(.system(size: 13, weight: .medium, design: .rounded).monospacedDigit())
-                .frame(width: 42, alignment: .leading).opacity(0.8)
-            if !e.allDay, case let d = durationLabel(e), !d.isEmpty {
-                Text("(\(d))").font(.system(size: 11, weight: .medium, design: .rounded))
-                    .frame(width: 46, alignment: .leading).opacity(0.55)
+        // Fixed-width leading columns so every title starts at the same x: time (42) + gap (6) +
+        // duration (46). An all-day event has no time or duration, so its label spans both columns.
+        let timeW: CGFloat = 42, durW: CGFloat = 46, gap: CGFloat = 6
+        HStack(alignment: .top, spacing: gap) {
+            if e.allDay {
+                Text("all day")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .lineLimit(1).fixedSize()
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Capsule().fill(style.tint.color.opacity(0.18)))
+                    .frame(width: timeW + gap + durW, alignment: .leading)
+                    .opacity(0.9)
+            } else {
+                Text(Self.timeFmt.string(from: e.start))
+                    .font(.system(size: 13, weight: .medium, design: .rounded).monospacedDigit())
+                    .lineLimit(1)
+                    .frame(width: timeW, alignment: .leading).opacity(0.8)
+                let d = durationLabel(e)
+                Text(d.isEmpty ? "" : "(\(d))").font(.system(size: 11, weight: .medium, design: .rounded))
+                    .lineLimit(1)
+                    .frame(width: durW, alignment: .leading).opacity(0.55)
             }
             Text(Self.wrapTitle(e.title)).font(.system(size: 15, weight: isNext ? .semibold : .medium))
                 .fixedSize(horizontal: false, vertical: true)
